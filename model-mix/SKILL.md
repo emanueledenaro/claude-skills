@@ -29,9 +29,9 @@ How to apply it:
 - When a piece of work fits two rows, take the stronger model and the higher effort: a security fix or a security verify is Opus high even when it is small, also on Pro.
 - If agents fail with an "Opus limit" or "Sonnet limit" message (whether a plan still has these family limits is undocumented), rerun that stage on the other family at high effort, say so in the report, and tell the person.
 
-Outside the plan, on usage credits:
+Outside the default mix (these can bill usage credits):
 
-- **Fable 5.1:** off by default. Only on Max 20x with a green budget, and only for the single most consequential judgment (the final review of a security-critical diff). Never on Pro, where it is not part of the plan. Never on `-p`, background or cloud workers: past the Fable cap, `-p` runs bill credits without asking when credits are on, background and teammate sessions wait 5 minutes for consent and then drop the turn, and cloud sessions are undocumented.
+- **Fable 5.1:** off by default. Only on Max 20x with a green budget, and only for the single most consequential judgment (the final review of a security-critical diff). Never on Pro, where it is not part of the plan. Never on `-p`, background or cloud workers: past the Fable cap, `-p` runs bill credits without asking when credits are on, background and teammate sessions wait 5 minutes for consent and then drop the turn, and in cloud sessions the consent prompt depends on the app.
 - **Fast mode (`/fast`):** credits only. Never for delegated work.
 - **Ultrareview (`/code-review ultra`):** credits after 3 one-time free runs per account. Only when the person asks for it.
 - **Haiku:** not used. Haiku 4.5 is retired (too old, and its last ticket came back wrong), and the docs do not say which version the `haiku` alias points to, so never use the alias. When Haiku 5.5 ships, pin its full model ID, trial it on one small mechanical ticket with an Opus review, and if it passes, ask the person to update this row: it then takes the small-mechanical and broad-reading rows on Pro and in yellow.
@@ -61,12 +61,12 @@ Claude plan: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22
 
 ## Budget check
 
-Run it in the main session before anything that starts delegated work: a workflow, a cloud session, a message that gives a worker new work, more than one agent, a delegated review. Run it again between workflow phases. Delegated agents and cloud sessions cannot read usage, and checking on every wait only spends context.
+Run it in the main session before anything that starts delegated work: a workflow, a cloud session, a message that gives a worker new work, more than one agent, a delegated review. Run it again between workflow phases. The main session owns the check: cloud sessions cannot read usage, and checking on every wait only spends context.
 
-If a usage mod shows the color, use it. Otherwise read `budget.md` next to this file: it turns the usage reading and the banked resets into a margin against the elapsed week, and lists the overrides (last 12 hours, 5-hour window, projected cost, resets, Fable, usage credits).
+Read `budget.md` next to this file: it turns the usage reading and the banked resets into a margin against the elapsed week, and lists the overrides (last 12 hours, 5-hour window, projected cost, resets, Fable, usage credits). If a usage mod puts the color into this session's context, take the color from it instead of computing the margin, and still take a reading and apply every override. A pane or band that only the person sees does not count.
 
 - **Green**, margin ≤ 10: the plan's profile.
-- **Yellow**, margin over 10 up to 25: one profile down (Max 20x → Max 5x → Pro → Solo), with that profile's cloud-session column. Open PRs finish before a new thread starts. Compact the main session at the next natural break.
+- **Yellow**, margin over 10 up to 25: one profile down (Max 20x → Max 5x → Pro → Solo), with that profile's cloud-session column for new sessions. Open PRs finish before a new thread starts, and finishing open work continues as in red, also on Solo. Compact the main session at the next natural break.
 - **Red**, margin over 25 or weekly used ≥ 100 − reserve: start nothing new. Finishing open work continues: a fix message to a worker on its own open PR, a final review in the main session, merging what is green. Tell the person once, and ask them to redeem a banked weekly reset when `budget.md` says it is worth it. Compact the main session.
 
 **Why:** the 5-hour and weekly limits are shared by everything on the account, including the person's own chats, and Opus everywhere burns them. Sonnet carries the volume and Opus is kept for the work where a mistake costs the most. Pacing against the elapsed week instead of a fixed stop uses the whole plan without running dry before the reset.

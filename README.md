@@ -32,12 +32,12 @@ Claude plan: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22
 ```
 
 - **reserve:** the share of the weekly limit the skills leave for your own use.
-- **banked:** the limit resets shown in Settings → Usage, each as `weekly reset, expires YYYY-MM-DD` or `5-hour reset, expires YYYY-MM-DD`, separated by `;`. Claude Code cannot read them and only you can redeem them, so delete an entry once you redeem it or it expires.
+- **banked:** the limit resets shown in Settings → Usage, each as `weekly reset, expires YYYY-MM-DD`, `5-hour reset, expires YYYY-MM-DD`, or `… reset, no expiry`, separated by `;`. Claude Code cannot read them and only you can redeem them, so delete an entry once you redeem it or it expires.
 - **usage file** (optional, terminal only): `usage file: ~/.claude/usage.json`, if your statusline script saves its `rate_limits` there. Desktop sessions read usage directly.
 
 Without the line, the skills ask once and use the Pro profile on Pro, the Max 5x profile on Max.
 
-Optional safety net, in `~/.claude/settings.json`: `"env": { "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet" }`. A general-purpose or workflow agent launched without a model then runs on Sonnet instead of the session's Opus, and an explicit `opus` still wins. It does not reach the built-in Plan agent, or agents whose definition sets `model:` (including `inherit`), so the skills still name the model on every call. Do not add `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`: it also overrides the explicit `opus` the verify stages need.
+Optional safety net: in the `env` block of `~/.claude/settings.json`, add `"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"` next to the keys already there; do not replace the block. A general-purpose or workflow agent launched without a model then runs on Sonnet instead of the session's Opus, and an explicit `opus` still wins. It does not reach the built-in Explore and Plan agents, which stay on the session's model, or agents whose definition sets `model:` (including `inherit`), so the skills still name the model on every call. Do not add `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`: it also overrides the explicit `opus` the verify stages need.
 
 ## Launching a cloud worker
 
