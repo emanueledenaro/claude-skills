@@ -11,7 +11,7 @@ How the person wants delegated work run, in every project. The project's own AGE
 - Cloud sessions take everything that runs in a checkout: code, tests, conflicts, docs, investigations. From the repo root: `expect ~/.claude/skills/coordinator-method/launch.exp <task> <rules|-> <log> <model> <effort>`. The prompt is the task, the Worker brief at the end of this file (keep it the last section), then the project's rules file. Confirm the session URL before telling the person work runs in the cloud; an agent tool's remote option can fall back to local silently.
 - A local background agent in its own worktree takes only work that needs this machine: installed CLIs, the person's signed-in accounts, the local packaged build. One at a time.
 - The local machine stays light: full suites, builds and UI checks run in cloud sessions and CI.
-- One implementation thread at a time by default; run parallel threads when the person asks or the plan has headroom, on disjoint areas. Check rarely: one long wait beats many status reads. Workers commit often.
+- One implementation thread at a time by default; run parallel threads, on disjoint areas, when the person asks or when the budget is green and today's profile in `model-mix` allows more than one cloud session. Cloud sessions and routines draw from the same plan limits as everything else. Check rarely: one long wait beats many status reads. Workers commit often.
 - Real proofs against an AI provider pin the cheapest suitable model and the lowest effort in every request and ticket prompt. The person's own tool configs stay as they are unless they ask.
 - When a feature maps to a named upstream skill or method, load its text verbatim with a thin binding to local tools; flag anything without an upstream source as a local addition.
 - QA mode (the person asks for a critic, tester, evaluator): write user stories on the spot and fix flows through at most three local subagents in worktrees with one shared written brief. Each fix starts from a failing test; run only targeted tests, one worker, under `nice`. Worktrees stay unpushed: review each branch and bring it into the working PR yourself.
@@ -36,8 +36,13 @@ How the person wants delegated work run, in every project. The project's own AGE
 
 ## Usage and overnight
 
-- Check usage before each round. At 86% of the weekly all-models usage, or the threshold the person set, stop: no merges, launches or messages to workers, and tell the person. Near the limit, finish open PRs before launching new threads.
-- When the person goes to sleep: self-paced `/loop` with a 30 minute fallback wakeup plus a background watcher script as the event wake, and `caffeinate -is -t 36000` to keep the machine awake. Push notifications only for decisions and milestones. Leave a morning summary in the project's scratch state file.
+- Run the budget check in `model-mix` at the moments it names, and follow its color: yellow is one profile down, red starts nothing new but lets open PRs finish. Usage is per account, so other sessions, cloud workers and the person's chats spend the same budget.
+- When the person goes to sleep:
+  - Compact first, or hand off to a fresh coordinator, because every wakeup sends the whole context again.
+  - Wake on events: a background watcher script or a CI monitor. Add a self-paced `/loop` with a 30 minute fallback wakeup, which keeps the 1-hour prompt cache warm.
+  - Each wakeup runs the budget check before launching. With the 5-hour window at 90% or more, sleep until its reset.
+  - Keep the machine awake: ask the person to turn on Keep computer awake in Desktop (Settings → This computer → System) and leave the lid open, or use `caffeinate -is -t 36000` on macOS.
+  - Push notifications only for decisions and milestones. Leave a morning summary, with the weekly points spent overnight, in the project's scratch state file.
 
 ## Talking with the person
 
