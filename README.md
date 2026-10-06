@@ -21,7 +21,7 @@ cp -R claude-skills/model-mix claude-skills/smart-ultracode claude-skills/coordi
 Then add a pointer to your global `~/.claude/CLAUDE.md`, so every project reaches them:
 
 ```markdown
-Before launching any agent, cloud session, workflow or review, use `model-mix`. Before writing a workflow script, use `smart-ultracode`. When coordinating delegated work (workers, merges, rounds, overnight loops, UI changes), use `coordinator-method`. Before writing, changing, installing or reviewing a Claude Code mod, use `smart-mods`.
+Before launching any agent, cloud session, workflow or review, use `model-mix`. Before writing a workflow script, use `smart-ultracode`. When coordinating delegated work (workers, merges, rounds, overnight loops, UI changes), use `coordinator-method`. Before writing, changing, installing or reviewing a Claude Code mod or any plugin, or when asked for a pane, a band above the prompt, a custom command or a tool-call guard, use `smart-mods`.
 ```
 
 ## Your plan
