@@ -1,0 +1,44 @@
+#!/usr/bin/expect -f
+# Starts a Claude Code cloud session on the current repository and prints its URL.
+# Usage, from the repository root:
+#   expect ~/.claude/skills/coordinator-method/launch.exp <task file> <rules file|-> <log file> [model] [effort]
+# The prompt is the task file, then the "Worker brief" section of SKILL.md next to this script,
+# then the project's rules file (pass - for none). Model and effort come from the model-mix skill;
+# without them the session runs sonnet high.
+if {[llength $argv] < 3} {
+  puts stderr "usage: launch.exp <task file> <rules file|-> <log file> \[model\] \[effort\]"
+  exit 2
+}
+lassign $argv taskFile rulesFile logFile model effort
+if {$model eq ""} { set model sonnet }
+if {$effort eq ""} { set effort high }
+set timeout 240
+set repo [pwd]
+set here [file dirname [file normalize [info script]]]
+proc slurp {path} { set f [open $path]; set s [read $f]; close $f; return $s }
+
+# The cloud clones the current branch from GitHub: put the checkout on the default branch at its remote head.
+set base main
+catch { set base [string map {origin/ ""} [exec git -C $repo symbolic-ref --short refs/remotes/origin/HEAD]] }
+catch { exec git -C $repo checkout -q $base }
+catch { exec git -C $repo pull -q --ff-only origin $base }
+
+set prompt [slurp $taskFile]
+if {![catch {slurp [file join $here SKILL.md]} skill] && [regexp {## Worker brief\n(.*)} $skill -> brief]} {
+  append prompt "\n\n" [string trim $brief]
+}
+if {$rulesFile ne "-"} { append prompt "\n\n" [slurp $rulesFile] }
+
+set claude [lindex [auto_execok claude] 0]
+if {$claude eq ""} { set claude [file join $env(HOME) .local bin claude] }
+
+log_file -noappend $logFile
+spawn $claude --model $model --effort $effort --cloud $prompt
+expect {
+  -re "folder" { sleep 2; send "\033\[B"; sleep 0.5; send "\r"; exp_continue }
+  -re {claude\.ai/code/[A-Za-z0-9_]+} { puts "\nURL: $expect_out(0,string)"; sleep 3 }
+  timeout { puts "\nTIMEOUT" }
+  eof { puts "\nEOF" }
+}
+catch { send "\003" }; sleep 1; catch { send "\003" }
+catch { close }; catch { wait }
