@@ -49,7 +49,7 @@ One short message before invoking, not an edit of his text. Fill the brackets.
 - Grilling: `Grill me one question per message: options, your recommendation, how many remain. Map the frontier first.`
 - Spec: `After publishing, add milestone "[name]". Do not interview.`
 - Tickets: `Publish HITL slices as [ready-for-human label]. I add the milestone after each issue. One question per message for the breakdown quiz.`
-- Build: `Work on branch [feature/N-slug], never main. Targeted tests only. No amend, no force.`
+- Build: `Work on branch [feature/issue-N-slug], never main. Targeted tests only. No amend, no force.`
 - Fan-out: `At most [N] implementers at once (N: one, or the Parallel cloud sessions number of today's model-mix profile when the budget is green and the slices are disjoint), each model [sonnet] effort [high]. The rest of the frontier waits. The merger touches the integration branch only; I merge to main.`
 - Review: `Reviewers on model [opus] effort [high]. Report findings; do not merge.`
 

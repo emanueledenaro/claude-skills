@@ -62,6 +62,7 @@ Rules for every worker. The project's rules that follow win on conflict.
 - Start from the latest main and merge it again before every push: `git fetch origin && git merge -m "chore: merge origin/main into <branch>" origin/main`.
 - Before every push run the full type check, test suite, build and UI check on the merged result. If the environment cannot run one, say so in the PR and the report; report only checks that ran and passed as passed.
 - Commits, merge commits and PR titles follow Conventional Commits; branches follow Conventional Branch with long types, lowercase, hyphens and the issue number, never an agent prefix. Each commit ends with the Co-Authored-By line your session's attribution gives for your model.
+- Pushed history is append-only: a fix after a push is a new commit, no amend plus push, no `--force` or `--force-with-lease`.
 - Open or update the PR, then stop: the coordinator merges. Start no other ticket.
 - Conflicts keep both sides' behavior. Existing tests and checks stay as strong as they are; list each resolved conflict in the PR.
 - Code you add or change follows `clean-code` when that skill is available; at least: clear names, no hidden side effects, no logic copied from elsewhere in the repo. Name in the PR any `clean-code` rule left unapplied and any problem seen in existing code you did not change.

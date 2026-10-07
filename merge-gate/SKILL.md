@@ -9,7 +9,7 @@ What happens between "the worker says the PR is done" and "main has it". The coo
 
 - Read the PR yourself (`commands.md`, "Read the PR"). A worker's "all green" is a claim: read `gh pr checks N --required`.
 - Draft, failing, unfinished or conflicting: send it back to its worker. Ask the person before merging anything unfinished or failing.
-- Branch protection or a project rule that needs a human approval: stop and say so. Never `--admin`, `--auto`, `--squash` or `--rebase`.
+- Branch protection or a project rule that needs a human approval: stop and say so. Never `--admin` or `--auto`; no `--squash` or `--rebase` unless the project asks (`git-conventions`).
 - Dependabot minor or patch: read the diff and the version change yourself and merge on green, as `coordinator-method` says. A major goes to a dedicated thread, then through this gate.
 
 ## 2. Size the review

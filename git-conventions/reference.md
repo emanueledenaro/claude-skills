@@ -41,6 +41,10 @@ Vague descriptions pass the validator and still fail the rule: `fix: update stuf
 
 `git revert` proposes `Revert "<subject>"`, which is not in the format. Rewrite it as `revert: <description>`.
 
+`fixup! `, `squash! ` and `amend! ` subjects made by `git commit --fixup` are local work before an autosquash: the commit-msg hook lets them through when the rest is a valid subject, and `commit-range` rejects them because they must not be pushed.
+
+Dependabot's default subjects (`Bump foo from 1.0 to 1.1`) fail `commit-range` and `pr-title`. In `dependabot.yml` set `commit-message: { prefix: "build", include: "scope" }` on each update entry, so they read `build(deps): bump foo from 1.0 to 1.1`.
+
 ## Merge subjects git writes
 
 Git's default subject for a merge that brings one of the three branches into a work branch passes, on a commit with two or more parents only:
@@ -49,7 +53,7 @@ Git's default subject for a merge that brings one of the three branches into a w
 - `Merge branch 'develop' of https://example.com/owner/repo.git into feature/x`
 - `Merge remote-tracking branch 'origin/main' into feature/x`
 
-The same subject on a commit with one parent fails. A merge of any other branch (`Merge branch 'feature/other' into feature/x`) fails too: write `chore: merge feature/other into feature/x`. On the main branch the subject is always the PR title followed by the number.
+The target must be a work branch: `Merge branch 'develop' into main` fails, and so does `Merge branch 'main' into master`. The same subject on a commit with one parent fails. An octopus merge (`Merge branches 'main' and 'develop' into feature/x`) is not accepted as git writes it. A merge of any other branch (`Merge branch 'feature/other' into feature/x`) fails too: write `chore: merge feature/other into feature/x`. On the main branch the subject is always the PR title followed by the number.
 
 ## SemVer effect
 
@@ -85,6 +89,7 @@ When one release holds several changes, the highest row wins.
 | `feature/` | invalid, empty description |
 | `claude/add-login` | invalid, agent-name prefix |
 | `feature/add.login` | invalid, a dot outside `release/` |
+| `release/foo.bar` | invalid, a dot under `release/` that is not a version (`v1.2.0`, `2.0.0-rc.1`) |
 
 ## Sources
 
