@@ -31,7 +31,7 @@ Run the budget check in `model-mix` first. Size by the diff, not by the worker's
 ## 4. Apply findings
 
 - Send verified findings to the worker that owns the PR as one message: file and line, evidence, expected change. If the worker is gone, start a fix thread. Fixes are new commits: no amend, no force.
-- A serious finding (wrong behavior, security, data loss, removed or weakened tests, a broken project rule) must be fixed before the merge. A minor one is fixed in the same round if cheap, otherwise it becomes a ticket with a milestone.
+- A serious finding (wrong behavior, security, data loss, removed or weakened tests, a broken project rule, a `clean-code` block rule) must be fixed before the merge. A minor one is fixed in the same round if cheap, otherwise it becomes a ticket with a milestone.
 - After fixes, one delta review of the new commits only (one Opus high agent, same brief). Two fix rounds at most; if serious findings remain after the second, stop and tell the person.
 - Refuted and unverified findings are not sent to the worker. Note them in the PR comment.
 
