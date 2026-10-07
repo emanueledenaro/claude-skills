@@ -25,14 +25,19 @@ const MAIN_BRANCH_NAMES = MAIN_BRANCHES.join('|');
 //   Merge branch 'main' into x
 //   Merge branch 'develop' of <url> into x
 //   Merge remote-tracking branch 'origin/main' into x
+// The target is a work branch: never main, master or develop themselves.
 const DEFAULT_MERGE_RE = new RegExp(
   `^Merge (?:branch '(?:${MAIN_BRANCH_NAMES})'(?: of \\S+)?` +
-    `|remote-tracking branch '[^'\\s/]+/(?:${MAIN_BRANCH_NAMES})') into \\S+$`,
+    `|remote-tracking branch '[^'\\s/]+/(?:${MAIN_BRANCH_NAMES})')` +
+    ` into (?!(?:${MAIN_BRANCH_NAMES})$)\\S+$`,
 );
 const GITHUB_MERGE_RE = /^Merge pull request #\d+ from /;
+const AUTOSQUASH_RE = /^(?:(?:fixup|squash|amend)! )+/;
 const COMMIT_HEAD_RE = /^([^()!]*)(?:\(([^()]*)\))?(!)?$/;
 const SCOPE_RE = /^[a-z0-9-]+$/;
+const RELEASE_VERSION_RE = /^v?\d+\.\d+\.\d+(?:-[0-9a-z]+(?:\.[0-9a-z]+)*)?$/;
 const DEPENDABOT_PREFIX = 'dependabot/';
+const SCISSORS = ' ------------------------ >8 ------------------------';
 
 function verdict({ label, value, errors, expected, warnings = [] }) {
   const message = errors.length === 0
@@ -53,24 +58,27 @@ function withoutCarriageReturn(text) {
   return String(text ?? '').replace(/\r$/, '');
 }
 
-/** True for git's default subject of a merge of main, master or develop into a branch. */
+/** True for git's default subject of a merge of main, master or develop into a work branch. */
 export function isDefaultMainMerge(subject) {
   return DEFAULT_MERGE_RE.test(withoutCarriageReturn(subject));
 }
 
 // Subjects that are not in the commit format and get a more specific hint.
-function mergeSubjectProblem(line) {
+function specialSubjectProblem(line) {
+  if (AUTOSQUASH_RE.test(line)) {
+    return 'fixup!, squash! and amend! subjects are for local work before an autosquash and must not be pushed';
+  }
   if (GITHUB_MERGE_RE.test(line)) {
     return "GitHub's default merge subject must be replaced by the PR title followed by the number, " +
       'for example feat(app): add the search palette (#123)';
   }
-  if (DEFAULT_MERGE_RE.test(line)) {
+  if (isDefaultMainMerge(line)) {
     // checkCommitSubject lets this through on a merge commit before getting here
     return "git's default merge subject for main, master or develop is accepted only on a merge commit";
   }
   if (/^Merge /.test(line)) {
     return 'a merge subject must follow the format, for example chore: merge feature/other into feature/x; ' +
-      "only git's default merge of main, master or develop into a branch may stay as it is";
+      "only git's default merge of main, master or develop into a work branch may stay as it is";
   }
   return null;
 }
@@ -101,8 +109,8 @@ function descriptionSpacingProblems(rest) {
 
 function commitProblems(line) {
   if (line.trim() === '') return ['the subject is empty'];
-  const mergeProblem = mergeSubjectProblem(line);
-  if (mergeProblem !== null) return [mergeProblem];
+  const specialProblem = specialSubjectProblem(line);
+  if (specialProblem !== null) return [specialProblem];
   const colon = line.indexOf(':');
   if (colon === -1) return ['no ":" after the type'];
   return [
@@ -114,12 +122,15 @@ function commitProblems(line) {
 /**
  * Checks the first line of a commit message.
  * isMerge is true for a commit with two or more parents: only then does git's default
- * subject for merging main, master or develop into a branch pass.
+ * subject for merging main, master or develop into a work branch pass.
+ * allowAutosquash lets "fixup! ", "squash! " and "amend! " prefixes through when the rest is
+ * a valid subject: for the commit-msg hook, since that is local work before an autosquash.
  */
-export function checkCommitSubject(subject, { isMerge = false } = {}) {
+export function checkCommitSubject(subject, { isMerge = false, allowAutosquash = false } = {}) {
   const line = withoutCarriageReturn(subject);
-  const passesAsMerge = isMerge && DEFAULT_MERGE_RE.test(line);
-  return commitVerdict('commit subject', line, passesAsMerge ? [] : commitProblems(line));
+  const checked = allowAutosquash ? line.replace(AUTOSQUASH_RE, '') : line;
+  const passesAsMerge = isMerge && isDefaultMainMerge(checked);
+  return commitVerdict('commit subject', line, passesAsMerge ? [] : commitProblems(checked));
 }
 
 /** A PR title has the commit format. The merge exception never applies to it. */
@@ -147,6 +158,13 @@ function branchTypeCheck(type) {
   };
 }
 
+// A dot belongs to a version, and a version only under release/.
+function dotProblems(type, desc) {
+  if (!desc.includes('.')) return [];
+  const isVersion = type === 'release' && RELEASE_VERSION_RE.test(desc);
+  return isVersion ? [] : ['a dot is allowed only in a version under release/'];
+}
+
 function descriptionProblems(type, desc) {
   if (desc === '') return ['the description after "/" is empty'];
   const rules = [
@@ -162,10 +180,7 @@ function descriptionProblems(type, desc) {
     [/[^A-Za-z0-9._/\s-]/, 'it has characters other than letters, digits, hyphens and dots'],
   ];
   const problems = rules.filter(([pattern]) => pattern.test(desc)).map(([, text]) => text);
-  if (type !== 'release' && desc.includes('.')) {
-    problems.push('a dot is allowed only in versions under release/');
-  }
-  return problems;
+  return [...problems, ...dotProblems(type, desc)];
 }
 
 function isExemptBranch(name) {
@@ -186,11 +201,16 @@ export function checkBranchName(name) {
 }
 
 /**
- * The first line of a commit message file that is neither blank nor a comment, or null.
- * Git strips blank lines at the start and lines starting with the comment character.
+ * The first line of a commit message that is neither blank nor a comment, or null.
+ * Like git, it drops a leading byte order mark, skips lines starting with the comment character
+ * (default "#", null for none) and ignores everything from the scissors line that
+ * "git commit -v" writes.
  */
-export function firstMessageLine(text, commentChar = '#') {
-  const lines = String(text).split('\n').map(withoutCarriageReturn);
-  const found = lines.find((line) => line.trim() !== '' && !line.startsWith(commentChar));
-  return found ?? null;
+export function firstMessageLine(text, { commentChar = '#' } = {}) {
+  const lines = String(text).replace(/^\uFEFF/, '').split('\n').map(withoutCarriageReturn);
+  const hasComments = commentChar !== null;
+  const scissorsAt = hasComments ? lines.indexOf(`${commentChar}${SCISSORS}`) : -1;
+  const message = scissorsAt === -1 ? lines : lines.slice(0, scissorsAt);
+  const isComment = (line) => hasComments && line.startsWith(commentChar);
+  return message.find((line) => line.trim() !== '' && !isComment(line)) ?? null;
 }

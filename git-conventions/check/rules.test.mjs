@@ -29,6 +29,9 @@ describe('branch names', () => {
     'hotfix/security-patch',
     'release/v1.2.0',
     'release/v0.3.0-beta.1',
+    'release/2.0.0',
+    'release/v1.2.3-rc.1',
+    'release/next-sprint',
     'chore/update-dependencies',
     'main',
     'master',
@@ -54,6 +57,10 @@ describe('branch names', () => {
     ['docs/old-tickets-audit', 'type not allowed', 'type "docs" is not allowed'],
     ['feature/', 'empty description', 'empty'],
     ['feature/add.login', 'dot outside release', 'dot is allowed only'],
+    ['release/foo.bar', 'dot without a version', 'dot is allowed only in a version under release/'],
+    ['release/a.b', 'dot without a version', 'dot is allowed only in a version under release/'],
+    ['release/add.login', 'dot without a version', 'dot is allowed only in a version under release/'],
+    ['release/1.x.final', 'dot without a version', 'dot is allowed only in a version under release/'],
     ['feature/a/b', 'second slash', 'second "/"'],
     ['add-login', 'no prefix', 'no <type>/ prefix'],
     ['Main', 'main in uppercase', 'no <type>/ prefix'],
@@ -146,6 +153,33 @@ describe('commit subjects', () => {
     });
   }
 
+  describe('autosquash subjects', () => {
+    it('are rejected by default, because they must not be pushed', () => {
+      for (const subject of ['fixup! feat: add a thing', 'squash! fix(app): handle null', 'amend! feat: add a thing']) {
+        assertInvalid(checkCommitSubject(subject), subject, 'must not be pushed');
+        assertInvalid(checkPrTitle(subject), subject, 'must not be pushed');
+      }
+    });
+
+    it('pass for local work when allowed and the rest is a valid subject', () => {
+      for (const subject of [
+        'fixup! feat: add a thing',
+        'squash! fix(app): handle null',
+        'amend! feat: add a thing',
+        'fixup! fixup! feat: add a thing',
+        'squash! amend! chore: tidy up',
+      ]) {
+        assertOk(checkCommitSubject(subject, { allowAutosquash: true }), subject);
+      }
+    });
+
+    it('fail when allowed but the rest is not a valid subject', () => {
+      for (const subject of ['fixup! add a thing', 'fixup! ', 'squash! feat:', 'fixup!feat: add a thing']) {
+        assertInvalid(checkCommitSubject(subject, { allowAutosquash: true }), subject);
+      }
+    });
+  });
+
   it('tolerates a trailing carriage return from a Windows message file', () => {
     assertOk(checkCommitSubject('feat: add a thing\r'), 'CRLF subject');
   });
@@ -160,6 +194,7 @@ describe('merge exception', () => {
     "Merge branch 'main' of github.com:owner/repo into x",
     "Merge remote-tracking branch 'origin/main' into feature/x",
     "Merge remote-tracking branch 'upstream/develop' into feature/x",
+    "Merge branch 'main' into mainline",
   ];
   for (const subject of defaults) {
     it(`passes ${JSON.stringify(subject)} only as a merge commit`, () => {
@@ -181,6 +216,12 @@ describe('merge exception', () => {
     "Merge branch 'main' into feature/x and more",
     'Merge pull request #12 from owner/feature/add-login',
     "merge branch 'main' into feature/x",
+    "Merge branch 'develop' into main",
+    "Merge branch 'main' into master",
+    "Merge branch 'main' into develop",
+    "Merge branch 'develop' of https://example.com/o/r.git into main",
+    "Merge remote-tracking branch 'origin/main' into main",
+    "Merge branches 'main' and 'develop' into feature/x",
   ];
   for (const subject of others) {
     it(`fails ${JSON.stringify(subject)} even on a merge commit`, () => {
@@ -222,6 +263,26 @@ describe('PR titles', () => {
 });
 
 describe('commit message files', () => {
+  const scissors = '# ------------------------ >8 ------------------------';
+
+  it('stops at the scissors line that git commit -v writes', () => {
+    const verbose = `\n${scissors}\n# Do not modify or remove the line above.\ndiff --git a/x b/x\n+feat: not a subject\n`;
+    assert.equal(firstMessageLine(verbose), null);
+    assert.equal(firstMessageLine(`feat: one\n\n${scissors}\ndiff --git a/x b/x\n`), 'feat: one');
+    assert.equal(firstMessageLine(`;${scissors.slice(1)}\nfeat: x\n`, { commentChar: ';' }), null);
+  });
+
+  it('strips a leading UTF-8 byte order mark', () => {
+    assert.equal(firstMessageLine('﻿feat: one\n'), 'feat: one');
+    assert.equal(firstMessageLine('﻿# comment\nfeat: one\n'), 'feat: one');
+  });
+
+  it('honors another comment character, and none with null', () => {
+    assert.equal(firstMessageLine(';comment\nfeat: one', { commentChar: ';' }), 'feat: one');
+    assert.equal(firstMessageLine('# not a comment here\nfeat: one', { commentChar: ';' }), '# not a comment here');
+    assert.equal(firstMessageLine('# note\nfeat: one', { commentChar: null }), '# note');
+  });
+
   it('takes the first line that is not blank or a comment', () => {
     assert.equal(firstMessageLine('feat: one\n\nbody Line\n'), 'feat: one');
     assert.equal(firstMessageLine('# Please enter\n# more\nfeat: one\n'), 'feat: one');
