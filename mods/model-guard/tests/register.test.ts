@@ -651,17 +651,52 @@ describe('model-guard', () => {
     })
   })
 
-  describe('Start-Process: words inside a quoted prompt are no flags', () => {
-    test('a cloud launch whose prompt mentions -p is still a launch: no --model denied, --model fable denied, opus passes', async ($, on) => {
-      const w = world(on)
+  describe('indirect launches: claude run by Start-Process or cmd start', () => {
+    const INDIRECT = [
+      // The reviewer's inputs.
+      `Start-Process claude -ArgumentList "Fix the user's login","--cloud","--model","fable"`,
+      "Start-Process claude -ArgumentList '\\\"fix `parseArgs`\\\"','--cloud','--model','fable'",
+      `Start-Process claude -ArgumentList '--add-dir "C:\\My Proj\\\\"','--cloud','--model','fable'`,
+      "Start-Process claude -ArgumentList @('--cloud','x')",
+      // A cloud launch with a model, a follow-up to a worker, cmd's start.
+      "Start-Process -FilePath claude -ArgumentList '--model','opus','--cloud','\"fix the -p flag parsing\"'",
+      "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
+      'cmd /c start "" claude --cloud x',
+    ]
+    for (const [color, limits] of [['green', GREEN], ['red', RED], ['paused', PAUSED]] as [string, unknown[]][]) {
+      test('every one is denied with the run-it-directly reason, ' + color, async ($, on) => {
+        const w = world(on, limits)
+        await start($)
+        for (const command of INDIRECT) {
+          for (const tool of ['PowerShell', 'Bash']) {
+            const r = await $.tool.call({ tool, command } as any)
+            expect(isRefused(r), command).toBe(true)
+            expect(denyText(r)).toContain('Run the same launch directly as a claude command, for example claude --cloud "<task>" or claude -p "<msg>" --cloud <session>.')
+          }
+        }
+        const monitor = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: INDIRECT[0] } as any)
+        expect(denyText(monitor)).toContain('Run the same launch directly')
+        expect(w.calls).toEqual([])
+        expect(w.logs.length).toBe(INDIRECT.length * 2 + 1)
+        for (const l of w.logs) expect(l).toEqual({ text: 'model-guard: lancio di claude tramite Start-Process o start bloccato, va lanciato direttamente', to: 'transcript' })
+      })
+    }
+
+    test('mentions in heredocs or quoted text and Start-Process of other programs pass untouched, even when red', async ($, on) => {
+      const w = world(on, RED)
       await start($)
-      const none = await $.tool.call({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'" } as any)
-      expect(denyText(none)).toContain('nested shell script (or Start-Process)')
-      const fable = await $.tool.call({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList '--model','fable','--cloud','\"explain -p\"'" } as any)
-      expect(denyText(fable)).toContain('Cloud sessions never run Fable')
-      const opus = "Start-Process claude -ArgumentList '--model','opus','--cloud','\"fix the -p flag parsing\"'"
-      expect(isRefused(await $.tool.call({ tool: 'PowerShell', command: opus } as any))).toBe(false)
-      expect(w.calls.map(c => c.command)).toEqual([opus])
+      const commands = [
+        "git commit -F - <<'EOF'\nStart-Process claude -ArgumentList '--cloud','x'\nEOF",
+        "@'\nStart-Process claude -ArgumentList '--cloud','x'\n'@ | Set-Content notes.md",
+        'git commit -m "docs: never Start-Process claude --cloud"',
+        "Write-Output 'Start-Process claude --cloud x'",
+        'Start-Process notepad',
+        'Start-Process notepad claude',
+        'Start-Process code D:\\Progetti\\claude',
+      ]
+      for (const command of commands) expect(isRefused(await $.tool.call({ tool: 'PowerShell', command } as any)), command).toBe(false)
+      expect(w.calls.map(c => c.command)).toEqual(commands)
+      expect(w.logs).toEqual([])
     })
   })
 

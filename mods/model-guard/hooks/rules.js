@@ -48,6 +48,7 @@ const TEXTS = {
     wfWidthWarn: p => `model-guard: workflow oltre la larghezza ${p.width} (${p.name}), altri agenti consentiti (redPolicy warn)`,
     wfSolo: p => `model-guard: workflow bloccato, il profilo di oggi (${p.name}) non ne consente`,
     cloudSolo: p => `model-guard: sessione cloud bloccata, il profilo di oggi (${p.name}) non ne consente`,
+    indirect: 'model-guard: lancio di claude tramite Start-Process o start bloccato, va lanciato direttamente',
     failed: k => `model-guard: controllo fallito (${k}), lancio bloccato`,
     status: (b, warn) => `model-guard: budget rosso · ${budgetBrief(b, 'it')} · ${warn ? 'lanci solo segnalati' : 'nuovi lanci bloccati'}`,
   },
@@ -74,6 +75,7 @@ const TEXTS = {
     wfWidthWarn: p => `model-guard: workflow past width ${p.width} (${p.name}), further agents allowed (redPolicy warn)`,
     wfSolo: p => `model-guard: workflow blocked, today's profile (${p.name}) allows none`,
     cloudSolo: p => `model-guard: cloud session blocked, today's profile (${p.name}) allows none`,
+    indirect: 'model-guard: claude launch through Start-Process or start blocked, run it directly',
     failed: k => `model-guard: check failed (${k}), launch blocked`,
     status: (b, warn) => `model-guard: budget red · ${budgetBrief(b, 'en')} · ${warn ? 'launches only flagged' : 'new launches blocked'}`,
   },
@@ -562,34 +564,89 @@ export function claudeLaunch(values) {
   return 'local'
 }
 
-// Start-Process's own parameters, left out of the words claude receives.
-const STARTER_PARAMS = /^-(argumentlist|args|filepath|wait|nonewwindow|passthru|windowstyle|workingdirectory|verb)$/i
+// ---------------------------------------------------------------- indirect launches (Start-Process, start)
+// What a starter hands claude is a Windows command line, and re-reading its quoting kept letting launches
+// through. So the argument list is never read: only which program the starter runs, from the starter's
+// own parameters, and claude there is refused whatever its arguments say.
+// skill-router's routes.js holds a copy of this block: keep the two identical.
 
-// The words claude receives from a starter's argument values: PowerShell's array commas split them, and
-// a quoted text inside an element (`'"fix the -p flag"'`) stays one word, as claude receives it, so the
-// words of a prompt never read as flags. Every segment is kept: a `(` or `;` in an element's text must
-// not drop the flags after it.
-// skill-router's routes.js holds a copy of this function: keep the two identical.
-// Start-Process hands claude a Windows command line: only double quotes group words there; a single quote
-// is a plain character and \" a literal quote, so both are masked before tokenize reads the text.
-function startedWords(values) {
-  const text = values.join(' ').replace(/,/g, ' ').replace(/\\"/g, '\u0001').replace(/'/g, '\u0000')
-  return tokenize(text).flat().map(t => t.value.replace(/\u0000/g, "'").replace(/\u0001/g, '"'))
+// Start-Process's switches and the parameters that take a value. PowerShell accepts any prefix of a name
+// (`-NoNew`, `-File`) and `-Name:value` as one word; an unknown name is taken to have a value.
+const START_SWITCHES = ['wait', 'nonewwindow', 'nnw', 'passthru', 'loaduserprofile', 'lup', 'usenewenvironment', 'verbose', 'debug', 'whatif', 'confirm']
+const START_VALUED = ['argumentlist', 'args', 'workingdirectory', 'windowstyle', 'verb', 'credential', 'environment', 'redirectstandardinput', 'redirectstandardoutput', 'redirectstandarderror', 'rsi', 'rso', 'rse']
+const START_FILE = ['filepath', 'path', 'pspath']
+// cmd's start switches that take the next word (`/D C:\dir`); the others (`/MIN`, `/WAIT`, `/B`) take none.
+const CMD_VALUED = ['d', 'node', 'affinity']
+
+function startSwitch(name) {
+  return START_SWITCHES.some(s => s.startsWith(name)) && ![...START_VALUED, ...START_FILE].some(v => v.startsWith(name))
 }
 
-// `Start-Process claude -ArgumentList '--cloud','task'` (or cmd's `start claude -p x`): a launch whose
-// arguments model-guard cannot edit in place, else null. --model is read from the same words, so a
-// prompt that only mentions it names no model.
-function startedLaunch(seg, ci) {
-  if (!STARTERS.includes(baseName(seg[ci].value))) return null
-  const rest = seg.slice(ci + 1)
-  const at = rest.findIndex(a => isClaude(a.value))
-  if (at < 0) return null
-  const words = startedWords(rest.slice(at + 1).map(a => a.value)).filter(w => !STARTER_PARAMS.test(w))
-  const kind = claudeLaunch(words)
-  if (!kind) return null
-  const m = flagValue(words.map(value => ({ value })), '--model')
-  return { kind, hasModel: m.present, model: m.value, insertAt: null }
+// The words after a starter, as units: a word, or a `( ... )` group with what touches it (`@('a','b')`,
+// `(Get-Command claude).Source`). The statement runs on past breaks made only of parentheses (and of
+// newlines inside them, or after a ` or \ line continuation) and ends at any other separator.
+function starterUnits(command, segments, k, ci) {
+  const units = []
+  let prev = segments[k][ci]
+  let depth = 0
+  let carry = false
+  for (let s = k; s < segments.length; s++) {
+    for (let j = s === k ? ci + 1 : 0; j < segments[s].length; j++) {
+      const tok = segments[s][j]
+      let apart = !units.length
+      for (const ch of command.slice(prev.end, tok.start)) {
+        if (ch === '(') depth++
+        else if (ch === ')') depth = Math.max(0, depth - 1)
+        else if (ch === ' ' || ch === '\t' || ((ch === '\n' || ch === '\r') && (depth > 0 || carry))) apart = apart || depth === 0
+        else return units
+      }
+      prev = tok
+      carry = /^[`\\]$/.test(command.slice(tok.start, tok.end))
+      if (carry) continue
+      if (apart) units.push([tok])
+      else units[units.length - 1].push(tok)
+    }
+  }
+  return units
+}
+
+// Whether a starter (Start-Process, start, saps, cmd's start) runs claude: the -FilePath value when one
+// is given, else the first positional word; cmd's start takes a double-quoted first word as the window
+// title (`start "" claude`). A path counts (`C:\x\claude.exe`), and so does a group naming claude
+// (`(Get-Command claude).Source`).
+function startsClaude(command, segments, k, ci) {
+  const units = starterUnits(command, segments, k, ci)
+  const names = u => u.some(t => isClaude(t.value))
+  // The last unit of a value: PowerShell's array commas (`'a', 'b'`) carry it on.
+  const valueEnd = j => {
+    while (j + 1 < units.length && (command[units[j][units[j].length - 1].end - 1] === ',' || command[units[j + 1][0].start] === ',')) j++
+    return j
+  }
+  let file = null // null: no -FilePath; else whether one names claude
+  const positional = []
+  for (let i = 0; i < units.length; i++) {
+    const word = units[i].length === 1 ? units[i][0].value : ''
+    const param = /^-([a-z][a-z0-9]*)(?::([\s\S]*))?$/i.exec(word)
+    if (param) {
+      const name = param[1].toLowerCase()
+      if (START_FILE.some(f => f.startsWith(name))) {
+        file = !!file || names(param[2] !== undefined ? [{ value: param[2] }] : units[i + 1] || [])
+        if (param[2] === undefined) i = valueEnd(i + 1)
+      } else if (param[2] === undefined && !startSwitch(name)) i = valueEnd(i + 1)
+      continue
+    }
+    const sw = /^\/\/?([a-z][^/]*)$/i.exec(word)
+    if (sw && !isClaude(word)) {
+      if (CMD_VALUED.includes(sw[1].toLowerCase())) i = valueEnd(i + 1)
+      continue
+    }
+    positional.push(units[i])
+  }
+  if (file !== null) return file
+  if (!positional.length) return false
+  if (names(positional[0])) return true
+  const title = baseName(segments[k][ci].value) === 'start' && command[positional[0][0].start] === '"'
+  return title && positional.length > 1 && names(positional[1])
 }
 
 // The launches a command line holds:
@@ -598,12 +655,16 @@ function startedLaunch(seg, ci) {
 //   { kind: 'resume', hasModel, model, insertAt } for `claude --resume <id> -p ...`, `claude -c --bg ...`
 //     (insertAt null when the launch sits inside a nested shell's script that cannot be edited in place)
 //   { kind: 'launchExp', model }                  for `expect .../launch.exp <task> <rules> <log> <model> <effort>`
+//   { kind: 'indirect' }                          for claude run by Start-Process (start, saps) or cmd's start,
+//     whatever its arguments: they are never read
 // Nested shells (`bash -c "claude --cloud ..."`) are read too, up to 3 levels deep.
 export function scanShell(command, depth = 0) {
   if (typeof command !== 'string') throw new TypeError('command is not text')
   if (!/claude|launch\.exp/i.test(command)) return []
   const launches = []
-  for (const seg of tokenize(command)) {
+  const segments = tokenize(command)
+  for (let k = 0; k < segments.length; k++) {
+    const seg = segments[k]
     const ci = commandIndex(seg)
     if (ci < 0) continue
     const word = seg[ci]
@@ -617,16 +678,15 @@ export function scanShell(command, depth = 0) {
         // Offsets map back only when the script token is the plain text in one pair of quotes (or none).
         const exact = raw === quote + script.value + quote
         for (const inner of found) {
-          if (inner.kind === 'launchExp') launches.push(inner)
+          if (inner.kind === 'launchExp' || inner.kind === 'indirect') launches.push(inner)
           else launches.push({ ...inner, insertAt: exact && inner.insertAt !== null ? script.start + quote.length + inner.insertAt : null })
         }
         break
       }
       continue
     }
-    const started = startedLaunch(seg, ci)
-    if (started) {
-      launches.push(started)
+    if (STARTERS.includes(baseName(word.value))) {
+      if (startsClaude(command, segments, k, ci)) launches.push({ kind: 'indirect' })
       continue
     }
     if (isClaude(word.value)) {
@@ -679,11 +739,21 @@ export function insertModelFlags(command, launches) {
 // finishes open work, as a Workflow resume does: allowed while red (redPolicy deny too) and on Solo,
 // denied only while the 5-hour window is paused. It gets no --model, but an explicit Fable or bare
 // haiku is still denied. Next to a new launch, the command goes through the gate as a whole.
+// claude run by Start-Process or cmd's start is denied in every color, before the gate: model-guard does
+// not read what it hands claude, so the model runs the same launch directly.
 export function decideShell(input, ctx, launches) {
   const found = launches || scanShell(input.command)
   if (!found.length) return { action: 'allow', reason: 'No launch in this command.', log: '' }
   const b = ctx.budget
   const t = texts(ctx.lang)
+  if (found.some(l => l.kind === 'indirect')) {
+    return {
+      action: 'deny',
+      reason: 'model-guard does not read claude launches started through Start-Process (start, saps) or cmd\'s start, so this command was not run. Run the same launch directly as a claude command, for example claude --cloud "<task>" or claude -p "<msg>" --cloud <session>.',
+      log: t.indirect,
+      to: 'transcript',
+    }
+  }
   const resumesOnly = found.every(l => l.kind === 'resume')
   if (resumesOnly && b.pausedFiveHour) return denied(pausedGate(b, t, ctx))
   const gate = resumesOnly && b.color === 'red' ? { note: t.resumeRed(b, 'session') } : launchGate(ctx)
@@ -729,7 +799,7 @@ export function decideShell(input, ctx, launches) {
   if (found.some(l => namesModel(l) && !l.hasModel && l.insertAt === null)) {
     return {
       action: 'deny',
-      reason: 'This command starts claude (--cloud, -p or --bg) inside a nested shell script (or Start-Process) without --model, and model-guard cannot add it there. Run it again with --model sonnet (or --model opus for security-critical work) on that claude command.',
+      reason: 'This command starts claude (--cloud, -p or --bg) inside a nested shell script without --model, and model-guard cannot add it there. Run it again with --model sonnet (or --model opus for security-critical work) on that claude command.',
       log: t.nested,
       to: 'transcript',
     }

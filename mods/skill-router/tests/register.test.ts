@@ -439,10 +439,17 @@ describe('skill-router', () => {
     })
 
     for (const command of [
-      "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'",
-      "Start-Process claude -ArgumentList '--model','fable','--cloud','\"explain -p\"'",
+      // The reviewer's inputs.
+      `Start-Process claude -ArgumentList "Fix the user's login","--cloud","--model","fable"`,
+      "Start-Process claude -ArgumentList '\\\"fix `parseArgs`\\\"','--cloud','--model','fable'",
+      `Start-Process claude -ArgumentList '--add-dir "C:\\My Proj\\\\"','--cloud','--model','fable'`,
+      "Start-Process claude -ArgumentList @('--cloud','x')",
+      // A follow-up, a -FilePath launch, cmd's start: the arguments are never read.
+      "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
+      "Start-Process -FilePath claude.exe -ArgumentList '--model','opus','--cloud','\"fix the -p flag parsing\"'",
+      'cmd /c start "" claude --cloud x',
     ]) {
-      test('Start-Process with -p only inside a quoted prompt is a cloud launch: held once: ' + command, async ($, on) => {
+      test('claude run by Start-Process or cmd start is held once as a cloud launch, then passes: ' + command, async ($, on) => {
         const w = world(on)
         await start($)
         const r = await $.tool.call({ tool: 'PowerShell', command } as any)
@@ -451,6 +458,31 @@ describe('skill-router', () => {
         expect(w.calls).toEqual([expect.objectContaining({ command })])
       })
     }
+
+    test('an indirect launch names only model-mix when cloud-worker is not installed', async ($, on) => {
+      world(on, without('cloud-worker'))
+      await start($)
+      const r = await $.tool.call({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList @('--cloud','x')" } as any)
+      expect(denyText(r)).toContain('load model-mix with the Skill tool')
+      expect(denyText(r)).not.toContain('cloud-worker')
+    })
+
+    test('mentions in heredocs or quoted text and Start-Process of other programs are not held', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const commands = [
+        "git commit -F - <<'EOF'\nStart-Process claude -ArgumentList '--cloud','x'\nEOF",
+        "@'\nStart-Process claude -ArgumentList '--cloud','x'\n'@ | Set-Content notes.md",
+        'git commit -m "docs: never Start-Process claude --cloud"',
+        'Start-Process notepad',
+        'Start-Process notepad claude',
+      ]
+      for (const command of commands) expect(isRefused(await $.tool.call({ tool: 'PowerShell', command } as any)), command).toBe(false)
+      expect(w.calls.map(c => c.command)).toEqual(commands)
+      expect(w.logs).toEqual([])
+      // The cloud gate is still armed.
+      expect(isRefused(await $.tool.call({ tool: 'PowerShell', command: 'start claude --cloud x' } as any))).toBe(true)
+    })
 
     test('the cloud gate skips cloud-worker when it is not installed', async ($, on) => {
       world(on, without('cloud-worker'))

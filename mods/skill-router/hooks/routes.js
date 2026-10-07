@@ -923,16 +923,89 @@ function cloudLaunch(values) {
   return hasFlag(values, '--cloud') && !(hasFlag(values, '-p', '--print') && !hasFlag(values, '--environment'))
 }
 
-// The words claude receives from a starter's argument values: PowerShell's array commas split them, and
-// a quoted text inside an element (`'"fix the -p flag"'`) stays one word, as claude receives it, so the
-// words of a prompt never read as flags. Every segment is kept: a `(` or `;` in an element's text must
-// not drop the flags after it.
-// Keep this function identical to model-guard's (rules.js).
-// Start-Process hands claude a Windows command line: only double quotes group words there; a single quote
-// is a plain character and \" a literal quote, so both are masked before tokenize reads the text.
-function startedWords(values) {
-  const text = values.join(' ').replace(/,/g, ' ').replace(/\\"/g, '\u0001').replace(/'/g, '\u0000')
-  return tokenize(text).flat().map(t => t.value.replace(/\u0000/g, "'").replace(/\u0001/g, '"'))
+// ---------------------------------------------------------------- indirect launches (Start-Process, start)
+// What a starter hands claude is a Windows command line, and re-reading its quoting kept letting launches
+// through. So the argument list is never read: only which program the starter runs, from the starter's
+// own parameters, and claude there is held once as a cloud launch whatever its arguments say.
+// Keep this block identical to model-guard's (rules.js).
+
+// Start-Process's switches and the parameters that take a value. PowerShell accepts any prefix of a name
+// (`-NoNew`, `-File`) and `-Name:value` as one word; an unknown name is taken to have a value.
+const START_SWITCHES = ['wait', 'nonewwindow', 'nnw', 'passthru', 'loaduserprofile', 'lup', 'usenewenvironment', 'verbose', 'debug', 'whatif', 'confirm']
+const START_VALUED = ['argumentlist', 'args', 'workingdirectory', 'windowstyle', 'verb', 'credential', 'environment', 'redirectstandardinput', 'redirectstandardoutput', 'redirectstandarderror', 'rsi', 'rso', 'rse']
+const START_FILE = ['filepath', 'path', 'pspath']
+// cmd's start switches that take the next word (`/D C:\dir`); the others (`/MIN`, `/WAIT`, `/B`) take none.
+const CMD_VALUED = ['d', 'node', 'affinity']
+
+function startSwitch(name) {
+  return START_SWITCHES.some(s => s.startsWith(name)) && ![...START_VALUED, ...START_FILE].some(v => v.startsWith(name))
+}
+
+// The words after a starter, as units: a word, or a `( ... )` group with what touches it (`@('a','b')`,
+// `(Get-Command claude).Source`). The statement runs on past breaks made only of parentheses (and of
+// newlines inside them, or after a ` or \ line continuation) and ends at any other separator.
+function starterUnits(command, segments, k, ci) {
+  const units = []
+  let prev = segments[k][ci]
+  let depth = 0
+  let carry = false
+  for (let s = k; s < segments.length; s++) {
+    for (let j = s === k ? ci + 1 : 0; j < segments[s].length; j++) {
+      const tok = segments[s][j]
+      let apart = !units.length
+      for (const ch of command.slice(prev.end, tok.start)) {
+        if (ch === '(') depth++
+        else if (ch === ')') depth = Math.max(0, depth - 1)
+        else if (ch === ' ' || ch === '\t' || ((ch === '\n' || ch === '\r') && (depth > 0 || carry))) apart = apart || depth === 0
+        else return units
+      }
+      prev = tok
+      carry = /^[`\\]$/.test(command.slice(tok.start, tok.end))
+      if (carry) continue
+      if (apart) units.push([tok])
+      else units[units.length - 1].push(tok)
+    }
+  }
+  return units
+}
+
+// Whether a starter (Start-Process, start, saps, cmd's start) runs claude: the -FilePath value when one
+// is given, else the first positional word; cmd's start takes a double-quoted first word as the window
+// title (`start "" claude`). A path counts (`C:\x\claude.exe`), and so does a group naming claude
+// (`(Get-Command claude).Source`).
+function startsClaude(command, segments, k, ci) {
+  const units = starterUnits(command, segments, k, ci)
+  const names = u => u.some(t => isClaude(t.value))
+  // The last unit of a value: PowerShell's array commas (`'a', 'b'`) carry it on.
+  const valueEnd = j => {
+    while (j + 1 < units.length && (command[units[j][units[j].length - 1].end - 1] === ',' || command[units[j + 1][0].start] === ',')) j++
+    return j
+  }
+  let file = null // null: no -FilePath; else whether one names claude
+  const positional = []
+  for (let i = 0; i < units.length; i++) {
+    const word = units[i].length === 1 ? units[i][0].value : ''
+    const param = /^-([a-z][a-z0-9]*)(?::([\s\S]*))?$/i.exec(word)
+    if (param) {
+      const name = param[1].toLowerCase()
+      if (START_FILE.some(f => f.startsWith(name))) {
+        file = !!file || names(param[2] !== undefined ? [{ value: param[2] }] : units[i + 1] || [])
+        if (param[2] === undefined) i = valueEnd(i + 1)
+      } else if (param[2] === undefined && !startSwitch(name)) i = valueEnd(i + 1)
+      continue
+    }
+    const sw = /^\/\/?([a-z][^/]*)$/i.exec(word)
+    if (sw && !isClaude(word)) {
+      if (CMD_VALUED.includes(sw[1].toLowerCase())) i = valueEnd(i + 1)
+      continue
+    }
+    positional.push(units[i])
+  }
+  if (file !== null) return file
+  if (!positional.length) return false
+  if (names(positional[0])) return true
+  const title = baseName(segments[k][ci].value) === 'start' && command[positional[0][0].start] === '"'
+  return title && positional.length > 1 && names(positional[1])
 }
 
 // The first argument that is not a flag (`expect -f launch.exp`, `powershell -NoProfile -File x.ps1`).
@@ -945,8 +1018,10 @@ function firstOperand(args) {
   return null
 }
 
-// The gate one command segment asks for: 'cloud', 'merge' or null.
-function segmentGate(seg, ci) {
+// The gate segment k of a command asks for: 'cloud', 'merge' or null. claude run by Start-Process or
+// cmd's start is a cloud launch whatever its arguments: they are never read.
+function segmentGate(command, segments, k, ci) {
+  const seg = segments[k]
   const word = seg[ci].value
   const name = baseName(word)
   const args = seg.slice(ci + 1).map(t => t.value)
@@ -957,8 +1032,7 @@ function segmentGate(seg, ci) {
     if (op && isLaunchScript(op)) return 'cloud'
   }
   if (STARTERS.includes(name)) {
-    const at = args.findIndex(a => isClaude(a))
-    if (at >= 0 && cloudLaunch(startedWords(args.slice(at + 1)))) return 'cloud'
+    if (startsClaude(command, segments, k, ci)) return 'cloud'
     if (args.some(a => isLaunchScript(a) || /launch\.(exp|ps1)(['",]|$)/i.test(a))) return 'cloud'
   }
   if (/^gh(\.exe)?$/.test(name)) {
@@ -976,8 +1050,10 @@ export function shellGates(command, depth = 0) {
   if (typeof command !== 'string') throw new TypeError('command is not text')
   if (!/claude|launch\.(exp|ps1)|gh/i.test(command)) return []
   const keys = []
-  const add = k => { if (k && !keys.includes(k)) keys.push(k) }
-  for (const seg of tokenize(command)) {
+  const add = key => { if (key && !keys.includes(key)) keys.push(key) }
+  const segments = tokenize(command)
+  for (let k = 0; k < segments.length; k++) {
+    const seg = segments[k]
     const ci = commandIndex(seg)
     if (ci < 0) continue
     const scripts = depth < 3 ? nestedScripts(command, seg, ci) : null
@@ -985,12 +1061,12 @@ export function shellGates(command, depth = 0) {
       for (const script of scripts) {
         const found = shellGates(script.value, depth + 1)
         if (!found.length) continue
-        for (const k of found) add(k)
+        for (const key of found) add(key)
         break
       }
       continue
     }
-    add(segmentGate(seg, ci))
+    add(segmentGate(command, segments, k, ci))
   }
   return keys
 }

@@ -205,35 +205,9 @@ describe('nested shells', () => {
     expect(scanShell('bash -c claude --cloud x')).toEqual([])
   })
 
-  test('Start-Process and xargs launches are seen', () => {
-    expect(scanShell("Start-Process claude -ArgumentList '--cloud','task'")).toEqual([{ kind: 'cloud', hasModel: false, model: null, insertAt: null }])
-    expect(scanShell('Start-Process -FilePath claude.exe -ArgumentList "--model fable --cloud task"')).toEqual([expect.objectContaining({ hasModel: true, model: 'fable' })])
-    expect(scanShell('start claude --cloud x')).toEqual([expect.objectContaining({ kind: 'cloud', insertAt: null })])
-    expect(scanShell("Start-Process claude -ArgumentList '--version'")).toEqual([])
-    const b = budget(40)
-    expect(decideShell({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList '--cloud','task'" }, ctx(b)).action).toBe('deny')
-    expect(decideShell({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList '--model','opus','--cloud','task'" }, ctx(b)).action).toBe('allow')
-    const x: any = decideShell({ tool: 'Bash', command: 'echo t | xargs claude --cloud' }, ctx(b))
+  test('xargs launches are seen and rewritten in place', () => {
+    const x: any = decideShell({ tool: 'Bash', command: 'echo t | xargs claude --cloud' }, ctx(budget(40)))
     expect(x.input.command).toBe('echo t | xargs claude --model sonnet --cloud')
-  })
-
-  test('Start-Process: the words of a quoted prompt in -ArgumentList never read as flags', () => {
-    const b = budget(40)
-    const fix = "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'"
-    expect(scanShell(fix)).toEqual([{ kind: 'cloud', hasModel: false, model: null, insertAt: null }])
-    expect(decideShell({ tool: 'PowerShell', command: fix }, ctx(b)).reason).toContain('nested shell script (or Start-Process)')
-    expect(decideShell({ tool: 'PowerShell', command: fix }, ctx(budget(80))).reason).toContain('Budget red')
-    const fable = "Start-Process claude -ArgumentList '--model','fable','--cloud','\"explain -p\"'"
-    expect(scanShell(fable)).toEqual([{ kind: 'cloud', hasModel: true, model: 'fable', insertAt: null }])
-    const d: any = decideShell({ tool: 'PowerShell', command: fable }, ctx(b))
-    expect(d.action).toBe('deny')
-    expect(d.reason).toContain('Cloud sessions never run Fable')
-    // A prompt that only mentions --model names no model.
-    expect(scanShell("Start-Process claude -ArgumentList '--cloud','\"pin --model fable\"'")).toEqual([expect.objectContaining({ kind: 'cloud', hasModel: false })])
-    // A `(` or `;` in an element's text keeps the flags after it.
-    expect(scanShell("Start-Process claude -ArgumentList '(a);b','--cloud','task'")).toEqual([expect.objectContaining({ kind: 'cloud' })])
-    // An element without inner quotes is split by Start-Process: its -p reaches claude as a flag (a follow-up).
-    expect(scanShell("Start-Process claude -ArgumentList '--cloud','session_1 -p x'")).toEqual([])
   })
 })
 
@@ -306,7 +280,6 @@ describe('cloud follow-ups steer open work (D1)', () => {
     'claude -p "x" --cloud cse_0123',
     'claude --cloud session_01ABC -p "rebase on main"',
     'claude -p "x" --cloud=session_01ABC',
-    "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
     'bash -lc "claude -p \\"x\\" --cloud session_1"',
   ]
 
@@ -336,7 +309,6 @@ describe('local headless sessions are launches (D5)', () => {
     expect(scanShell('claude -p "refactor the parser" --max-turns 30')).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: 6 }])
     expect(scanShell('claude --bg "run the nightly sweep"')).toEqual([expect.objectContaining({ kind: 'local' })])
     expect(scanShell('claude --print --model opus "x"')).toEqual([expect.objectContaining({ kind: 'local', hasModel: true, model: 'opus' })])
-    expect(scanShell("Start-Process claude -ArgumentList '-p','do it'")).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: null }])
   })
 
   test('management commands and plain sessions are not launches', () => {
@@ -358,7 +330,6 @@ describe('local headless sessions are launches (D5)', () => {
     expect(decideShell({ tool: 'Bash', command: 'claude -p "x" --model fable' }, ctx(budget(40))).reason).toContain('Headless and background sessions (claude -p, --bg) never run Fable')
     expect(decideShell({ tool: 'Bash', command: 'claude --bg --model haiku' }, ctx(budget(40))).reason).toContain('the haiku alias')
     expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(60, planFromOption('Pro')))).action).toBe('rewrite')
-    expect(decideShell({ tool: 'Bash', command: "Start-Process claude -ArgumentList '-p','x'" }, ctx(budget(40))).reason).toContain('nested shell script (or Start-Process)')
   })
 })
 
@@ -373,7 +344,6 @@ describe('a local session resume finishes open work', () => {
     expect(claudeLaunch(['-r', 'abc', '-p', 'x'])).toBe('resume')
     expect(claudeLaunch(['--resume=abc', '--print', 'x'])).toBe('resume')
     expect(scanShell('claude --resume abc -p "x" --fork-session')).toEqual([expect.objectContaining({ kind: 'local', hasModel: false })])
-    expect(scanShell("Start-Process claude -ArgumentList '--resume','abc','-p','x'")).toEqual([{ kind: 'resume', hasModel: false, model: null, insertAt: null }])
     // An interactive resume (no -p, no --bg) is no delegated launch.
     expect(scanShell('claude --resume abc')).toEqual([])
     expect(scanShell('claude -c')).toEqual([])
@@ -394,11 +364,9 @@ describe('a local session resume finishes open work', () => {
     expect(decideShell({ tool: 'Bash', command: RESUMES[0] }, ctx(budget(80), { lang: 'it' })).log).toContain('ripresa della sessione consentita')
   })
 
-  test('no cloud-column check: Solo (Pro yellow) allows it; Start-Process without --model too', () => {
+  test('no cloud-column check: Solo (Pro yellow) allows it', () => {
     const solo = budget(60, planFromOption('Pro'))
     for (const command of RESUMES) expect(decideShell({ tool: 'Bash', command }, ctx(solo)).action).toBe('allow')
-    const started: any = decideShell({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList '--resume','abc','-p','x'" }, ctx(budget(40)))
-    expect(started.action).toBe('allow')
   })
 
   test('an explicit Fable or bare haiku is still denied, red included', () => {
@@ -527,17 +495,108 @@ describe('workflow runs admitted under redPolicy warn', () => {
   })
 })
 
-describe('Start-Process hands claude a Windows command line', () => {
-  test('a single quote or an escaped quote inside a value never swallows the flags after it', () => {
-    for (const c of [
-      `Start-Process claude -ArgumentList "Fix the user's login","--cloud","--model","fable"`,
-      `Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--model','fable','--cloud','task'`,
-      `Start-Process claude -ArgumentList '\\"fix the bug\\" --model fable --cloud'`,
-      `Start-Process claude -ArgumentList '--model','fable','\\"fix the bug\\"','--cloud'`,
-    ]) expect(scanShell(c), c).toEqual([{ kind: 'cloud', hasModel: true, model: 'fable', insertAt: null }])
+describe('indirect launches: claude run by Start-Process or cmd start is refused, its arguments never read', () => {
+  // The reviewer's inputs: an apostrophe, an escaped quote with backticks, a backslash before a quote, an array.
+  const REVIEWER = [
+    `Start-Process claude -ArgumentList "Fix the user's login","--cloud","--model","fable"`,
+    "Start-Process claude -ArgumentList '\\\"fix `parseArgs`\\\"','--cloud','--model','fable'",
+    `Start-Process claude -ArgumentList '--add-dir "C:\\My Proj\\\\"','--cloud','--model','fable'`,
+    "Start-Process claude -ArgumentList @('--cloud','x')",
+  ]
+  const INDIRECT = [
+    ...REVIEWER,
+    // What the arguments hold does not matter: cloud with or without a model, a follow-up, a resume, -p, --version.
+    "Start-Process claude -ArgumentList '--cloud','task'",
+    "Start-Process claude -ArgumentList '--model','opus','--cloud','task'",
+    "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'",
+    "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
+    `Start-Process claude -ArgumentList "-p","what's","--cloud","cse_1"`,
+    "Start-Process claude -ArgumentList '--resume','abc','-p','x'",
+    "Start-Process claude -ArgumentList '-p','do it'",
+    "Start-Process claude -ArgumentList '--version'",
+    `Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--cloud','task'`,
+    // The program named by -FilePath (any prefix, the colon form) or as the first positional word.
+    'Start-Process -FilePath claude.exe -ArgumentList "--model fable --cloud task"',
+    "Start-Process -NoNewWindow -Wait -File 'C:\\Tools\\claude.exe' -ArgumentList '--cloud'",
+    'Start-Process -FilePath:"C:\\Tools\\claude.cmd"',
+    "Start-Process -ArgumentList @('--cloud','x') -FilePath claude",
+    "Start-Process -ArgumentList '--cloud', 'x' -WindowStyle Hidden claude",
+    "Start-Process (Get-Command claude).Source -ArgumentList '--cloud'",
+    "Start-Process `\n  -FilePath claude `\n  -ArgumentList '--cloud','x'",
+    "saps claude -ArgumentList '--cloud','x'",
+    // cmd's start, its window title and switches, nested in cmd /c or pwsh -Command, among other commands.
+    'start claude --cloud x',
+    'start "" claude --cloud x',
+    'start "worker" /D C:\\repo /MIN claude.exe --cloud x',
+    'cmd /c start "" claude --cloud x',
+    "pwsh -Command \"Start-Process claude -ArgumentList '--cloud','x'\"",
+    "cd repo; Start-Process claude -ArgumentList '--cloud','x'; echo started",
+  ]
+  const MENTIONS = [
+    "git commit -F - <<'EOF'\nStart-Process claude -ArgumentList '--cloud','x'\nEOF",
+    "git commit -m \"$(cat <<'EOF'\nfix: refuse Start-Process claude\n\nStart-Process claude -ArgumentList '--cloud'\nEOF\n)\"",
+    "@'\nStart-Process claude -ArgumentList '--cloud','x'\n'@ | Set-Content notes.md",
+    'git commit -m "docs: never Start-Process claude --cloud"',
+    "gh pr create --title t --body 'run Start-Process claude -ArgumentList --cloud'",
+    "Write-Output 'Start-Process claude --cloud x'",
+    'echo Start-Process claude',
+  ]
+  const OTHER_PROGRAMS = [
+    'Start-Process notepad',
+    'Start-Process notepad claude',
+    'Start-Process -FilePath notepad claude.exe',
+    'Start-Process code D:\\Progetti\\claude',
+    'Start-Process -WorkingDirectory D:\\claude notepad',
+    'start "" notepad claude',
+  ]
+  const COLORS: [string, any, any?][] = [
+    ['green', budget(40)], ['red', budget(80)], ['red with redPolicy warn', budget(80), { redPolicy: 'warn' }],
+    ['paused', budget(40, null, 95)], ['unknown', budget(null)], ['Solo', budget(60, planFromOption('Pro'))],
+  ]
+
+  test('scanShell sees each one as an indirect launch', () => {
+    for (const c of INDIRECT) expect(scanShell(c), c).toEqual([{ kind: 'indirect' }])
   })
-  test('an apostrophe in the working directory still shows the launch, and a follow-up stays steering', () => {
-    expect(scanShell(`Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--cloud','task'`)[0].kind).toBe('cloud')
-    expect(scanShell(`Start-Process claude -ArgumentList "-p","what's","--cloud","cse_1"`)).toEqual([])
+
+  test('decideShell denies each one in every color with the run-it-directly reason', () => {
+    for (const [color, b, extra] of COLORS) {
+      for (const command of INDIRECT) {
+        const d: any = decideShell({ tool: 'PowerShell', command }, ctx(b, extra))
+        expect(d.action, color + ': ' + command).toBe('deny')
+        expect(d.reason).toContain('model-guard does not read claude launches started through Start-Process (start, saps) or cmd\'s start')
+        expect(d.reason).toContain('Run the same launch directly as a claude command, for example claude --cloud "<task>" or claude -p "<msg>" --cloud <session>.')
+        expect(d.input).toBeUndefined()
+        expect(d).toMatchObject({ log: 'model-guard: claude launch through Start-Process or start blocked, run it directly', to: 'transcript' })
+      }
+    }
+    expect(decideShell({ tool: 'PowerShell', command: REVIEWER[0] }, ctx(budget(40), { lang: 'it' })).log).toContain('va lanciato direttamente')
+  })
+
+  test('the reviewer\'s inputs are all denied', () => {
+    for (const command of REVIEWER) {
+      for (const b of [budget(40), budget(80), budget(40, null, 95)]) expect(decideShell({ tool: 'PowerShell', command }, ctx(b)).reason).toContain('Run the same launch directly')
+    }
+  })
+
+  test('next to a direct launch the whole command is denied, never rewritten', () => {
+    const d: any = decideShell({ tool: 'PowerShell', command: "claude --cloud a; Start-Process claude -ArgumentList '--cloud','b'" }, ctx(budget(40)))
+    expect(d.action).toBe('deny')
+    expect(d.reason).toContain('Run the same launch directly')
+  })
+
+  test('mentions in heredocs, here-strings and quoted text pass in every color', () => {
+    for (const [, b, extra] of COLORS) {
+      for (const command of MENTIONS) {
+        expect(scanShell(command), command).toEqual([])
+        expect(decideShell({ tool: 'PowerShell', command }, ctx(b, extra)).action).toBe('allow')
+      }
+    }
+  })
+
+  test('Start-Process of other programs passes, even when claude is one of their arguments', () => {
+    for (const command of OTHER_PROGRAMS) {
+      expect(scanShell(command), command).toEqual([])
+      expect(decideShell({ tool: 'PowerShell', command }, ctx(budget(80))).action).toBe('allow')
+    }
   })
 })

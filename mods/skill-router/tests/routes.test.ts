@@ -332,17 +332,6 @@ describe('shell commands', () => {
     ]) expect(shellGates(c), c).toEqual(['cloud'])
   })
 
-  test('Start-Process: the words of a quoted prompt in -ArgumentList never read as flags', () => {
-    for (const c of [
-      "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'",
-      "Start-Process claude -ArgumentList '--model','fable','--cloud','\"explain -p\"'",
-      // A `(` or `;` in an element's text keeps the flags after it.
-      "Start-Process claude -ArgumentList '(a);b','--cloud','task'",
-    ]) expect(shellGates(c), c).toEqual(['cloud'])
-    // An element without inner quotes is split by Start-Process: its -p reaches claude as a flag (a follow-up).
-    expect(shellGates("Start-Process claude -ArgumentList '--cloud','session_1 -p x'")).toEqual([])
-  })
-
   test('PR merges', () => {
     expect(shellGates('gh pr merge 12 --squash --match-head-commit abc')).toEqual(['merge'])
     expect(shellGates('gh.exe pr merge 12 --auto')).toEqual(['merge'])
@@ -358,7 +347,6 @@ describe('shell commands', () => {
       'claude --print "x" --cloud https://claude.ai/code/session_01abc',
       'claude -p "x" --cloud cse_0123',
       'claude --cloud session_01abc -p "rebase on main"',
-      "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
       'bash -lc "claude -p \\"x\\" --cloud session_1"',
     ]) expect(shellGates(c), c).toEqual([])
   })
@@ -429,15 +417,46 @@ describe('mod files', () => {
   })
 })
 
-describe('Start-Process hands claude a Windows command line', () => {
-  test('a single quote or an escaped quote inside a value never swallows the flags after it', () => {
+describe('indirect launches: claude run by Start-Process or cmd start is a cloud launch, its arguments never read', () => {
+  test('every one asks for the cloud gate, the reviewer\'s inputs, follow-ups and --version included', () => {
     for (const c of [
       `Start-Process claude -ArgumentList "Fix the user's login","--cloud","--model","fable"`,
-      `Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--model','fable','--cloud','task'`,
-      `Start-Process claude -ArgumentList '\\"fix the bug\\" --model fable --cloud'`,
-      `Start-Process claude -ArgumentList '--model','fable','\\"fix the bug\\"','--cloud'`,
+      "Start-Process claude -ArgumentList '\\\"fix `parseArgs`\\\"','--cloud','--model','fable'",
+      `Start-Process claude -ArgumentList '--add-dir "C:\\My Proj\\\\"','--cloud','--model','fable'`,
+      "Start-Process claude -ArgumentList @('--cloud','x')",
+      "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'",
+      "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
+      `Start-Process claude -ArgumentList "-p","what's","--cloud","cse_1"`,
+      "Start-Process claude -ArgumentList '--version'",
       `Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--cloud','task'`,
+      'Start-Process -FilePath claude.exe -ArgumentList "--model fable --cloud task"',
+      "Start-Process -NoNewWindow -Wait -File 'C:\\Tools\\claude.exe' -ArgumentList '--cloud'",
+      'Start-Process -FilePath:"C:\\Tools\\claude.cmd"',
+      "Start-Process -ArgumentList @('--cloud','x') -FilePath claude",
+      "Start-Process -ArgumentList '--cloud', 'x' -WindowStyle Hidden claude",
+      "Start-Process (Get-Command claude).Source -ArgumentList '--cloud'",
+      "Start-Process `\n  -FilePath claude `\n  -ArgumentList '--cloud','x'",
+      "saps claude -ArgumentList '--cloud','x'",
+      'start claude --cloud x',
+      'start "" claude --cloud x',
+      'start "worker" /D C:\\repo /MIN claude.exe --cloud x',
+      'cmd /c start "" claude --cloud x',
+      "pwsh -Command \"Start-Process claude -ArgumentList '--cloud','x'\"",
     ]) expect(shellGates(c), c).toEqual(['cloud'])
-    expect(shellGates(`Start-Process claude -ArgumentList "-p","what's","--cloud","cse_1"`)).toEqual([])
+  })
+
+  test('mentions in heredocs or quoted text and Start-Process of other programs ask for nothing', () => {
+    for (const c of [
+      "git commit -F - <<'EOF'\nStart-Process claude -ArgumentList '--cloud','x'\nEOF",
+      "git commit -m \"$(cat <<'EOF'\nfix: refuse Start-Process claude\n\nStart-Process claude -ArgumentList '--cloud'\nEOF\n)\"",
+      "@'\nStart-Process claude -ArgumentList '--cloud','x'\n'@ | Set-Content notes.md",
+      'git commit -m "docs: never Start-Process claude --cloud"',
+      "Write-Output 'Start-Process claude --cloud x'",
+      'Start-Process notepad',
+      'Start-Process notepad claude',
+      'Start-Process -FilePath notepad claude.exe',
+      'Start-Process code D:\\Progetti\\claude',
+      'start "" notepad claude',
+    ]) expect(shellGates(c), c).toEqual([])
   })
 })
