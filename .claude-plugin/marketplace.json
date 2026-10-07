@@ -10,7 +10,7 @@
     {
       "name": "model-guard",
       "source": "./mods/model-guard",
-      "description": "Enforces model-mix on delegated launches: Sonnet for general-purpose, Explore and Plan agents launched without a model, no haiku alias, Fable kept off delegated work, workflow width capped by today's profile, --model on cloud and headless launches, no new launches on a red budget or a paused 5-hour window; finishing open work always passes, and claude launches through Start-Process or cmd start are refused (run claude directly)."
+      "description": "Enforces model-mix on delegated launches: Sonnet for general-purpose and Plan agents launched without a model, Haiku 5.5 at medium effort for Explore agents and the haiku alias where it is Haiku 5.5 (Claude Code 2.1.293+ on the Anthropic API), Haiku 4.5 and Fable kept off delegated work, workflow width capped by today's profile, --model on cloud and headless launches, no new launches on a red budget or a paused 5-hour window; finishing open work always passes, and claude launches through Start-Process or cmd start are refused (run claude directly)."
     },
     {
       "name": "skill-router",

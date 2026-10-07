@@ -3,12 +3,13 @@
 // The only module that touches `$`. Decisions live in rules.js, the budget maths in budget.js.
 // It never calls a model and never reads credentials: the plan comes from the person's
 // CLAUDE.md (prompt.context) or the planLine option, the usage from session.measure and
-// $.session.usage().
+// $.session.usage(). Whether the haiku alias is Haiku 5.5 comes from $.session.version() and the
+// provider variables ($.env.get), read only for Agent calls and workflow agents.
 
 import { computeBudget } from './budget.js'
 import {
   decideAgent, decideRemoteTrigger, decideShell, decideWorkflow, decideWorkflowAgent,
-  failureReason, fiveHourBanked, planFromFiles, planFromOption, scanShell, statusText, texts,
+  failureReason, fiveHourBanked, haikuAlias, planFromFiles, planFromOption, scanShell, statusText, texts,
 } from './rules.js'
 
 const config = { lang: 'it', redPolicy: 'deny', planLine: '' }
@@ -19,6 +20,7 @@ const memo = {
   unknownLogged: false,
   fableLogged: false,    // the Agent fable -> opus line already reached the transcript
   status: null,          // last status text sent; null = never sent
+  version: null,         // $.session.version() answer, kept once read (the engine does not change under a module)
 }
 const runs = new Map()   // runId -> { admitted: Set of agentIndex, width, name } (width fixed at the run's first agent)
 const loggedRuns = new Set() // runId + ':' + line already in the transcript (later repeats go to debug)
@@ -49,6 +51,32 @@ async function readBudget($) {
   const plan = memo.plan || planFromOption(config.planLine)
   const budget = computeBudget({ rateLimits: Array.isArray(rateLimits) ? rateLimits : [], now, plan, inFlight: 0, readingAt })
   return { budget, fiveHourBanked: fiveHourBanked(plan, now) }
+}
+
+// Whether the haiku alias is Haiku 5.5 here (rules.haikuAlias): the engine's version, the variables that
+// move Claude Code off the Anthropic API, and the one that remaps the alias. A read that fails counts as unknown: haiku is then not kept.
+async function readHaiku($) {
+  if (!memo.version) {
+    try {
+      const v = await $.session.version()
+      if (v && typeof v === 'object') memo.version = v
+    } catch {}
+  }
+  let env = null
+  try {
+    env = {
+      CLAUDE_CODE_USE_BEDROCK: await $.env.get('CLAUDE_CODE_USE_BEDROCK'),
+      CLAUDE_CODE_USE_VERTEX: await $.env.get('CLAUDE_CODE_USE_VERTEX'),
+      CLAUDE_CODE_USE_FOUNDRY: await $.env.get('CLAUDE_CODE_USE_FOUNDRY'),
+      CLAUDE_CODE_USE_ANTHROPIC_AWS: await $.env.get('CLAUDE_CODE_USE_ANTHROPIC_AWS'),
+      CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: await $.env.get('CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD'),
+      CLAUDE_CODE_USE_MANTLE: await $.env.get('CLAUDE_CODE_USE_MANTLE'),
+      CLAUDE_CODE_USE_GATEWAY: await $.env.get('CLAUDE_CODE_USE_GATEWAY'),
+      ANTHROPIC_BASE_URL: await $.env.get('ANTHROPIC_BASE_URL'),
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: await $.env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL'),
+    }
+  } catch {}
+  return haikuAlias(memo.version, env)
 }
 
 function syncStatus($, budget) {
@@ -138,6 +166,7 @@ export function register(on, options) {
   // Guards: each refuses with a deny when it fails (re-entry passes on).
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const ctx = await contextOf($)
+    ctx.haiku = await readHaiku($)
     return applyToolDecision($, e, next, decideAgent(e, ctx))
   }).catch(guardFailed)
 
@@ -163,6 +192,7 @@ export function register(on, options) {
   on('agent.spawn', async ($, e, next) => {
     if (!e.workflow) return next(e)
     const ctx = await contextOf($)
+    ctx.haiku = await readHaiku($)
     const runId = e.workflow && typeof e.workflow.runId === 'string' ? e.workflow.runId : ''
     // Decide and count with no await in between, so parallel spawns of one run cannot both pass the cap.
     const decision = decideWorkflowAgent(e, ctx, runs.get(runId))

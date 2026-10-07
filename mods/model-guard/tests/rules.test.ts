@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
   claudeLaunch, decideAgent, decideRemoteTrigger, decideShell, decideWorkflow, decideWorkflowAgent, fiveHourBanked,
-  forbiddenModel, launchGate, planFromFiles, planFromOption, scanShell, statusText, tokenize,
+  forbiddenModel, haikuAlias, haikuKind, launchGate, parseVersion, planFromFiles, planFromOption, scanShell, statusText, tokenize,
 } from '../hooks/rules.js'
-import { computeBudget } from '../hooks/budget.js'
+import { computeBudget, estimatePoints, modelFamily } from '../hooks/budget.js'
 
 const NOW = Date.parse('2026-10-07T12:00:00Z')
 const DAY = 24 * 60 * 60 * 1000
@@ -57,11 +57,13 @@ describe('rules', () => {
     expect(d.input.command).toBe('claude --model sonnet --cloud a && claude --model sonnet --cloud b')
   })
 
-  test('forbiddenModel: any Fable, only the bare haiku alias', () => {
+  test('forbiddenModel: any Fable, the bare haiku alias and any Haiku 4.5 id; a Haiku 5.5 id passes', () => {
     expect(forbiddenModel('fable')).toBe('fable')
     expect(forbiddenModel('claude-fable-5-1')).toBe('fable')
     expect(forbiddenModel('HAIKU')).toBe('haiku')
     expect(forbiddenModel('claude-haiku-5-5')).toBeNull()
+    expect(forbiddenModel('claude-haiku-4-5-20251001')).toBe('haiku-4-5')
+    expect(forbiddenModel('claude-haiku-4-5')).toBe('haiku-4-5')
     expect(forbiddenModel('sonnet')).toBeNull()
   })
 
@@ -328,7 +330,7 @@ describe('local headless sessions are launches (D5)', () => {
     expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(80))).reason).toContain('Budget red')
     expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(40, null, 95))).reason).toContain('Wait until')
     expect(decideShell({ tool: 'Bash', command: 'claude -p "x" --model fable' }, ctx(budget(40))).reason).toContain('Headless and background sessions (claude -p, --bg) never run Fable')
-    expect(decideShell({ tool: 'Bash', command: 'claude --bg --model haiku' }, ctx(budget(40))).reason).toContain('the haiku alias')
+    expect(decideShell({ tool: 'Bash', command: 'claude --bg --model haiku' }, ctx(budget(40))).reason).toContain('the bare haiku alias')
     expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(60, planFromOption('Pro')))).action).toBe('rewrite')
   })
 })
@@ -373,7 +375,7 @@ describe('a local session resume finishes open work', () => {
     for (const b of [budget(40), budget(80)]) {
       const fable: any = decideShell({ tool: 'Bash', command: 'claude --resume abc -p x --model fable' }, ctx(b))
       expect(fable).toMatchObject({ action: 'deny', reason: expect.stringContaining('never run Fable') })
-      expect(decideShell({ tool: 'Bash', command: 'claude -c --bg --model haiku' }, ctx(b)).reason).toContain('the haiku alias')
+      expect(decideShell({ tool: 'Bash', command: 'claude -c --bg --model haiku' }, ctx(b)).reason).toContain('the bare haiku alias')
     }
     expect(decideShell({ tool: 'Bash', command: 'claude --resume abc -p x --model opus' }, ctx(budget(80))).action).toBe('allow')
   })
@@ -461,6 +463,147 @@ describe('Agent: Fable, remote isolation (D3, D6)', () => {
     expect(decideAgent({ ...remote, isolation: 'worktree' }, ctx(budget(60, planFromOption('Pro')))).action).toBe('allow')
     expect(decideAgent(remote, ctx(budget(60, planFromOption('Max 20x')))).action).toBe('allow')
     expect(decideAgent(remote, ctx(budget(80))).reason).toContain('Budget red')
+  })
+})
+
+describe('Haiku 5.5 (model-mix)', () => {
+  const OK = { ok: true }
+  const OLD = { ok: false, why: 'old' }
+  const AGENT = { tool: 'Agent', description: 'd', prompt: 'p' }
+
+  test('parseVersion reads the release base, else the full version', () => {
+    expect(parseVersion({ version: '2.1.293-dev.20261007.t101500.sha1a2b3c4', base: '2.1.293-dev' })).toEqual([2, 1, 293])
+    expect(parseVersion({ version: '2.1.293' })).toEqual([2, 1, 293])
+    expect(parseVersion({ version: 'nightly' })).toBeNull()
+    expect(parseVersion(null)).toBeNull()
+  })
+
+  test('haikuAlias: 2.1.293 or later on the Anthropic API; older, unknown or another provider is not', () => {
+    for (const version of ['2.1.293', '2.1.300', '2.2.0', '3.0.0']) expect(haikuAlias({ version }, {})).toEqual(OK)
+    expect(haikuAlias({ version: '2.1.293-dev.x', base: '2.1.293-dev' }, {})).toEqual(OK)
+    for (const version of ['2.1.292', '2.0.999', '1.9.400']) expect(haikuAlias({ version }, {})).toEqual(OLD)
+    expect(haikuAlias(null, {})).toEqual({ ok: false, why: 'unknown' })
+    expect(haikuAlias({ version: '2.1.293' }, null)).toEqual({ ok: false, why: 'env' })
+    expect(haikuAlias({ version: '2.1.293' }, { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001' })).toEqual({ ok: false, why: 'remapped' })
+    expect(haikuAlias({ version: '2.1.293' }, { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'sonnet' })).toEqual({ ok: false, why: 'remapped' })
+    expect(haikuAlias({ version: '2.1.293' }, { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-5-5' })).toEqual(OK)
+    expect(haikuAlias({ version: '2.1.293' }, { ANTHROPIC_DEFAULT_HAIKU_MODEL: ' ' })).toEqual(OK)
+    expect(haikuAlias({ version: '2.1.292' }, { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-5-5' })).toEqual(OLD)
+    for (const name of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_ANTHROPIC_AWS', 'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD', 'CLAUDE_CODE_USE_MANTLE', 'CLAUDE_CODE_USE_GATEWAY']) {
+      expect(haikuAlias({ version: '2.1.293' }, { [name]: '1' })).toEqual({ ok: false, why: 'provider' })
+      expect(haikuAlias({ version: '2.1.293' }, { [name]: '0' })).toEqual(OK)
+      expect(haikuAlias({ version: '2.1.293' }, { [name]: 'false' })).toEqual(OK)
+    }
+    expect(haikuAlias({ version: '2.1.293' }, { ANTHROPIC_BASE_URL: 'https://api.anthropic.com/' })).toEqual(OK)
+    expect(haikuAlias({ version: '2.1.293' }, { ANTHROPIC_BASE_URL: 'https://proxy.example.com' })).toEqual({ ok: false, why: 'provider' })
+    expect(haikuAlias({ version: '2.1.293' }, { ANTHROPIC_BASE_URL: '' })).toEqual(OK)
+  })
+
+  test('haikuKind tells the alias, Haiku 5.5 ids and older Haiku ids apart, any case', () => {
+    expect(haikuKind(' Haiku ')).toBe('alias')
+    expect(haikuKind('claude-haiku-5-5')).toBe('current')
+    expect(haikuKind('CLAUDE-HAIKU-5-5-20261007')).toBe('current')
+    expect(haikuKind('us.anthropic.claude-haiku-5-5')).toBe('current')
+    expect(haikuKind('claude-haiku-4-5-20251001')).toBe('old')
+    expect(haikuKind('claude-3-5-haiku-20241022')).toBe('old')
+    expect(haikuKind('sonnet')).toBeNull()
+    expect(haikuKind(undefined)).toBeNull()
+  })
+
+  test('decideAgent: haiku kept where it is Haiku 5.5, else sonnet with the reason', () => {
+    const kept: any = decideAgent({ ...AGENT, model: 'haiku' }, ctx(budget(40), { haiku: OK }))
+    expect(kept).toMatchObject({ action: 'rewrite', input: { model: 'haiku', effort: 'medium' }, to: 'debug' })
+    expect(decideAgent({ ...AGENT, model: 'haiku', effort: 'high' }, ctx(budget(40), { haiku: OK })).action).toBe('allow')
+    const env: any = decideAgent({ ...AGENT, model: 'haiku' }, ctx(budget(40), { haiku: { ok: false, why: 'env' } }))
+    expect(env.reason).toContain('could not read the environment')
+    const remapped: any = decideAgent({ ...AGENT, model: 'haiku' }, ctx(budget(40), { haiku: { ok: false, why: 'remapped' } }))
+    expect(remapped.reason).toContain('ANTHROPIC_DEFAULT_HAIKU_MODEL')
+    const old: any = decideAgent({ ...AGENT, model: 'haiku' }, ctx(budget(40), { haiku: OLD }))
+    expect(old).toMatchObject({ action: 'rewrite', input: { model: 'sonnet' } })
+    expect(old.reason).toContain('older than 2.1.293')
+    expect(old.log).toBe('model-guard: haiku -> sonnet (before Claude Code 2.1.293 haiku is Haiku 4.5)')
+    const none: any = decideAgent({ ...AGENT, model: 'haiku' }, ctx(budget(40)))
+    expect(none.input.model).toBe('sonnet')
+    expect(none.reason).toContain('could not read the Claude Code version')
+    const provider: any = decideAgent({ ...AGENT, model: 'haiku' }, ctx(budget(40), { haiku: { ok: false, why: 'provider' } }))
+    expect(provider.reason).toContain('Bedrock')
+    const remote: any = decideAgent({ ...AGENT, model: 'haiku', isolation: 'remote' }, ctx(budget(40), { haiku: OK }))
+    expect(remote.input.model).toBe('sonnet')
+    expect(remote.reason).toContain('its own Claude Code version')
+  })
+
+  test('decideAgent: Explore without a model gets haiku at effort medium, a given effort stays', () => {
+    const d: any = decideAgent({ ...AGENT, subagent_type: 'Explore' }, ctx(budget(40), { haiku: OK }))
+    expect(d).toMatchObject({ action: 'rewrite', input: { model: 'haiku', effort: 'medium' } })
+    const low: any = decideAgent({ ...AGENT, subagent_type: 'Explore', effort: 'low' }, ctx(budget(40), { haiku: OK }))
+    expect(low.input).toMatchObject({ model: 'haiku', effort: 'low' })
+    const old: any = decideAgent({ ...AGENT, subagent_type: 'Explore' }, ctx(budget(40), { haiku: OLD }))
+    expect(old.input.model).toBe('sonnet')
+    expect(old.input.effort).toBeUndefined()
+    expect(old.reason).toContain('Not haiku')
+    for (const type of [undefined, 'general-purpose', 'Plan']) {
+      const input: any = type ? { ...AGENT, subagent_type: type } : { ...AGENT }
+      expect((decideAgent(input, ctx(budget(40), { haiku: OK })) as any).input.model).toBe('sonnet')
+    }
+  })
+
+  test('decideAgent: a Haiku 4.5 id becomes sonnet, a Haiku 5.5 id is kept, also where the alias is not 5.5', () => {
+    const old: any = decideAgent({ ...AGENT, model: 'claude-haiku-4-5-20251001' }, ctx(budget(40), { haiku: OK }))
+    expect(old).toMatchObject({ action: 'rewrite', input: { model: 'sonnet' } })
+    expect(old.reason).toContain('never pins Haiku 4.5')
+    expect(decideAgent({ ...AGENT, model: 'claude-haiku-5-5' }, ctx(budget(40), { haiku: OLD }))).toMatchObject({ action: 'rewrite', input: { model: 'claude-haiku-5-5', effort: 'medium' } })
+    expect(decideAgent({ ...AGENT, model: 'claude-haiku-5-5', effort: 'low' }, ctx(budget(40), { haiku: OLD })).action).toBe('allow')
+  })
+
+  test('decideAgent: full Fable ids, any case, become opus', () => {
+    for (const model of ['claude-fable-5-1', 'claude-fable-5', 'CLAUDE-FABLE-5-1', 'Fable']) {
+      const d: any = decideAgent({ ...AGENT, model }, ctx(budget(40)))
+      expect(d, model).toMatchObject({ action: 'rewrite', input: { model: 'opus' } })
+    }
+    const later: any = decideAgent({ ...AGENT, model: 'claude-fable-5-1' }, ctx(budget(40), { fableLogged: true }))
+    expect(later.to).toBe('debug')
+  })
+
+  test('decideWorkflowAgent: haiku where it is 5.5, denied otherwise; Haiku 4.5 ids denied', () => {
+    const wf = (model: string, i = 1) => ({ model, workflow: { runId: 'wf', agentIndex: i } })
+    expect(decideWorkflowAgent(wf('haiku'), ctx(budget(40), { haiku: OK }), undefined)).toMatchObject({ action: 'allow', admit: true })
+    const old: any = decideWorkflowAgent(wf('haiku'), ctx(budget(40), { haiku: OLD }), undefined)
+    expect(old.action).toBe('deny')
+    expect(old.reason).toContain('older than 2.1.293')
+    expect(old.log).toBe('model-guard: workflow agent on haiku blocked (before Claude Code 2.1.293 haiku is Haiku 4.5), pin sonnet')
+    const h45: any = decideWorkflowAgent(wf('claude-haiku-4-5'), ctx(budget(40), { haiku: OK }), undefined)
+    expect(h45.reason).toContain("{ model: 'haiku', effort: 'medium' }")
+    const h45old: any = decideWorkflowAgent(wf('claude-haiku-4-5'), ctx(budget(40), { haiku: OLD }), undefined)
+    expect(h45old.reason).not.toContain("model: 'haiku'")
+    expect(decideWorkflowAgent(wf('claude-haiku-5-5'), ctx(budget(40), { haiku: OLD }), undefined).action).toBe('allow')
+    const inh = (parentModel: string) => ({ parentModel, workflow: { runId: 'wf', agentIndex: 9 } })
+    const inhOld: any = decideWorkflowAgent(inh('haiku'), ctx(budget(40), { haiku: OLD }), undefined)
+    expect(inhOld.action).toBe('deny')
+    expect(inhOld.reason).toContain("inherit the session's haiku alias")
+    const inh45: any = decideWorkflowAgent(inh('claude-haiku-4-5-20251001'), ctx(budget(40), { haiku: OK }), undefined)
+    expect(inh45.action).toBe('deny')
+    expect(inh45.reason).toContain('inherited from the session')
+    expect(decideWorkflowAgent(inh('haiku'), ctx(budget(40), { haiku: OK }), undefined).action).toBe('allow')
+    expect(decideWorkflowAgent({ model: 'sonnet', parentModel: 'haiku', workflow: { runId: 'wf', agentIndex: 8 } }, ctx(budget(40), { haiku: OLD }), undefined).action).toBe('allow')
+  })
+
+  test('decideShell: the bare alias tells to pin claude-haiku-5-5; Haiku 4.5 ids are refused', () => {
+    const cloud: any = decideShell({ tool: 'Bash', command: 'claude --model haiku --cloud x' }, ctx(budget(40), { haiku: OK }))
+    expect(cloud.action).toBe('deny')
+    expect(cloud.reason).toContain('Pin the full id --model claude-haiku-5-5')
+    const exp: any = decideShell({ tool: 'Bash', command: 'expect launch.exp t r l haiku medium' }, ctx(budget(40)))
+    expect(exp.reason).toContain('Pin the full id claude-haiku-5-5')
+    const h45: any = decideShell({ tool: 'Bash', command: 'claude --bg --model claude-haiku-4-5-20251001' }, ctx(budget(40)))
+    expect(h45.reason).toContain('never pins Haiku 4.5')
+    expect(h45.log).toBe('model-guard: headless session on Haiku 4.5 blocked')
+    expect(decideShell({ tool: 'Bash', command: 'claude --model claude-haiku-5-5 --cloud x' }, ctx(budget(40))).action).toBe('allow')
+  })
+
+  test('estimatePoints counts a haiku agent as 0.05 of a Sonnet one', () => {
+    expect(modelFamily('claude-haiku-5-5')).toBe('haiku')
+    expect(Math.round(estimatePoints({ haiku: 20 }, 1)! * 1000)).toBe(1000)
+    expect(Math.round(estimatePoints({ haiku: 20, sonnet: 1, opus: 1, fable: 1 }, 2)! * 1000)).toBe(18000)
+    expect(estimatePoints({ haiku: 1 }, 0)).toBeNull()
   })
 })
 

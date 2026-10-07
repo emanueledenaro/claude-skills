@@ -28,10 +28,23 @@ type World = {
   spawns: any[]
 }
 
-// The world beneath the plugin: clock, usage reading, ui lines, and the tool and spawn bottoms.
-function world(on: any, rateLimits: unknown[] = GREEN): World {
+// Where the haiku alias stands: the engine's version (null: the read fails) and the process environment
+// (null: every read fails). By default Claude Code 2.1.292, where haiku is still Haiku 4.5.
+type Engine = { version?: string | null; env?: Record<string, string> | null }
+const HAIKU_55: Engine = { version: '2.1.293' }
+
+// The world beneath the plugin: clock, usage reading, engine version, environment, ui lines, and the tool
+// and spawn bottoms.
+function world(on: any, rateLimits: unknown[] = GREEN, engine: Engine = {}): World {
   const w: World = { rateLimits, logs: [], statuses: [], calls: [], spawns: [] }
   mock.clock(on, { now: NOW })
+  const version = engine.version === undefined ? '2.1.292' : engine.version
+  on('session.version', async () => {
+    if (version === null) throw new Error('version unavailable')
+    return { value: { version, base: version } }
+  })
+  if (engine.env === null) on('env.get', async () => { throw new Error('env unavailable') })
+  else mock.env(on, engine.env || {})
   on('session.usage', async () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: w.rateLimits } }))
   on('ui.log', async ($: any, e: any) => { w.logs.push({ text: e.text, to: e.to }); return { value: undefined } })
   on('ui.status', async ($: any, e: any) => { w.statuses.push(e.text); return { value: undefined } })
@@ -252,6 +265,186 @@ describe('model-guard', () => {
       expect(r.deny).toBeUndefined()
       expect(w.spawns[0].model).toBe('fable')
       expect(w.logs).toEqual([])
+    })
+  })
+
+  describe('Haiku 5.5: the haiku alias from Claude Code 2.1.293 on the Anthropic API', () => {
+    test('2.1.293: the haiku alias is kept; Explore without a model gets haiku at effort medium; the rest sonnet', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore', effort: 'high' } as any)
+      for (const type of [undefined, 'general-purpose', 'Plan']) {
+        await $.tool.call((type ? { ...AGENT, subagent_type: type } : { ...AGENT }) as any)
+      }
+      expect(w.calls.map(c => [c.model, c.effort])).toEqual([
+        ['haiku', 'medium'], ['haiku', 'medium'], ['haiku', 'high'],
+        ['sonnet', undefined], ['sonnet', undefined], ['sonnet', undefined],
+      ])
+      expect(w.logs[0]).toEqual({ text: 'model-guard: Explore senza modello -> haiku, effort medium', to: 'transcript' })
+      expect(w.logs.filter(l => l.text.includes('haiku -> sonnet'))).toEqual([])
+    })
+
+    test('a later release keeps it too (2.2.0)', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.2.0' })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      expect(w.calls[0].model).toBe('haiku')
+    })
+
+    test('before 2.1.293: haiku and Explore get sonnet, and the line says why', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.292' })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore' } as any)
+      expect(w.calls.map(c => [c.model, c.effort])).toEqual([['sonnet', undefined], ['sonnet', undefined]])
+      expect(w.logs[0]).toEqual({ text: 'model-guard: haiku -> sonnet (prima di Claude Code 2.1.293 haiku è Haiku 4.5)', to: 'transcript' })
+    })
+
+    for (const env of [
+      { CLAUDE_CODE_USE_BEDROCK: '1' }, { CLAUDE_CODE_USE_VERTEX: 'true' }, { CLAUDE_CODE_USE_FOUNDRY: '1' },
+      { CLAUDE_CODE_USE_ANTHROPIC_AWS: '1' }, { ANTHROPIC_BASE_URL: 'https://llm-gateway.example.com/anthropic' },
+    ]) {
+      test('off the Anthropic API, haiku gets sonnet: ' + JSON.stringify(env), async ($, on) => {
+        const w = world(on, GREEN, { version: '2.1.293', env })
+        await start($)
+        await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+        expect(w.calls[0].model).toBe('sonnet')
+        expect(w.logs[0].text).toContain('fuori dall\'API Anthropic')
+      })
+    }
+
+    test('a flag set to 0 or the Anthropic API URL keeps it', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.293', env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      expect(w.calls[0].model).toBe('haiku')
+    })
+
+    for (const [what, engine, said] of [
+      ['the version', { version: null }, 'versione di Claude Code non letta'],
+      ['the environment', { version: '2.1.293', env: null }, "variabili d'ambiente non lette"],
+    ] as [string, Engine, string][]) {
+      test(what + ' cannot be read: haiku gets sonnet, never a refusal, and the log names what was not read', async ($, on) => {
+        const w = world(on, GREEN, engine)
+        await start($)
+        const r = await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+        expect(isRefused(r)).toBe(false)
+        expect(w.calls[0].model).toBe('sonnet')
+        expect(w.logs[0].text).toContain(said)
+      })
+    }
+
+    test('ANTHROPIC_DEFAULT_HAIKU_MODEL on a Haiku 4.5 id: haiku gets sonnet; on a Haiku 5.5 id it is kept', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.293', env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001' } })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore' } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['sonnet', 'sonnet'])
+      expect(w.logs[0].text).toContain('ANTHROPIC_DEFAULT_HAIKU_MODEL')
+    })
+
+    test('ANTHROPIC_DEFAULT_HAIKU_MODEL on claude-haiku-5-5 keeps the alias', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.293', env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-5-5' } })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku', effort: 'low' } as any)
+      expect(w.calls.map(c => [c.model, c.effort])).toEqual([['haiku', 'low']])
+    })
+
+    test('workflow agents with no model inherit the session model: a session on haiku before 2.1.293 is denied', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.292' })
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_inh', 1, { model: undefined, parentModel: 'haiku' }) as any)
+      expect(r.deny).toContain("inherit the session's haiku alias")
+      expect(w.spawns).toEqual([])
+    })
+
+    test('isolation remote runs in a cloud session on its own version: sonnet even on 2.1.293', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku', isolation: 'remote' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore', isolation: 'remote' } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['sonnet', 'sonnet'])
+      expect(w.logs[0].text).toContain('isolation remote')
+    })
+
+    test('workflow agents: haiku spawns on 2.1.293 and a Haiku 5.5 id anywhere; a Haiku 4.5 id never', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      const ok: any = await $.agent.spawn(spawnInput('wf_h55', 1, { model: 'haiku' }) as any)
+      expect(ok.deny).toBeUndefined()
+      const old: any = await $.agent.spawn(spawnInput('wf_h55', 2, { model: 'claude-haiku-4-5-20251001' }) as any)
+      expect(old.deny).toContain('never pins Haiku 4.5')
+      expect(w.spawns.map(s => s.model)).toEqual(['haiku'])
+      expect(w.logs.at(-1).text).toContain('Haiku 4.5')
+    })
+
+    test('workflow agents before 2.1.293: haiku denied with the reason, a Haiku 5.5 id passes', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.292' })
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_h45', 1, { model: 'haiku' }) as any)
+      expect(r.deny).toContain('older than 2.1.293')
+      expect(r.deny).toContain("model: 'sonnet'")
+      const id: any = await $.agent.spawn(spawnInput('wf_h45', 2, { model: 'claude-haiku-5-5' }) as any)
+      expect(id.deny).toBeUndefined()
+      expect(w.spawns.map(s => s.model)).toEqual(['claude-haiku-5-5'])
+      expect(w.logs[0].text).toContain('prima di Claude Code 2.1.293')
+    })
+
+    test('shell launches: the bare haiku alias is refused even on 2.1.293 and says to pin claude-haiku-5-5', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      const launches = [
+        { tool: 'Bash', command: 'claude --model haiku --cloud "fix the typo"' },
+        { tool: 'PowerShell', command: 'claude -p "x" --model haiku' },
+        { tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 'claude --cloud --model=haiku "x"' },
+        { tool: 'Bash', command: 'expect launch.exp t r l haiku medium' },
+      ]
+      for (const input of launches) {
+        const r = await $.tool.call(input as any)
+        expect(isRefused(r), input.command).toBe(true)
+        expect(denyText(r)).toContain('claude-haiku-5-5')
+      }
+      expect(w.calls).toEqual([])
+    })
+
+    test('shell launches: a Haiku 5.5 id passes, a Haiku 4.5 id is refused', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      const good = 'claude --model claude-haiku-5-5 --effort medium --cloud "fix the typo"'
+      expect(isRefused(await $.tool.call({ tool: 'Bash', command: good } as any))).toBe(false)
+      for (const command of [
+        'claude --model claude-haiku-4-5-20251001 --cloud "x"',
+        'claude -p "x" --model claude-haiku-4-5',
+        'expect launch.exp t r l claude-haiku-4-5 medium',
+      ]) {
+        const r = await $.tool.call({ tool: 'Bash', command } as any)
+        expect(isRefused(r), command).toBe(true)
+        expect(denyText(r)).toContain('never pins Haiku 4.5')
+      }
+      expect(w.calls.map(c => c.command)).toEqual([good])
+    })
+  })
+
+  describe('Fable full ids (any case) on every path', () => {
+    test('Agent: claude-fable-5-1, claude-fable-5 and an upper-case id become opus', async ($, on) => {
+      const w = world(on)
+      await start($)
+      for (const model of ['claude-fable-5-1', 'claude-fable-5', 'Claude-Fable-5-1']) await $.tool.call({ ...AGENT, model } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['opus', 'opus', 'opus'])
+      expect(w.logs[0].text).toContain('fable -> opus')
+    })
+
+    test('workflow agents and shell launches: a full Fable id is refused', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_ff', 1, { model: 'CLAUDE-FABLE-5-1' }) as any)
+      expect(r.deny).toContain("model: 'opus'")
+      const sh = await $.tool.call({ tool: 'Bash', command: 'claude --model claude-fable-5-1 --cloud "x"' } as any)
+      expect(denyText(sh)).toContain('never run Fable')
+      expect(w.spawns).toEqual([])
+      expect(w.calls).toEqual([])
     })
   })
 
@@ -710,6 +903,14 @@ describe('model-guard', () => {
       expect(w.calls.map(c => c.command)).toEqual(['claude --model sonnet --cloud "x"'])
     })
 
+    test('a cloud launch through Monitor is gated like Bash: denied while red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const r = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 'claude --model sonnet --cloud "x"' } as any)
+      expect(denyText(r)).toContain('Budget red')
+      expect(w.calls).toEqual([])
+    })
+
     test('a Monitor watch without a command (a WebSocket) passes untouched, even when red', async ($, on) => {
       const w = world(on, RED)
       await start($)
@@ -773,6 +974,15 @@ describe('model-guard', () => {
       expect(denyText(r)).toContain('model-guard could not check this launch')
       expect(w.calls).toEqual([])
       expect(w.logs[0].text).toContain('controllo fallito')
+    })
+
+    test('Agent guard fails closed on an effort that is not text, also where haiku is Haiku 5.5', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      const r = await $.tool.call({ ...AGENT, subagent_type: 'Explore', effort: 42 } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(denyText(r)).toContain('model-guard could not check this launch')
+      expect(w.calls).toEqual([])
     })
 
     test('Workflow guard fails closed', async ($, on) => {

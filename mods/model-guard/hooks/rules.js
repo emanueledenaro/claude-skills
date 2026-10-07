@@ -24,11 +24,41 @@ const MANAGEMENT = [
 
 // ---------------------------------------------------------------- texts
 
+// Why the haiku alias is not Haiku 5.5 here (haikuAlias's `why`), in the person's language and the model's.
+const HAIKU_WHY = {
+  it: {
+    old: 'prima di Claude Code 2.1.293 haiku è Haiku 4.5',
+    unknown: 'versione di Claude Code non letta, haiku può essere Haiku 4.5',
+    provider: 'fuori dall\'API Anthropic haiku è Haiku 4.5',
+    env: 'variabili d\'ambiente non lette, haiku può essere Haiku 4.5',
+    remapped: 'ANTHROPIC_DEFAULT_HAIKU_MODEL fa puntare haiku a un altro modello',
+    remote: 'isolation remote: la sessione cloud ha la sua versione',
+  },
+  en: {
+    old: 'before Claude Code 2.1.293 haiku is Haiku 4.5',
+    unknown: 'Claude Code version not read, haiku may be Haiku 4.5',
+    provider: 'off the Anthropic API haiku is Haiku 4.5',
+    env: 'environment not read, haiku may be Haiku 4.5',
+    remapped: 'ANTHROPIC_DEFAULT_HAIKU_MODEL points haiku at another model',
+    remote: 'isolation remote: the cloud session runs its own version',
+  },
+  model: {
+    old: 'this Claude Code is older than 2.1.293, where the haiku alias is still Haiku 4.5',
+    unknown: 'model-guard could not read the Claude Code version, and before 2.1.293 the haiku alias is Haiku 4.5',
+    provider: 'this session runs on Bedrock, Google Cloud, Microsoft Foundry, Claude Platform on AWS or a gateway, where the haiku alias is still Haiku 4.5',
+    env: 'model-guard could not read the environment that tells the provider, and off the Anthropic API the haiku alias is Haiku 4.5',
+    remapped: 'ANTHROPIC_DEFAULT_HAIKU_MODEL points the haiku alias at a model other than Haiku 5.5',
+    remote: "isolation 'remote' runs in a cloud session on its own Claude Code version, where the haiku alias may still be Haiku 4.5",
+  },
+}
+
 const TEXTS = {
   it: {
     red: 'rosso', yellow: 'giallo', green: 'verde', unknown: 'sconosciuto',
     agentNoModel: 'model-guard: Agent senza modello -> sonnet',
-    haiku: 'model-guard: haiku -> sonnet (model-mix non usa l\'alias haiku)',
+    explore: 'model-guard: Explore senza modello -> haiku, effort medium',
+    haiku: why => `model-guard: haiku -> sonnet (${HAIKU_WHY.it[why] || HAIKU_WHY.it.unknown})`,
+    haikuOld: 'model-guard: Haiku 4.5 -> sonnet (model-mix non fissa mai Haiku 4.5)',
     fable: 'model-guard: fable -> opus sugli agenti (un mod non legge la finestra Fable: niente Fable fuori dalla sessione principale)',
     ownModel: t => `model-guard: tipo ${t} senza modello, lasciato al modello della sua definizione`,
     deniedRed: b => `model-guard: lancio bloccato, budget rosso (${budgetBrief(b, 'it')})`,
@@ -43,7 +73,8 @@ const TEXTS = {
     localBad: m => `model-guard: sessione headless con modello ${m} bloccata`,
     launchBad: m => `model-guard: launch.exp con modello ${m} bloccato`,
     wfFable: 'model-guard: agente di workflow su Fable bloccato, va fissato opus',
-    wfHaiku: 'model-guard: agente di workflow con alias haiku bloccato, va fissato sonnet',
+    wfHaiku: why => `model-guard: agente di workflow su haiku bloccato (${HAIKU_WHY.it[why] || HAIKU_WHY.it.unknown}), va fissato sonnet`,
+    wfHaikuOld: 'model-guard: agente di workflow su Haiku 4.5 bloccato, va fissato sonnet o claude-haiku-5-5',
     wfWidth: p => `model-guard: workflow oltre la larghezza ${p.width} (${p.name}), altri agenti bloccati`,
     wfWidthWarn: p => `model-guard: workflow oltre la larghezza ${p.width} (${p.name}), altri agenti consentiti (redPolicy warn)`,
     wfSolo: p => `model-guard: workflow bloccato, il profilo di oggi (${p.name}) non ne consente`,
@@ -55,7 +86,9 @@ const TEXTS = {
   en: {
     red: 'red', yellow: 'yellow', green: 'green', unknown: 'unknown',
     agentNoModel: 'model-guard: Agent without a model -> sonnet',
-    haiku: 'model-guard: haiku -> sonnet (model-mix never uses the haiku alias)',
+    explore: 'model-guard: Explore without a model -> haiku, effort medium',
+    haiku: why => `model-guard: haiku -> sonnet (${HAIKU_WHY.en[why] || HAIKU_WHY.en.unknown})`,
+    haikuOld: 'model-guard: Haiku 4.5 -> sonnet (model-mix never pins Haiku 4.5)',
     fable: 'model-guard: fable -> opus on agents (a mod cannot read the Fable window: no Fable outside the main session)',
     ownModel: t => `model-guard: type ${t} has no model, left to its definition's model`,
     deniedRed: b => `model-guard: launch blocked, budget red (${budgetBrief(b, 'en')})`,
@@ -70,7 +103,8 @@ const TEXTS = {
     localBad: m => `model-guard: headless session on ${m} blocked`,
     launchBad: m => `model-guard: launch.exp on ${m} blocked`,
     wfFable: 'model-guard: workflow agent on Fable blocked, pin opus',
-    wfHaiku: 'model-guard: workflow agent on the haiku alias blocked, pin sonnet',
+    wfHaiku: why => `model-guard: workflow agent on haiku blocked (${HAIKU_WHY.en[why] || HAIKU_WHY.en.unknown}), pin sonnet`,
+    wfHaikuOld: 'model-guard: workflow agent on Haiku 4.5 blocked, pin sonnet or claude-haiku-5-5',
     wfWidth: p => `model-guard: workflow past width ${p.width} (${p.name}), further agents blocked`,
     wfWidthWarn: p => `model-guard: workflow past width ${p.width} (${p.name}), further agents allowed (redPolicy warn)`,
     wfSolo: p => `model-guard: workflow blocked, today's profile (${p.name}) allows none`,
@@ -145,6 +179,64 @@ export function fiveHourBanked(plan, now) {
   return plan.banked.some(r => r && r.type === '5-hour' && (!r.expires || r.expires >= today))
 }
 
+// ---------------------------------------------------------------- haiku (model-mix: Haiku 5.5)
+
+// The first Claude Code release whose `haiku` alias is Haiku 5.5 on the Anthropic API.
+export const HAIKU_55_SINCE = [2, 1, 293]
+
+// The variables that move Claude Code off the Anthropic API (Bedrock, Google Cloud, Microsoft Foundry,
+// Claude Platform on AWS, a gateway). register.js reads each by name; ANTHROPIC_BASE_URL is checked apart.
+export const PROVIDER_FLAGS = [
+  'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+  'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD', 'CLAUDE_CODE_USE_MANTLE', 'CLAUDE_CODE_USE_GATEWAY',
+]
+
+function flagOn(value) {
+  return typeof value === 'string' && value.trim() !== '' && !/^(0|false|no|off)$/i.test(value.trim())
+}
+
+// [major, minor, patch] from $.session.version()'s answer (its release `base`, else `version`), else null.
+export function parseVersion(v) {
+  const text = v && typeof v === 'object' ? (typeof v.base === 'string' ? v.base : v.version) : null
+  const m = typeof text === 'string' ? /^(\d+)\.(\d+)\.(\d+)/.exec(text.trim()) : null
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+}
+
+// Whether the haiku alias is Haiku 5.5 in this session: Claude Code 2.1.293 or later on the Anthropic API.
+// version: $.session.version()'s answer, or null when it could not be read.
+// env: the provider variables by name (unset ones absent), or null when they could not be read.
+// ANTHROPIC_DEFAULT_HAIKU_MODEL, when set, is the model the alias runs: it must be a Haiku 5.5 or later id.
+// Returns { ok: true } or { ok: false, why: 'provider' | 'remapped' | 'env' | 'old' | 'unknown' }; anything unread is not ok.
+export function haikuAlias(version, env) {
+  if (!env || typeof env !== 'object') return { ok: false, why: 'env' }
+  if (PROVIDER_FLAGS.some(name => flagOn(env[name]))) return { ok: false, why: 'provider' }
+  const base = typeof env.ANTHROPIC_BASE_URL === 'string' ? env.ANTHROPIC_BASE_URL.trim() : ''
+  if (base && !/^https:\/\/api\.anthropic\.com(:443)?\/?$/i.test(base)) return { ok: false, why: 'provider' }
+  const remap = typeof env.ANTHROPIC_DEFAULT_HAIKU_MODEL === 'string' ? env.ANTHROPIC_DEFAULT_HAIKU_MODEL.trim() : ''
+  if (remap && haikuKind(remap) !== 'current') return { ok: false, why: 'remapped' }
+  const v = parseVersion(version)
+  if (!v) return { ok: false, why: 'unknown' }
+  for (let i = 0; i < 3; i++) {
+    if (v[i] !== HAIKU_55_SINCE[i]) return v[i] > HAIKU_55_SINCE[i] ? { ok: true } : { ok: false, why: 'old' }
+  }
+  return { ok: true }
+}
+
+// A Haiku model name: 'alias' (the bare `haiku`), 'current' (a pinned Haiku 5.5 or later id, any case),
+// 'old' (any other Haiku id: Haiku 4.5, 3.5), or null for another family.
+export function haikuKind(model) {
+  if (typeof model !== 'string' || modelFamily(model) !== 'haiku') return null
+  const m = model.trim().toLowerCase()
+  if (m === 'haiku') return 'alias'
+  const v = /haiku-(\d)(?:-(\d))?(?!\d)/.exec(m)
+  return v && (Number(v[1]) > 5 || (Number(v[1]) === 5 && Number(v[2] || 0) >= 5)) ? 'current' : 'old'
+}
+
+// ctx.haiku: haikuAlias's answer for this session; a ctx without one (or an unread one) is not ok.
+function haikuOf(ctx) {
+  return ctx && ctx.haiku && typeof ctx.haiku === 'object' ? ctx.haiku : { ok: false, why: 'unknown' }
+}
+
 // ---------------------------------------------------------------- budget gate (rules 4, 5, 8)
 
 // The redeem advice only when it pays (budget.md): a banked weekly reset is counted and weekly use is
@@ -178,9 +270,11 @@ function pausedGate(b, t, ctx) {
   return { deny: pausedReason(b) + ask, log: t.deniedPaused(at) }
 }
 
-// The gate on new work. ctx: { budget, redPolicy, lang, unknownLogged, fiveHourBanked?, fableLogged? }
+// The gate on new work. ctx: { budget, redPolicy, lang, unknownLogged, fiveHourBanked?, fableLogged?, haiku? }
 // An unknown color (no reading yet) always allows, with one line per stretch without a reading:
-// a session that never gets a reading (an API key, say) must not be locked out.
+// a session that never gets a reading (an API key, say) must not be locked out. budget.md counts it red
+// when nobody can be asked, but the mods API has no reliable unattended signal: session.start's
+// isInteractive is false for the Desktop app (an SDK host) as for -p, and background sessions are not named.
 // Returns { deny, log } | { note, unknownNoted? } | null.
 export function launchGate(ctx) {
   const b = ctx.budget
@@ -216,12 +310,20 @@ function optionalString(value, field) {
 // ---------------------------------------------------------------- Agent tool (rules 1, 2, 3 + gate)
 
 // Fable never runs on an Agent call: a mod cannot read the Fable window, and budget.md runs no Fable
-// stages when it is not readable. The rewrite is logged to the transcript once (ctx.fableLogged after).
+// stages when it is not readable. Any Fable name (`fable`, `claude-fable-5-1`, any case) becomes opus.
+// The rewrite is logged to the transcript once (ctx.fableLogged after).
+// The haiku alias is kept where it is Haiku 5.5 (ctx.haiku ok: Claude Code 2.1.293 or later on the
+// Anthropic API) and the agent runs here; otherwise, or with isolation 'remote' (a cloud session on its
+// own version), it becomes sonnet. A pinned Haiku 4.5 id becomes sonnet too (model-mix never pins it).
+// An Explore agent without a model is broad reading: haiku at effort medium (unless an effort is given)
+// where the alias is Haiku 5.5, else sonnet like the other inheriting types.
 // isolation 'remote' starts a cloud session: it also needs a cloud slot in today's profile.
+// ctx: launchGate's, plus haiku (haikuAlias's answer).
 export function decideAgent(input, ctx) {
   const model = optionalString(input.model, 'model')
   const type = optionalString(input.subagent_type, 'subagent_type')
   const isolation = optionalString(input.isolation, 'isolation')
+  const effort = optionalString(input.effort, 'effort')
   const t = texts(ctx.lang)
   const gate = launchGate(ctx)
   if (gate && gate.deny) return denied(gate)
@@ -234,35 +336,54 @@ export function decideAgent(input, ctx) {
       to: 'transcript',
     }
   }
-  let next = null
+  const h = haikuOf(ctx)
+  const haikuHere = h.ok && isolation !== 'remote'
+  const haikuWhy = isolation === 'remote' ? 'remote' : h.why || 'unknown'
+  const family = modelFamily(model)
+  const kind = haikuKind(model)
+  let changes = null
   let line = ''
   let why = ''
   let fableNoted = false
   if (!model) {
-    if (!type || INHERITING_TYPES.includes(type)) {
-      next = 'sonnet'
+    if (type === 'Explore' && haikuHere) {
+      changes = effort ? { model: 'haiku' } : { model: 'haiku', effort: 'medium' }
+      line = t.explore
+      why = `Agent model set to haiku${effort ? '' : ', effort medium'}: Explore is broad reading, model-mix's Haiku row, and haiku is Haiku 5.5 here.`
+    } else if (!type || INHERITING_TYPES.includes(type)) {
+      changes = { model: 'sonnet' }
       line = t.agentNoModel
       why = `Agent model set to sonnet: ${type || 'the default type'} would inherit the session model.`
+        + (type === 'Explore' ? ` Not haiku: ${HAIKU_WHY.model[haikuWhy]}.` : '')
     } else {
       const d = allowWith(gate, `Agent type ${type} has no model: its definition decides.`)
       d.log = joinLogs(d.log, t.ownModel(type))
       if (!gate) d.to = 'debug'
       return d
     }
-  } else if (model === 'haiku') {
-    next = 'sonnet'
-    line = t.haiku
-    why = 'Agent model haiku set to sonnet: model-mix never uses the haiku alias.'
-  } else if (model === 'fable') {
-    next = 'opus'
+  } else if (kind === 'alias' && !haikuHere) {
+    changes = { model: 'sonnet' }
+    line = t.haiku(haikuWhy)
+    why = `Agent model haiku set to sonnet: ${HAIKU_WHY.model[haikuWhy]}.`
+  } else if ((kind === 'alias' || kind === 'current') && !effort && (kind === 'current' || haikuHere)) {
+    changes = { effort: 'medium' }
+    why = `Agent effort set to medium: model-mix pairs Haiku with medium effort.`
+  } else if (kind === 'old') {
+    changes = { model: 'sonnet' }
+    line = t.haikuOld
+    why = `Agent model ${model} set to sonnet: model-mix never pins Haiku 4.5.`
+  } else if (family === 'fable') {
+    changes = { model: 'opus' }
     fableNoted = !ctx.fableLogged
     line = fableNoted ? t.fable : ''
-    why = 'Agent model fable set to opus: model-guard cannot read the Fable window, and budget.md runs no Fable stages when it is not readable.'
+    why = `Agent model ${model} set to opus: model-guard cannot read the Fable window, and budget.md runs no Fable stages when it is not readable.`
   }
-  if (!next) return allowWith(gate, 'Agent model kept: ' + model + '.')
-  const d = { action: 'rewrite', input: { ...input, model: next }, reason: why, log: joinLogs(gate && gate.note, line), to: 'transcript' }
-  if (!d.log && model === 'fable') {
+  if (!changes) return allowWith(gate, 'Agent model kept: ' + model + '.')
+  const d = { action: 'rewrite', input: { ...input, ...changes }, reason: why, log: joinLogs(gate && gate.note, line), to: 'transcript' }
+  if (!d.log && family === 'fable') {
     d.log = t.fable
+    d.to = 'debug'
+  } else if (!d.log) {
     d.to = 'debug'
   }
   if (fableNoted) d.fableNoted = true
@@ -711,12 +832,24 @@ export function scanShell(command, depth = 0) {
   return launches
 }
 
-// Models no delegated session may run: any Fable, and the bare haiku alias (a pinned full Haiku id is allowed).
+// Models no session started from a shell may run: any Fable ('fable'); the bare haiku alias ('haiku'),
+// because a cloud session runs its own Claude Code version and a headless one may run on another provider,
+// where the alias is still Haiku 4.5; and a pinned Haiku 4.5 id ('haiku-4-5'; model-mix never pins it).
+// A pinned Haiku 5.5 id (claude-haiku-5-5) is allowed.
 export function forbiddenModel(model) {
   if (typeof model !== 'string' || !model) return null
   if (modelFamily(model) === 'fable') return 'fable'
-  if (model.trim().toLowerCase() === 'haiku') return 'haiku'
+  const kind = haikuKind(model)
+  if (kind === 'alias') return 'haiku'
+  if (kind === 'old') return 'haiku-4-5'
   return null
+}
+
+// The deny reason's opening and advice for a forbidden shell model, by forbiddenModel's answer.
+function shellModelText(bad) {
+  if (bad === 'fable') return { name: 'Fable', log: 'fable', fix: 'use --model sonnet, or --model opus for security-critical work.' }
+  if (bad === 'haiku-4-5') return { name: 'Haiku 4.5', log: 'Haiku 4.5', fix: 'model-mix never pins Haiku 4.5. Pin --model claude-haiku-5-5 for a small mechanical ticket, --model sonnet for implementation, or --model opus for security-critical work.' }
+  return { name: 'the bare haiku alias', log: 'haiku', fix: 'the alias follows the Claude Code version and provider that session runs on, and is still Haiku 4.5 before 2.1.293 or off the Anthropic API. Pin the full id --model claude-haiku-5-5 for a small mechanical ticket, --model sonnet for implementation, or --model opus for security-critical work.' }
 }
 
 // A claude launch that takes --model on its own command line (cloud or local headless). A local resume
@@ -737,8 +870,8 @@ export function insertModelFlags(command, launches) {
 // model check; only cloud ones (and launch.exp) need a cloud slot in today's profile.
 // A command whose launches are all local resumes (--resume, --continue or --from-pr with -p or --bg)
 // finishes open work, as a Workflow resume does: allowed while red (redPolicy deny too) and on Solo,
-// denied only while the 5-hour window is paused. It gets no --model, but an explicit Fable or bare
-// haiku is still denied. Next to a new launch, the command goes through the gate as a whole.
+// denied only while the 5-hour window is paused. It gets no --model, but an explicit Fable, bare
+// haiku or Haiku 4.5 id is still denied. Next to a new launch, the command goes through the gate as a whole.
 // claude run by Start-Process or cmd's start is denied in every color, before the gate: model-guard does
 // not read what it hands claude, so the model runs the same launch directly.
 export function decideShell(input, ctx, launches) {
@@ -761,27 +894,27 @@ export function decideShell(input, ctx, launches) {
   for (const l of found) {
     const bad = forbiddenModel(l.model)
     if (!bad) continue
-    const name = bad === 'fable' ? 'Fable' : 'the haiku alias'
+    const m = shellModelText(bad)
     if (l.kind === 'cloud') {
       return {
         action: 'deny',
-        reason: `Cloud sessions never run ${name} (model-mix): use --model sonnet, or --model opus for security-critical work.`,
-        log: t.cloudBad(bad),
+        reason: `Cloud sessions never run ${m.name} (model-mix): ${m.fix}`,
+        log: t.cloudBad(m.log),
         to: 'transcript',
       }
     }
     if (l.kind === 'local' || l.kind === 'resume') {
       return {
         action: 'deny',
-        reason: `Headless and background sessions (claude -p, --bg) never run ${name} (model-mix): use --model sonnet, or --model opus for security-critical work.`,
-        log: t.localBad(bad),
+        reason: `Headless and background sessions (claude -p, --bg) never run ${m.name} (model-mix): ${m.fix}`,
+        log: t.localBad(m.log),
         to: 'transcript',
       }
     }
     return {
       action: 'deny',
-      reason: `launch.exp's model argument (the 4th) is ${l.model}: cloud sessions never run ${bad === 'fable' ? 'Fable' : 'the haiku alias'}. Use sonnet, or opus for security-critical work.`,
-      log: t.launchBad(bad),
+      reason: `launch.exp's model argument (the 4th) is ${l.model}: cloud sessions never run ${m.name} (model-mix): ${m.fix.replace(/--model /g, '')}`,
+      log: t.launchBad(m.log),
       to: 'transcript',
     }
   }
@@ -825,6 +958,8 @@ export function decideShell(input, ctx, launches) {
 // for a run never seen. A known run keeps the width that applied at its first agent, so a run that
 // started before red (or before a step down) finishes at its own width: red blocks only new work,
 // and the first agent of an unseen run while red is new work (today's width 0).
+// Any Fable (pinned or inherited) is denied; the haiku alias passes where it is Haiku 5.5 (ctx.haiku ok)
+// and is denied otherwise; a pinned Haiku 4.5 id is denied; a pinned Haiku 5.5 id passes.
 // A decision may carry, for the caller to apply synchronously after this call:
 //   startRun { width, name }  record this run (only when it was not known)
 //   admit: true               add this agentIndex to the run's admitted set
@@ -860,11 +995,23 @@ export function decideWorkflowAgent(input, ctx, run) {
       to: 'transcript',
     })
   }
-  if (model && model.trim().toLowerCase() === 'haiku') {
+  // The model this agent runs: its own, or the session's when it inherits (as the Fable check above).
+  const kind = haikuKind(effective)
+  const h = haikuOf(ctx)
+  if (kind === 'alias' && !h.ok) {
+    const why = h.why || 'unknown'
     return withRun({
       action: 'deny',
-      reason: "model-mix never uses the haiku alias. Pin { model: 'sonnet' } on this agent() call and run the stage again.",
-      log: t.wfHaiku,
+      reason: `${model ? 'The haiku alias' : "This agent() has no model and would inherit the session's haiku alias, which"} is not Haiku 5.5 here: ${HAIKU_WHY.model[why]}. Pin { model: 'sonnet', effort: 'high' } on this agent() call and run the stage again.`,
+      log: t.wfHaiku(why),
+      to: 'transcript',
+    })
+  }
+  if (kind === 'old') {
+    return withRun({
+      action: 'deny',
+      reason: `model-mix never pins Haiku 4.5 (${effective}${model ? '' : ", inherited from the session"}). Pin ${h.ok ? "{ model: 'haiku', effort: 'medium' } for a reading stage or " : ''}{ model: 'sonnet', effort: 'high' } on this agent() call and run the stage again.`,
+      log: t.wfHaikuOld,
       to: 'transcript',
     })
   }

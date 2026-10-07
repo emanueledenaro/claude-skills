@@ -113,11 +113,12 @@ export function computeBudget(input) {
   return { ...base, color, reason: overReserve ? 'over-reserve' : lastHours ? 'last-12-hours' : 'pace', pace, margin, d, lastHours, profile }
 }
 
-// Weekly points a run would cost, from the run-cost unit: points per Sonnet-weighted agent (Opus counts 2, Fable 5).
+// Weekly points a run would cost, from the run-cost unit: points per Sonnet-weighted agent (Haiku counts 0.05,
+// Opus 2, Fable 5). Haiku 5.5 is about 1/20 of Sonnet per token while its prompt stays under 100K tokens.
 export function estimatePoints(agents, unitPoints) {
   if (typeof unitPoints !== 'number' || !(unitPoints > 0)) return null
   const a = agents || {}
-  return unitPoints * ((a.sonnet || 0) + 2 * (a.opus || 0) + 5 * (a.fable || 0) + (a.other || 0))
+  return unitPoints * (0.05 * (a.haiku || 0) + (a.sonnet || 0) + 2 * (a.opus || 0) + 5 * (a.fable || 0) + (a.other || 0))
 }
 
 export function modelFamily(model) {
