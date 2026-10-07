@@ -23,6 +23,8 @@ const MAX_SAMPLES = 20
 const NIGHT_MAX_AGE = 18 * HOUR
 const CLOUD_MAX_AGE = 24 * HOUR
 const QUESTION_MAX_AGE = 12 * HOUR
+// budget.md's 10-minute rule, as budget.js applies it.
+const READING_MAX_AGE = 10 * MIN
 
 export const MERGE_STEPS = ['realign', 'checks', 'headPinned', 'merged', 'ticketsClosed', 'roadmap', 'unblocked']
 export const ROUND_ITEMS = ['mainCi', 'prsAndIssues', 'idleWorkers', 'duplicates', 'diffReviewed']
@@ -261,17 +263,18 @@ function inFlightPoints(state) {
 }
 
 // budget.md's 10-minute rule is for launch decisions, so the budget itself keeps it: a reading older than
-// that is color 'unknown' (reason 'stale-reading'), which is what the model, budget_estimate and the toasts
-// read. What the person sees is `shown`: the same budget worked out without the staleness cut, from the
-// last known reading, only for a reading of known age that is older than 10 minutes (null otherwise: a fresh
-// reading is the budget itself; a poll before any response has an unknown age and stays 'unknown').
+// that never loosens the guard, so a green one turns 'unknown' (reason 'stale-reading') and a red or yellow
+// one keeps its color. That is what the model, budget_estimate and the toasts read. What the person sees is
+// `shown`: the same budget worked out without the staleness cut, from the last known reading, only for a
+// reading of known age that is older than 10 minutes (null otherwise: a fresh reading is the budget itself;
+// a poll before any response has an unknown age and stays 'unknown'). The views draw its age from it.
 export function budgetOf(state, now) {
   const input = { rateLimits: state.reading.rateLimits, now, plan: effectivePlan(state), inFlight: inFlightPoints(state) }
   const at = state.reading.at
   // Windows of unknown age (a poll before any response) are stale; no windows at all is just no reading.
   const budget = computeBudget({ ...input, readingAt: at == null ? (input.rateLimits.length ? -Infinity : undefined) : at })
   let shown = null
-  if (budget.reason === 'stale-reading' && at != null) {
+  if (at != null && now - at > READING_MAX_AGE) {
     const last = computeBudget({ ...input, readingAt: undefined })
     if (last.color !== 'unknown') shown = last
   }
@@ -1301,7 +1304,8 @@ export function estimateRun(state, budget, input) {
   const reserve = budget && budget.plan && isNum(budget.plan.reserve) ? budget.plan.reserve : 0
   const color = budget ? budget.color : 'unknown'
   const paused = !!(budget && budget.pausedFiveHour)
-  // budget.md: no launch while the 5-hour window is at 90% or more, while the color is red, or on a reading older than 10 minutes.
+  // budget.md: no launch while the 5-hour window is at 90% or more or while the color is red; the fit stays open on an
+  // unknown color (no reading, or a green one older than 10 minutes; an old red or yellow one keeps its color).
   let fits = null
   if (points != null && wk && color !== 'unknown') {
     fits = !paused && color !== 'red' && wk.used + (budget.inFlight || 0) + points <= 100 - reserve

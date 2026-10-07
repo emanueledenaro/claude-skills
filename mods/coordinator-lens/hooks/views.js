@@ -18,7 +18,8 @@
 // An old reading: budget.md's 10-minute rule is for launch decisions, so the person still sees the color of
 // the last known reading, the word dim with its age after it ('Budget verde (lettura di 12m fa)'; the band,
 // the card title and the BUDGET block). 'in attesa' is for no reading at all, or one of unknown age. The
-// texts for the model (summaryText, budgetLine) keep the rule: an old reading is 'unknown'.
+// texts for the model (summaryText, budgetLine) keep the rule: an old green reading is 'unknown', an old red
+// or yellow one keeps its color.
 
 import { modelFamily, estimatePoints, PROFILES } from './budget.js'
 import { t, tn, has, colorWord, fmtDuration, fmtPoints, normalizeLang } from './i18n.js'
@@ -111,8 +112,9 @@ function langOf(vm) {
   return normalizeLang(vm && vm.lang)
 }
 
-// The budget as the model reads it: budget.md's rule applies, so a reading older than 10 minutes is
-// color 'unknown' (reason 'stale-reading'). summaryText and budgetLine read this one.
+// The budget as the model reads it: budget.md's rule applies, so a green reading older than 10 minutes is
+// color 'unknown' (reason 'stale-reading'), and an old red or yellow one keeps holding. summaryText and
+// budgetLine read this one.
 function modelBudget(vm) {
   return (vm && vm.budget) || {}
 }
@@ -1311,7 +1313,7 @@ function reasonEn(reason) {
 // One line for the model context, e.g.
 // coordinator-lens budget: green (margin -4) · profile Max 20x: 16 agents/run, 3 cloud sessions · weekly 17% (pace 20) · 5h 0% · Fable window not readable
 export function budgetLine(vm) {
-  // the model reads the budget with budget.md's 10-minute rule: an old reading is 'unknown (old reading)'
+  // the model reads the budget with budget.md's 10-minute rule: an old green reading is 'unknown (old reading)'
   const b = modelBudget(vm)
   const color = colorOf(b)
   const bits = []
@@ -1359,7 +1361,7 @@ function enDuration(ms) {
 // The /coord command text: at most 10 lines, English.
 export function summaryText(vm) {
   const lines = []
-  // the model reads the budget with budget.md's 10-minute rule: an old reading is 'budget: unknown'
+  // the model reads the budget with budget.md's 10-minute rule: an old green reading is 'budget: unknown'
   const b = modelBudget(vm)
   const color = colorOf(b)
   const now = vm && isNum(vm.now) ? vm.now : null

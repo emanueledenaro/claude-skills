@@ -5,6 +5,7 @@ import {
   tokenize, tokenizeFull,
 } from '../hooks/rules.js'
 import { computeBudget, estimatePoints, modelFamily } from '../hooks/budget.js'
+import * as budgetModule from '../hooks/budget.js'
 
 const NOW = Date.parse('2026-10-07T12:00:00Z')
 const DAY = 24 * 60 * 60 * 1000
@@ -1435,5 +1436,38 @@ describe('texts the person sees', () => {
     expect(texts('en').agentNoModel).toBe('model-guard: agent without a model -> sonnet')
     expect(texts('it').wfWidth({ name: 'Red', width: 0 })).toBe('model-guard: workflow oltre la larghezza 0 (rosso), altri agenti bloccati')
     expect((launchGate(ctx(budget(80), { redPolicy: 'warn', lang: 'it' })) as any).note).toContain('(solo segnalato)')
+  })
+})
+
+// mods/model-guard/hooks/budget.js and mods/coordinator-lens/hooks/budget.js are one file kept in two mods:
+// a mod cannot import outside its own folder, so neither test can read the other copy. Both mods' tests pin
+// the same fingerprint instead: the source of every export, plus what the module computes for a fixed set of
+// readings (which covers its private helpers and constants). After changing budget.js, copy it to the other
+// mod and put the new fingerprint in both tests (the failure prints it).
+describe('budget.js is the same file in model-guard and coordinator-lens', () => {
+  const BUDGET_FINGERPRINT = '8183a090:15979'
+  test('the fingerprint of budget.js matches the one pinned in both mods', () => {
+    const at = Date.UTC(2026, 9, 7, 12, 0, 0)
+    const h = 60 * 60 * 1000
+    const limits = (weekly: number, five: number, weeklyHours = 100) => [
+      { kind: 'seven_day', percentUsed: weekly, resetsAt: new Date(at + weeklyHours * h).toISOString() },
+      { kind: 'five_hour', percentUsed: five, resetsAt: new Date(at + 2 * h).toISOString() },
+    ]
+    const plan = budgetModule.parsePlanLine('Claude plan: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22; 5-hour reset')
+    const probes = [
+      ...[[17, 10], [45, 10], [60, 10], [95, 10], [17, 92], [40, 10, 6], [40, 10, -1]].map(([w, f, wh]) =>
+        [0, 10, 11].map(ageMin => budgetModule.computeBudget({ rateLimits: limits(w, f, wh), now: at, plan, inFlight: 3, readingAt: at - ageMin * 60 * 1000 }))),
+      budgetModule.computeBudget({ rateLimits: [], now: at, plan: null, inFlight: 0 }),
+      ['Max 20x', 'Max 5x', 'Pro', 'Solo', 'x'].map(n => budgetModule.stepDown(n)),
+      budgetModule.estimatePoints({ haiku: 20, sonnet: 1, opus: 1, fable: 1, other: 1 }, 2),
+      ['claude-haiku-5-5', 'sonnet', 'opus', 'claude-fable-5-1', 'x'].map(m => budgetModule.modelFamily(m)),
+    ]
+    const mod = budgetModule as Record<string, unknown>
+    const text = Object.keys(mod).sort()
+      .map(k => k + '=' + (typeof mod[k] === 'function' ? String(mod[k]) : JSON.stringify(mod[k])))
+      .join('\n') + '\n' + JSON.stringify(probes)
+    let hash = 0x811c9dc5
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0
+    expect(hash.toString(16).padStart(8, '0') + ':' + text.length).toBe(BUDGET_FINGERPRINT)
   })
 })

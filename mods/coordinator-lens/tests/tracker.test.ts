@@ -9,6 +9,7 @@ import {
   estimateRun, dump, restore, mergeRunCost, MERGE_STEPS, ROUND_ITEMS, STAGES,
 } from '../hooks/tracker.js'
 import { parsePlanLine } from '../hooks/budget.js'
+import * as budgetModule from '../hooks/budget.js'
 
 const NOW = Date.UTC(2026, 9, 7, 12, 0, 0)
 const MIN = 60000
@@ -179,11 +180,14 @@ describe('budget', () => {
   })
 
   test('the last known color follows the pace: yellow steps the profile down, red launches nothing', () => {
+    // an old red or yellow reading keeps holding for the model too (budget.js never loosens the guard)
     const yellow = budgetOf(fresh(45), NOW + 15 * MIN)
-    expect(yellow).toMatchObject({ color: 'unknown', shown: { color: 'yellow' } })
+    expect(yellow).toMatchObject({ color: 'yellow', shown: { color: 'yellow' } })
+    expect(yellow.profile.name).toBe('Max 5x')
     expect(yellow.shown.profile.name).toBe('Max 5x')
     const red = budgetOf(fresh(60), NOW + 15 * MIN)
-    expect(red).toMatchObject({ color: 'unknown', shown: { color: 'red' } })
+    expect(red).toMatchObject({ color: 'red', shown: { color: 'red' } })
+    expect(red.profile.width).toBe(0)
     expect(red.shown.profile.width).toBe(0)
   })
 
@@ -1204,5 +1208,38 @@ describe('limits', () => {
     expect(label.startsWith('a b c z')).toBe(true)
     expect(Array.from(label).length).toBeLessThanOrEqual(80)
     expect(/[\u0000-\u001f]/.test(label)).toBe(false)
+  })
+})
+
+// mods/model-guard/hooks/budget.js and mods/coordinator-lens/hooks/budget.js are one file kept in two mods:
+// a mod cannot import outside its own folder, so neither test can read the other copy. Both mods' tests pin
+// the same fingerprint instead: the source of every export, plus what the module computes for a fixed set of
+// readings (which covers its private helpers and constants). After changing budget.js, copy it to the other
+// mod and put the new fingerprint in both tests (the failure prints it).
+describe('budget.js is the same file in model-guard and coordinator-lens', () => {
+  const BUDGET_FINGERPRINT = '8183a090:15979'
+  test('the fingerprint of budget.js matches the one pinned in both mods', () => {
+    const at = Date.UTC(2026, 9, 7, 12, 0, 0)
+    const h = 60 * 60 * 1000
+    const limits = (weekly: number, five: number, weeklyHours = 100) => [
+      { kind: 'seven_day', percentUsed: weekly, resetsAt: new Date(at + weeklyHours * h).toISOString() },
+      { kind: 'five_hour', percentUsed: five, resetsAt: new Date(at + 2 * h).toISOString() },
+    ]
+    const plan = budgetModule.parsePlanLine('Claude plan: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22; 5-hour reset')
+    const probes = [
+      ...[[17, 10], [45, 10], [60, 10], [95, 10], [17, 92], [40, 10, 6], [40, 10, -1]].map(([w, f, wh]) =>
+        [0, 10, 11].map(ageMin => budgetModule.computeBudget({ rateLimits: limits(w, f, wh), now: at, plan, inFlight: 3, readingAt: at - ageMin * 60 * 1000 }))),
+      budgetModule.computeBudget({ rateLimits: [], now: at, plan: null, inFlight: 0 }),
+      ['Max 20x', 'Max 5x', 'Pro', 'Solo', 'x'].map(n => budgetModule.stepDown(n)),
+      budgetModule.estimatePoints({ haiku: 20, sonnet: 1, opus: 1, fable: 1, other: 1 }, 2),
+      ['claude-haiku-5-5', 'sonnet', 'opus', 'claude-fable-5-1', 'x'].map(m => budgetModule.modelFamily(m)),
+    ]
+    const mod = budgetModule as Record<string, unknown>
+    const text = Object.keys(mod).sort()
+      .map(k => k + '=' + (typeof mod[k] === 'function' ? String(mod[k]) : JSON.stringify(mod[k])))
+      .join('\n') + '\n' + JSON.stringify(probes)
+    let hash = 0x811c9dc5
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0
+    expect(hash.toString(16).padStart(8, '0') + ':' + text.length).toBe(BUDGET_FINGERPRINT)
   })
 })

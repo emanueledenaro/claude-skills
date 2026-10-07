@@ -121,9 +121,10 @@ function budgetFor(o = {}) {
   const age = (o.ageMin || 2) * MIN
   const readingAt = !rateLimits.length ? undefined : o.unknownAge ? -Infinity : NOW - age
   const b = computeBudget({ ...input, readingAt })
-  // as the tracker gives it: the budget keeps budget.md's 10-minute rule, and `shown` holds the last known
-  // color worked out without the staleness cut (null for a fresh reading, or one that cannot be shown)
-  const last = b.reason === 'stale-reading' && !o.unknownAge ? computeBudget({ ...input, readingAt: undefined }) : null
+  // as the tracker gives it: the budget keeps budget.md's 10-minute rule (an old green reading is unknown,
+  // an old red or yellow one keeps holding), and `shown` holds the last known color worked out without the
+  // staleness cut for a reading older than 10 minutes (null for a fresh reading, or one that cannot be shown)
+  const last = rateLimits.length && age > 10 * MIN && !o.unknownAge ? computeBudget({ ...input, readingAt: undefined }) : null
   return { ...b, lastReadingAt: rateLimits.length && !o.unknownAge ? NOW - age : null, shown: last && last.color !== 'unknown' ? last : null }
 }
 
@@ -778,10 +779,11 @@ describe('an old reading', () => {
   })
   test('what the person sees follows the last known profile, what the model reads follows the rule', () => {
     const vm = old(12, { weekly: 45 })
-    // yellow steps Max 20x down to Max 5x: 8 agents per run for the band, the plan 16 for the model
+    // yellow steps Max 20x down to Max 5x: 8 agents per run for the band, and for the model too, since an
+    // old yellow reading keeps holding
     expect(bandText(vm, 300)).toContain('wf deep-review 7/8')
-    expect(summaryText(vm).split('\n')[1]).toContain('deep-review wf 7/16')
-    expect(summaryText(vm).split('\n')[0]).toBe('budget: unknown, weekly 45%, 5h 0%, profile Max 20x')
+    expect(summaryText(vm).split('\n')[1]).toContain('deep-review wf 7/8')
+    expect(summaryText(vm).split('\n')[0]).toBe('budget: yellow, margin +24, weekly 45% (pace 21), 5h 0%, profile Max 5x')
     expect(workflowSuffix(vm)).toBe('  wf deep-review 7/8')
   })
 })

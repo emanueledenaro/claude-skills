@@ -1,6 +1,7 @@
 // Budget color from a usage reading, as model-mix/budget.md computes it.
-// Pure functions only: no `$`, so both mods can import their own copy.
-// coordinator-lens/hooks/budget.js and model-guard/hooks/budget.js must stay identical.
+// Pure functions only: no `$`, so each mod imports its own copy. mods/model-guard/hooks/budget.js and
+// mods/coordinator-lens/hooks/budget.js in this repository are the same file: keep the two identical.
+// A mod cannot import outside its folder, so each mod's tests pin the same fingerprint of this module.
 
 const DAY = 24 * 60 * 60 * 1000
 const WEEK = 7 * DAY
@@ -74,6 +75,14 @@ export function countedResets(plan, now) {
     .map(b => ({ ...b, weeks: Math.max(1, (Date.parse(b.expires + 'T00:00:00Z') - now) / WEEK) }))
 }
 
+// Banked weekly resets not yet lost: no expiry date, or one not before today (budget.md: ask to redeem
+// one past 100 - reserve with 2 days left, whether or not it counts in the pace).
+export function bankedWeekly(plan, now) {
+  const today = utcDay(now)
+  return (plan && Array.isArray(plan.banked) ? plan.banked : [])
+    .filter(b => b && b.type === 'weekly' && (!b.expires || b.expires >= today)).length
+}
+
 // input: { rateLimits, now, plan (parsePlanLine result or null), inFlight (weekly points still to come), readingAt }
 export function computeBudget(input) {
   const now = input.now
@@ -89,11 +98,11 @@ export function computeBudget(input) {
     weekly, fiveHour, inFlight,
     pausedFiveHour: !!(fiveHour && fiveHour.used >= 90 && (!fiveHour.resetsAt || fiveHour.resetsAt > now)),
     resets: countedResets(plan, now),
+    bankedWeekly: bankedWeekly(plan, now),
   }
-  const stale = typeof input.readingAt === 'number' && now - input.readingAt > READING_MAX_AGE
-  if (!weekly || !weekly.resetsAt || weekly.resetsAt <= now || stale) {
-    return { ...base, color: 'unknown', reason: !weekly ? 'no-reading' : stale ? 'stale-reading' : 'window-expired', pace: null, margin: null, d: null, lastHours: false, profile: planProfile }
-  }
+  const unknown = reason => ({ ...base, color: 'unknown', reason, pace: null, margin: null, d: null, lastHours: false, profile: planProfile })
+  if (!weekly) return unknown('no-reading')
+  if (!weekly.resetsAt || weekly.resetsAt <= now) return unknown('window-expired')
   const hoursToReset = (weekly.resetsAt - now) / (60 * 60 * 1000)
   const d = Math.min(7, Math.max(0.5, 7 - hoursToReset / 24))
   const boost = base.resets.reduce((sum, r) => sum + 1 / r.weeks, 0)
@@ -110,14 +119,20 @@ export function computeBudget(input) {
   const profile = color === 'red'
     ? { name: 'Red', width: 0, cloud: 0, verify: 'main-session', reserve: null }
     : color === 'yellow' ? PROFILES[stepDown(planProfile.name)] : planProfile
+  // A reading older than 10 minutes (budget.md) never loosens the guard: a red or yellow one keeps holding
+  // (an unchanged usage() reading also means nothing moved), and only a green one turns unknown, which
+  // allows the same launches with one line. The 5-hour pause in base holds either way.
+  const stale = typeof input.readingAt === 'number' && now - input.readingAt > READING_MAX_AGE
+  if (stale && color === 'green') return unknown('stale-reading')
   return { ...base, color, reason: overReserve ? 'over-reserve' : lastHours ? 'last-12-hours' : 'pace', pace, margin, d, lastHours, profile }
 }
 
-// Weekly points a run would cost, from the run-cost unit: points per Sonnet-weighted agent (Opus counts 2, Fable 5).
+// Weekly points a run would cost, from the run-cost unit: points per Sonnet-weighted agent (Haiku counts 0.05,
+// Opus 2, Fable 5). Haiku 5.5 is about 1/20 of Sonnet per token while its prompt stays under 100K tokens.
 export function estimatePoints(agents, unitPoints) {
   if (typeof unitPoints !== 'number' || !(unitPoints > 0)) return null
   const a = agents || {}
-  return unitPoints * ((a.sonnet || 0) + 2 * (a.opus || 0) + 5 * (a.fable || 0) + (a.other || 0))
+  return unitPoints * (0.05 * (a.haiku || 0) + (a.sonnet || 0) + 2 * (a.opus || 0) + 5 * (a.fable || 0) + (a.other || 0))
 }
 
 export function modelFamily(model) {
