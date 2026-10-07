@@ -415,6 +415,17 @@ describe('mod files', () => {
     expect(isUnder('C:\\repo\\demo\\hooks\\a.js', 'C:/repo/demo/hooks')).toBe(true)
     expect(isUnder('C:\\repo\\demo\\hooksy\\a.js', 'C:/repo/demo/hooks')).toBe(false)
   })
+
+  test('path helpers with POSIX paths', () => {
+    const file = '/Users/me/repo/mods/demo/hooks/register.js'
+    expect(ancestorDirs(file).slice(0, 2)).toEqual(['/Users/me/repo/mods/demo/hooks', '/Users/me/repo/mods/demo'])
+    expect(ancestorDirs('/a.js')).toEqual([])
+    expect(joinPath('/Users/me/repo/mods/demo', '.claude-plugin', 'plugin.json')).toBe('/Users/me/repo/mods/demo/.claude-plugin/plugin.json')
+    expect(samePath('/Users/me/repo/mods/demo/hooks/', '/Users/me/repo/mods/demo/hooks')).toBe(true)
+    expect(samePath(file, '/Users/me/repo/mods/demo/.claude-plugin/plugin.json')).toBe(false)
+    expect(isUnder(file, '/Users/me/repo/mods/demo/hooks')).toBe(true)
+    expect(isUnder('/Users/me/repo/mods/demo/hooksy/a.js', '/Users/me/repo/mods/demo/hooks')).toBe(false)
+  })
 })
 
 describe('indirect launches: claude run by Start-Process or cmd start is a cloud launch, its arguments never read', () => {

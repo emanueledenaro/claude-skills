@@ -18,6 +18,7 @@ type World = {
   submits: any[]
   existing: Set<string>
   fsCalls: string[]
+  failFs: boolean
   failSkills: Set<string>
   denySkills: Set<string>
   messages: any[]
@@ -25,12 +26,38 @@ type World = {
 }
 
 const canon = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+const isPosixAbs = (p: string) => p.startsWith('/')
+const isWinAbs = (p: string) => /^[A-Za-z]:[\\/]/.test(p)
+
+// The runtime resolves every $.fs path with the host OS's path rules before any fs hook sees it
+// (probed on macOS: '/Users/me/x' arrives unchanged, 'C:\\repo\\x' arrives as '<plugin folder>/C:\\repo\\x',
+// 'rel/x' as '<plugin folder>/rel/x'). A stubbed file exists only when the path that arrives is that
+// file as the host writes it, and nothing else:
+// - a POSIX file: exactly that path (macOS, Linux), or that path on a drive, 'C:\\Users\\x' (Windows);
+// - a Windows file: that path up to case and separators (Windows), or that path whole after an
+//   absolute folder, '/<folder>/C:\\repo\\x' (macOS, Linux: a Windows path is relative there).
+// So a relative path never matches a POSIX file, and the two fixtures never match each other.
+function stubbed(existing: Set<string>, path: string): boolean {
+  for (const file of existing) {
+    if (isPosixAbs(file)) {
+      if (path === file) return true
+      if (/^[A-Za-z]:\\/.test(path) && path.slice(2).replace(/\\/g, '/') === file) return true
+    } else if (isWinAbs(file)) {
+      const got = canon(path)
+      const want = canon(file)
+      if (got === want) return true
+      const folder = path.slice(0, path.length - want.length - 1)
+      if (got.endsWith('/' + want) && isPosixAbs(folder) && !/[\\:]/.test(folder)) return true
+    }
+  }
+  return false
+}
 
 // The world beneath the plugin: the command list, transcript lines, tools, prompts, the file system,
 // and the main conversation's transcript ($.session.messages()).
 function world(on: any, commands: string[] | 'fail' = ALL): World {
   const w: World = {
-    logs: [], calls: [], submits: [], existing: new Set(), fsCalls: [], failSkills: new Set(), denySkills: new Set(),
+    logs: [], calls: [], submits: [], existing: new Set(), fsCalls: [], failFs: false, failSkills: new Set(), denySkills: new Set(),
     messages: [], reads: 0,
   }
   on('command.list', async () => {
@@ -49,7 +76,11 @@ function world(on: any, commands: string[] | 'fail' = ALL): World {
     w.submits.push(e)
     return { text: e.text, ...(Array.isArray(e.context) ? { context: e.context } : {}), origin: e.origin }
   })
-  on('fs.exists', async ($: any, e: any) => { w.fsCalls.push(e.path); return { value: w.existing.has(canon(e.path)) } })
+  on('fs.exists', async ($: any, e: any) => {
+    w.fsCalls.push(e.path)
+    if (w.failFs) throw new Error('file system unavailable')
+    return { value: stubbed(w.existing, e.path) }
+  })
   on('session.start', async ($: any, e: any) => ({ cwd: e.cwd }))
   on('skill.prompt', async ($: any, e: any) => ({ text: e.text }))
   on('classic.UserPromptExpansion', async () => ({}))
@@ -88,13 +119,18 @@ const skillUse = (skill: string, isError = false) => ({
   role: 'assistant', text: '', toolUses: [{ tool_use_id: 'toolu_' + skill, tool: 'Skill', input: { skill }, ...(isError ? { isError: true } : {}) }],
 })
 
+// A path under `root`, joined with the separator `root` uses.
+const at = (root: string, ...names: string[]) => [root, ...names].join(root.includes('\\') ? '\\' : '/')
+
 // A mod folder on disk: its manifest and hooks/.
 function mod(w: World, root: string) {
-  w.existing.add(canon(root + '\\.claude-plugin\\plugin.json'))
-  w.existing.add(canon(root + '\\hooks'))
+  w.existing.add(at(root, '.claude-plugin', 'plugin.json'))
+  w.existing.add(at(root, 'hooks'))
 }
 
 const MOD = 'C:\\repo\\mods\\demo'
+// The same mod as macOS and Linux write it.
+const POSIX_MOD = '/Users/me/repo/mods/demo'
 
 describe('skill-router', () => {
   describe('suggestions', () => {
@@ -622,6 +658,121 @@ describe('skill-router', () => {
       for (let i = 0; i < inputs.length; i++) expect(w.calls[i]).toMatchObject(inputs[i])
       expect(w.logs).toEqual([])
     })
+  })
+
+  // The mod gate with the paths macOS and Linux write, and the walk with both path styles: every OS
+  // runs both, so a fixture that holds on one OS only fails on the others.
+  describe('mod files: POSIX paths, and both path styles on every OS', () => {
+    test('a subagent\'s Agent, Workflow, merge, cloud launch or mod write passes and leaves the gates armed', async ($, on) => {
+      const w = world(on)
+      await start($)
+      mod(w, POSIX_MOD)
+      const sub = [
+        { tool: 'Agent', description: 'd', prompt: 'p', model: 'sonnet' },
+        { tool: 'Workflow', name: 'review' },
+        { tool: 'Bash', command: 'gh pr merge 12 --squash' },
+        { tool: 'Bash', command: 'claude --cloud "x"' },
+        { tool: 'Write', file_path: at(POSIX_MOD, 'hooks', 'register.js'), content: 'x' },
+      ]
+      for (const input of sub) expect(isRefused(await $.tool.call({ ...input, agentId: 'agent-7' } as any))).toBe(false)
+      expect(w.logs).toEqual([])
+      for (const input of sub) expect(isRefused(await $.tool.call(input as any))).toBe(true)
+    })
+
+    test('Write in a mod: held once naming smart-mods', async ($, on) => {
+      const w = world(on)
+      await start($)
+      mod(w, POSIX_MOD)
+      const input = { tool: 'Write', file_path: at(POSIX_MOD, 'hooks', 'register.js'), content: 'export function register(on) {}' }
+      const r = await $.tool.call(input as any)
+      expect(denyText(r)).toContain("before writing a mod's files, load smart-mods")
+      expect(w.logs).toEqual([{ text: 'skill-router: Write fermato una volta, da caricare prima: smart-mods', to: 'transcript' }])
+      expect(isRefused(await $.tool.call(input as any))).toBe(false)
+      expect(isRefused(await $.tool.call({ ...input, file_path: at(POSIX_MOD, 'tests', 'a.test.ts') } as any))).toBe(false)
+    })
+
+    test('an Edit that draws (ui.render) in a mod also asks for mod-ui, once', async ($, on) => {
+      const w = world(on)
+      await start($)
+      mod(w, POSIX_MOD)
+      await load($, 'smart-mods')
+      const input = { tool: 'Edit', file_path: at(POSIX_MOD, 'hooks', 'register.js'), old_string: '}', new_string: "on('ui.render', { component: 'AbovePrompt' }, draw)\n}" }
+      const r = await $.tool.call(input as any)
+      expect(denyText(r)).toContain("before drawing a mod's interface, load mod-ui")
+      expect(denyText(r)).not.toContain('smart-mods')
+      expect(isRefused(await $.tool.call(input as any))).toBe(false)
+    })
+
+    test('a new mod: writing under hooks/ next to a manifest counts before hooks/ exists', async ($, on) => {
+      const w = world(on)
+      await start($)
+      w.existing.add(at(POSIX_MOD, '.claude-plugin', 'plugin.json'))
+      const r = await $.tool.call({ tool: 'Write', file_path: at(POSIX_MOD, 'hooks', 'hooks.json'), content: '{ "modules": ["./register.js"] }' } as any)
+      expect(isRefused(r)).toBe(true)
+    })
+
+    test('files outside a mod, and plugins without hooks/, pass', async ($, on) => {
+      const w = world(on)
+      await start($)
+      w.existing.add('/Users/me/repo/skills-plugin/.claude-plugin/plugin.json')
+      expect(isRefused(await $.tool.call({ tool: 'Write', file_path: '/Users/me/repo/src/app.ts', content: 'x' } as any))).toBe(false)
+      expect(isRefused(await $.tool.call({ tool: 'Write', file_path: '/Users/me/repo/skills-plugin/skills/a/SKILL.md', content: 'x' } as any))).toBe(false)
+      expect(w.logs).toEqual([])
+      // The manifest was found and read as a plugin without hooks/.
+      expect(w.fsCalls.some(p => stubbed(new Set(['/Users/me/repo/skills-plugin/hooks']), p))).toBe(true)
+    })
+
+    // The stub itself: it takes each file only as a host can write it, so a mod that sends $.fs.exists
+    // a relative path, or the wrong fixture, finds nothing and its tests fail.
+    test('the file system stub matches exact host paths only', () => {
+      const posix = at(POSIX_MOD, '.claude-plugin', 'plugin.json')
+      const win = at(MOD, '.claude-plugin', 'plugin.json')
+      const both = new Set([posix, win])
+      // As each host delivers them.
+      expect(stubbed(both, posix)).toBe(true)
+      expect(stubbed(both, 'D:' + posix.replace(/\//g, '\\'))).toBe(true)
+      expect(stubbed(both, win)).toBe(true)
+      expect(stubbed(both, win.replace(/\\/g, '/').toUpperCase())).toBe(true)
+      expect(stubbed(both, '/Users/x/claude-skills/mods/skill-router/' + win)).toBe(true)
+      // A POSIX path made relative and resolved against a folder, or with the case changed.
+      expect(stubbed(new Set([posix]), posix.slice(1))).toBe(false)
+      expect(stubbed(new Set([posix]), '/Users/x/claude-skills/mods/skill-router/' + posix.slice(1))).toBe(false)
+      expect(stubbed(new Set([posix]), 'D:\\work' + posix.replace(/\//g, '\\'))).toBe(false)
+      expect(stubbed(new Set([posix]), posix.toLowerCase())).toBe(false)
+      // A Windows path made relative, or under a folder that is not absolute.
+      expect(stubbed(new Set([win]), '/Users/x/skill-router/' + win.slice(3))).toBe(false)
+      expect(stubbed(new Set([win]), 'skill-router/' + win)).toBe(false)
+      // The two fixtures name different files.
+      expect(stubbed(new Set([win]), posix)).toBe(false)
+      expect(stubbed(new Set([posix]), win)).toBe(false)
+      expect(stubbed(new Set([at(MOD, 'hooks')]), at(POSIX_MOD, 'hooks'))).toBe(false)
+    })
+
+    for (const root of [MOD, POSIX_MOD]) {
+      test('the walk asks for the nearest manifest first: ' + root, async ($, on) => {
+        const w = world(on)
+        await start($)
+        mod(w, root)
+        expect(isRefused(await $.tool.call({ tool: 'Write', file_path: at(root, 'hooks', 'register.js'), content: 'x' } as any))).toBe(true)
+        // hooks/ is not asked for: the file is under it.
+        const asked = [at(root, 'hooks', '.claude-plugin', 'plugin.json'), at(root, '.claude-plugin', 'plugin.json')]
+        expect(w.fsCalls.length).toBe(asked.length)
+        for (let i = 0; i < asked.length; i++) expect(stubbed(new Set([asked[i]]), w.fsCalls[i])).toBe(true)
+      })
+
+      test('failure path: a file system that throws passes the write and leaves the gate armed: ' + root, async ($, on) => {
+        const w = world(on)
+        await start($)
+        mod(w, root)
+        w.failFs = true
+        const input = { tool: 'Write', file_path: at(root, 'src', 'a.js'), content: 'x' }
+        expect(isRefused(await $.tool.call(input as any))).toBe(false)
+        expect(w.fsCalls.length).toBeGreaterThan(0)
+        expect(w.logs).toEqual([])
+        w.failFs = false
+        expect(isRefused(await $.tool.call(input as any))).toBe(true)
+      })
+    }
   })
 
   describe('observers pass on unchanged', () => {
