@@ -35,7 +35,9 @@ const GITHUB_MERGE_RE = /^Merge pull request #\d+ from /;
 const AUTOSQUASH_RE = /^(?:(?:fixup|squash|amend)! )+/;
 const COMMIT_HEAD_RE = /^([^()!]*)(?:\(([^()]*)\))?(!)?$/;
 const SCOPE_RE = /^[a-z0-9-]+$/;
-const RELEASE_VERSION_RE = /^v?\d+\.\d+\.\d+(?:-[0-9a-z]+(?:\.[0-9a-z]+)*)?$/;
+// A SemVer version with an optional prerelease; the hyphen rules of the description reject `--`.
+const RELEASE_VERSION_RE = /^v?\d+\.\d+\.\d+(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/;
+const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
 const DEPENDABOT_PREFIX = 'dependabot/';
 const SCISSORS = ' ------------------------ >8 ------------------------';
 
@@ -108,6 +110,9 @@ function descriptionSpacingProblems(rest) {
 }
 
 function commitProblems(line) {
+  if (line.startsWith(BYTE_ORDER_MARK)) {
+    return ['the subject starts with a byte order mark; save the message as UTF-8 without BOM'];
+  }
   if (line.trim() === '') return ['the subject is empty'];
   const specialProblem = specialSubjectProblem(line);
   if (specialProblem !== null) return [specialProblem];
@@ -202,15 +207,16 @@ export function checkBranchName(name) {
 
 /**
  * The first line of a commit message that is neither blank nor a comment, or null.
- * Like git, it drops a leading byte order mark, skips lines starting with the comment character
- * (default "#", null for none) and ignores everything from the scissors line that
- * "git commit -v" writes.
+ * Like git, it skips lines starting with the comment character or string (default "#", null
+ * for none) and ignores everything from the scissors line that "git commit -v" writes. A leading
+ * byte order mark stays: git keeps it in the stored message, and checkCommitSubject rejects it.
  */
 export function firstMessageLine(text, { commentChar = '#' } = {}) {
-  const lines = String(text).replace(/^\uFEFF/, '').split('\n').map(withoutCarriageReturn);
+  const lines = String(text).split('\n').map(withoutCarriageReturn);
   const hasComments = commentChar !== null;
   const scissorsAt = hasComments ? lines.indexOf(`${commentChar}${SCISSORS}`) : -1;
   const message = scissorsAt === -1 ? lines : lines.slice(0, scissorsAt);
+  const isBlank = (line) => /^[ \t]*$/.test(line);
   const isComment = (line) => hasComments && line.startsWith(commentChar);
-  return message.find((line) => line.trim() !== '' && !isComment(line)) ?? null;
+  return message.find((line) => !isBlank(line) && !isComment(line)) ?? null;
 }

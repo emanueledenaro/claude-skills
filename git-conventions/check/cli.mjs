@@ -122,9 +122,12 @@ function prTitle(args) {
     ?? report(checkPrTitle(args[0]), `ok: PR title "${args[0]}"`);
 }
 
-function commentChar() {
-  const configured = gitOutput(['config', '--get', 'core.commentChar']);
-  return configured === null || configured === '' || configured === 'auto' ? '#' : configured;
+// What git strips from a message: the last core.commentChar or core.commentString, "#" by default.
+function commentMarker() {
+  const configured = gitOutput(['config', '--get-regexp', '^core[.]comment(char|string)$']);
+  const lastLine = configured?.split('\n').at(-1) ?? '';
+  const value = lastLine.includes(' ') ? lastLine.slice(lastLine.indexOf(' ') + 1) : '';
+  return value === '' || value === 'auto' ? '#' : value;
 }
 
 function isMergeInProgress() {
@@ -132,8 +135,9 @@ function isMergeInProgress() {
   return mergeHead !== null && mergeHead !== '' && existsSync(mergeHead);
 }
 
-// Amending a merge commit keeps its subject, with no MERGE_HEAD around.
-function amendsMergeCommit(subject) {
+// Amending a merge commit keeps its subject, with no MERGE_HEAD around. The hook cannot tell an
+// amend from a new commit that reuses the subject (git commit -C HEAD), so both pass.
+function repeatsHeadMergeSubject(subject) {
   return gitOutput(['rev-parse', '-q', '--verify', 'HEAD^2']) !== null
     && gitOutput(['log', '-1', '--format=%s', 'HEAD']) === subject;
 }
@@ -147,12 +151,12 @@ function commitMsg(args) {
   } catch (error) {
     return usageError(`cannot read ${files[0]}: ${error.message}`);
   }
-  const line = firstMessageLine(text, { commentChar: commentChar() });
+  const line = firstMessageLine(text, { commentChar: commentMarker() });
   if (line === null) {
     err('commit message is empty. expected a first line <type>[(scope)][!]: <description>');
     return 1;
   }
-  const isMerge = args.includes('--merge') || isMergeInProgress() || amendsMergeCommit(line);
+  const isMerge = args.includes('--merge') || isMergeInProgress() || repeatsHeadMergeSubject(line);
   // fixup!, squash! and amend! are local work before an autosquash: fine in a message, not in a range.
   return report(
     checkCommitSubject(line, { isMerge, allowAutosquash: true }),

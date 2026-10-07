@@ -9,6 +9,9 @@ import {
   isDefaultMainMerge,
 } from './rules.mjs';
 
+// Written as a code point, never as the invisible character itself.
+const BOM = String.fromCharCode(0xfeff);
+
 function assertOk(result, what) {
   assert.equal(result.ok, true, `${what} should be valid: ${result.message}`);
   assert.deepEqual(result.errors, []);
@@ -31,6 +34,8 @@ describe('branch names', () => {
     'release/v0.3.0-beta.1',
     'release/2.0.0',
     'release/v1.2.3-rc.1',
+    'release/v1.2.0-rc-1',
+    'release/1.0.0-alpha-1.beta-2',
     'release/next-sprint',
     'chore/update-dependencies',
     'main',
@@ -61,6 +66,9 @@ describe('branch names', () => {
     ['release/a.b', 'dot without a version', 'dot is allowed only in a version under release/'],
     ['release/add.login', 'dot without a version', 'dot is allowed only in a version under release/'],
     ['release/1.x.final', 'dot without a version', 'dot is allowed only in a version under release/'],
+    ['release/v1.2.0--rc', 'double hyphen in the prerelease', 'double hyphen'],
+    ['release/v1.2.0-', 'prerelease cut short', 'ends with a hyphen'],
+    ['release/v1.2.0-rc..1', 'double dot in the prerelease', 'double dot'],
     ['feature/a/b', 'second slash', 'second "/"'],
     ['add-login', 'no prefix', 'no <type>/ prefix'],
     ['Main', 'main in uppercase', 'no <type>/ prefix'],
@@ -180,6 +188,14 @@ describe('commit subjects', () => {
     });
   });
 
+  it('rejects a leading byte order mark with a message that says how to fix it', () => {
+    for (const subject of [`${BOM}feat: add a thing`, `${BOM}`, `${BOM}Update the readme`]) {
+      assertInvalid(checkCommitSubject(subject), JSON.stringify(subject), 'byte order mark');
+      assertInvalid(checkCommitSubject(subject, { allowAutosquash: true }), JSON.stringify(subject), 'UTF-8 without BOM');
+      assertInvalid(checkPrTitle(subject), JSON.stringify(subject), 'byte order mark');
+    }
+  });
+
   it('tolerates a trailing carriage return from a Windows message file', () => {
     assertOk(checkCommitSubject('feat: add a thing\r'), 'CRLF subject');
   });
@@ -272,9 +288,10 @@ describe('commit message files', () => {
     assert.equal(firstMessageLine(`;${scissors.slice(1)}\nfeat: x\n`, { commentChar: ';' }), null);
   });
 
-  it('strips a leading UTF-8 byte order mark', () => {
-    assert.equal(firstMessageLine('﻿feat: one\n'), 'feat: one');
-    assert.equal(firstMessageLine('﻿# comment\nfeat: one\n'), 'feat: one');
+  it('keeps a leading UTF-8 byte order mark, as git stores it in the message', () => {
+    assert.equal(firstMessageLine(`${BOM}feat: one\n`), `${BOM}feat: one`);
+    assert.equal(firstMessageLine(`${BOM}# comment\nfeat: one\n`), `${BOM}# comment`);
+    assert.equal(firstMessageLine(`${BOM}\nfeat: one\n`), BOM, 'a line with only a BOM is not blank');
   });
 
   it('honors another comment character, and none with null', () => {

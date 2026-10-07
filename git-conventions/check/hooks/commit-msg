@@ -11,7 +11,7 @@ if [ ! -f "$cli" ]; then
 fi
 node_bin=${GIT_CONVENTIONS_NODE:-node}
 if ! command -v "$node_bin" >/dev/null 2>&1; then
-  echo "git-conventions: node not found, commit message not checked" >&2
+  echo "git-conventions: $node_bin not found, commit message not checked" >&2
   exit 0
 fi
 # The CLI sees a merge in progress or an amended merge commit by itself.

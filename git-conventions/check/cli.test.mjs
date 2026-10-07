@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 const CHECK_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI = join(CHECK_DIR, 'cli.mjs');
 const SCISSORS = '# ------------------------ >8 ------------------------';
+// Written as a code point, never as the invisible character itself.
+const BOM = String.fromCharCode(0xfeff);
 const tempDirs = [];
 
 after(() => {
@@ -159,8 +161,20 @@ describe('commit-msg command', () => {
     assert.match(result.err, /empty/);
   });
 
-  it('strips a leading byte order mark', () => {
-    assert.equal(runCommitMsg(makeRepo(), '\uFEFFfeat: add a thing\n').code, 0);
+  it('fails a leading byte order mark, which git keeps in the stored subject', () => {
+    const result = runCommitMsg(makeRepo(), `${BOM}feat: add a thing\n`);
+    assert.equal(result.code, 1);
+    assert.match(result.err, /byte order mark; save the message as UTF-8 without BOM/);
+  });
+
+  it('fails a commit-range commit whose message starts with a byte order mark', () => {
+    const repo = makeRepo();
+    const file = join(makeTempDir(), 'bom.txt');
+    writeFileSync(file, `${BOM}feat: add a thing\n`);
+    repo.git('commit', '--quiet', '--allow-empty', '--no-verify', '-F', file);
+    const result = repo.range();
+    assert.equal(result.code, 1);
+    assert.match(result.err, /byte order mark/);
   });
 
   it('reports a message with only a git commit -v scissors block as empty', () => {
@@ -179,6 +193,25 @@ describe('commit-msg command', () => {
     assert.match(notComment.err, /commit subject "# not a comment here"/);
     repo.git('config', 'core.commentChar', 'auto');
     assert.equal(runCommitMsg(repo, '# a comment\nfeat: add a thing\n').code, 0);
+  });
+
+  it('honors core.commentString, and the last of commentChar and commentString wins', () => {
+    const repo = makeRepo();
+    repo.git('config', 'core.commentString', ';;');
+    assert.equal(runCommitMsg(repo, ';; a comment\nfeat: add a thing\n').code, 0);
+    const notComment = runCommitMsg(repo, '# not a comment here\nfeat: add a thing\n');
+    assert.equal(notComment.code, 1);
+    assert.match(notComment.err, /commit subject "# not a comment here"/);
+    repo.git('config', 'core.commentChar', ';');
+    assert.equal(runCommitMsg(repo, '; a comment\nfeat: add a thing\n').code, 0);
+    assert.equal(runCommitMsg(repo, ';; a comment\nfeat: add a thing\n').code, 0, '; also starts ;;');
+    // git config updates a key in place, so unset it first to put it after commentChar
+    repo.git('config', '--unset', 'core.commentString');
+    repo.git('config', 'core.commentString', '@@');
+    assert.equal(runCommitMsg(repo, '@@ a comment\nfeat: add a thing\n').code, 0);
+    const oldChar = runCommitMsg(repo, '; not a comment now\nfeat: add a thing\n');
+    assert.equal(oldChar.code, 1);
+    assert.match(oldChar.err, /commit subject "; not a comment now"/);
   });
 
   it('accepts fixup!, squash! and amend! on a valid subject, not on an invalid one', () => {
@@ -476,7 +509,23 @@ describe('commit-msg hook run by git', () => {
       GIT_CONVENTIONS_NODE: 'no-such-node-binary',
     });
     assert.equal(result.code, 0, result.err);
-    assert.match(result.err, /git-conventions: node not found, commit message not checked/);
+    assert.match(result.err, /git-conventions: no-such-node-binary not found, commit message not checked/);
     assert.equal(repo.subject(), 'not a conventional subject');
+  });
+
+  it('lets a repeated merge subject through when a commit reuses it, and commit-range still fails it', () => {
+    const repo = makeRepoWithHook();
+    repo.git('checkout', '--quiet', '-b', 'feature/x');
+    commitOk(repo, 'feat: work on the branch');
+    repo.git('checkout', '--quiet', 'main');
+    commitOk(repo, 'fix: move main forward');
+    repo.git('checkout', '--quiet', 'feature/x');
+    const merge = repo.tryGit('merge', '--no-ff', '--no-edit', 'main');
+    assert.equal(merge.code, 0, merge.err);
+    const reuse = repo.tryGit('commit', '--allow-empty', '-C', 'HEAD');
+    assert.equal(reuse.code, 0, reuse.err);
+    const result = repo.range();
+    assert.equal(result.code, 1);
+    assert.match(result.err, /accepted only on a merge commit/);
   });
 });
