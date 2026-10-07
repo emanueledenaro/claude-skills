@@ -484,6 +484,10 @@ describe('skill-router', () => {
       "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
       "Start-Process -FilePath claude.exe -ArgumentList '--model','opus','--cloud','\"fix the -p flag parsing\"'",
       'cmd /c start "" claude --cloud x',
+      // claude's own -p after the program word, a colon form before a space.
+      'start claude -p x --model fable',
+      'start "" claude -p "m" --cloud s',
+      "Start-Process -FilePath: claude -ArgumentList '-p','x','--model','fable'",
     ]) {
       test('claude run by Start-Process or cmd start is held once as a cloud launch, then passes: ' + command, async ($, on) => {
         const w = world(on)
@@ -494,6 +498,15 @@ describe('skill-router', () => {
         expect(w.calls).toEqual([expect.objectContaining({ command })])
       })
     }
+
+    test('in Bash, where start is cmd\'s, claude with its own -p is held once too', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const command = 'start claude -p x --model fable'
+      expect(denyText(await $.tool.call({ tool: 'Bash', command } as any))).toContain('before launching a cloud session, load model-mix and cloud-worker')
+      expect(isRefused(await $.tool.call({ tool: 'Bash', command } as any))).toBe(false)
+      expect(w.calls).toEqual([expect.objectContaining({ command })])
+    })
 
     test('an indirect launch names only model-mix when cloud-worker is not installed', async ($, on) => {
       world(on, without('cloud-worker'))
@@ -512,6 +525,8 @@ describe('skill-router', () => {
         'git commit -m "docs: never Start-Process claude --cloud"',
         'Start-Process notepad',
         'Start-Process notepad claude',
+        'Start-Process https://www.anthropic.com/claude',
+        'start chrome https://claude.ai',
       ]
       for (const command of commands) expect(isRefused(await $.tool.call({ tool: 'PowerShell', command } as any)), command).toBe(false)
       expect(w.calls.map(c => c.command)).toEqual(commands)

@@ -855,6 +855,10 @@ describe('model-guard', () => {
       "Start-Process -FilePath claude -ArgumentList '--model','opus','--cloud','\"fix the -p flag parsing\"'",
       "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
       'cmd /c start "" claude --cloud x',
+      // claude's own -p after the program word (the Bash tool's start is cmd's), a colon form before a space.
+      'start claude -p x --model fable',
+      'start "" claude -p "m" --cloud s',
+      "Start-Process -FilePath: claude -ArgumentList '-p','x','--model','fable'",
     ]
     for (const [color, limits] of [['green', GREEN], ['red', RED], ['paused', PAUSED]] as [string, unknown[]][]) {
       test('every one is denied with the run-it-directly reason, ' + color, async ($, on) => {
@@ -864,7 +868,7 @@ describe('model-guard', () => {
           for (const tool of ['PowerShell', 'Bash']) {
             const r = await $.tool.call({ tool, command } as any)
             expect(isRefused(r), command).toBe(true)
-            expect(denyText(r)).toContain('Run the same launch directly as a claude command, for example claude --cloud "<task>" or claude -p "<msg>" --cloud <session>.')
+            expect(denyText(r)).toContain('Run the same launch directly as a claude command; start a new cloud session from a real terminal tab (cloud-worker).')
           }
         }
         const monitor = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: INDIRECT[0] } as any)
@@ -886,6 +890,8 @@ describe('model-guard', () => {
         'Start-Process notepad',
         'Start-Process notepad claude',
         'Start-Process code D:\\Progetti\\claude',
+        'Start-Process https://www.anthropic.com/claude',
+        'start chrome https://claude.ai',
       ]
       for (const command of commands) expect(isRefused(await $.tool.call({ tool: 'PowerShell', command } as any)), command).toBe(false)
       expect(w.calls.map(c => c.command)).toEqual(commands)

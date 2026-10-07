@@ -674,6 +674,29 @@ describe('indirect launches: claude run by Start-Process or cmd start is refused
     'cmd /c start "" claude --cloud x',
     "pwsh -Command \"Start-Process claude -ArgumentList '--cloud','x'\"",
     "cd repo; Start-Process claude -ArgumentList '--cloud','x'; echo started",
+    // After the program word the words are claude's own: its -p is no prefix of -Path (the Bash tool's
+    // start is cmd's). Only a -FilePath of two letters or more is still read there, as PowerShell binds it.
+    'start claude -p x --model fable',
+    'cmd /c start claude -p x --model fable',
+    'start "" claude -p "m" --cloud s',
+    'start /b claude -p x',
+    'start claude --bg -p x',
+    'Start-Process claude -p x',
+    'bash -lc "start claude -p x"',
+    'Start-Process notepad -FilePath claude',
+    'Start-Process notepad -File claude',
+    // `-Name:` before a space takes the next word; -vb, -db, -cf are switches; a hashtable is one value.
+    "Start-Process -FilePath: claude -ArgumentList '-p','x','--model','fable'",
+    "Start-Process -ArgumentList: '--cloud', 'x' claude",
+    "Start-Process -Wait: $true claude -ArgumentList '--cloud','x'",
+    "Start-Process -vb claude -ArgumentList '--cloud','x'",
+    "Start-Process -db claude -ArgumentList '--cloud','x'",
+    "Start-Process -cf claude -ArgumentList '--cloud','x'",
+    "Start-Process -Environment @{ A = 'b' } claude -ArgumentList '--cloud','x'",
+    "Start-Process -Environment @{A='b';C='d'} claude -ArgumentList '--cloud','x'",
+    // A bare path cannot be told from claude.exe, and a file:// URL runs it.
+    'start D:\\x\\claude',
+    'Start-Process file:///C:/Tools/claude.exe',
   ]
   const MENTIONS = [
     "git commit -F - <<'EOF'\nStart-Process claude -ArgumentList '--cloud','x'\nEOF",
@@ -683,6 +706,8 @@ describe('indirect launches: claude run by Start-Process or cmd start is refused
     "gh pr create --title t --body 'run Start-Process claude -ArgumentList --cloud'",
     "Write-Output 'Start-Process claude --cloud x'",
     'echo Start-Process claude',
+    "git commit -m 'start claude'",
+    "git commit -F - <<'EOF'\nstart claude -p x\nEOF",
   ]
   const OTHER_PROGRAMS = [
     'Start-Process notepad',
@@ -691,6 +716,17 @@ describe('indirect launches: claude run by Start-Process or cmd start is refused
     'Start-Process code D:\\Progetti\\claude',
     'Start-Process -WorkingDirectory D:\\claude notepad',
     'start "" notepad claude',
+    "Start-Process notepad -ArgumentList 'claude'",
+    'start chrome https://claude.ai',
+    'start notepad -p claude',
+    'npm start',
+    'pm2 start claude',
+    'docker start claude',
+    // A URL or a folder is not claude.
+    'Start-Process https://www.anthropic.com/claude',
+    'Start-Process -FilePath https://www.anthropic.com/claude',
+    'start https://claude.ai/claude',
+    'Start-Process D:\\x\\claude\\',
   ]
   const COLORS: [string, any, any?][] = [
     ['green', budget(40)], ['red', budget(80)], ['red with redPolicy warn', budget(80), { redPolicy: 'warn' }],
@@ -707,7 +743,7 @@ describe('indirect launches: claude run by Start-Process or cmd start is refused
         const d: any = decideShell({ tool: 'PowerShell', command }, ctx(b, extra))
         expect(d.action, color + ': ' + command).toBe('deny')
         expect(d.reason).toContain('model-guard does not read claude launches started through Start-Process (start, saps) or cmd\'s start')
-        expect(d.reason).toContain('Run the same launch directly as a claude command, for example claude --cloud "<task>" or claude -p "<msg>" --cloud <session>.')
+        expect(d.reason).toContain('Run the same launch directly as a claude command; start a new cloud session from a real terminal tab (cloud-worker).')
         expect(d.input).toBeUndefined()
         expect(d).toMatchObject({ log: 'model-guard: claude launch through Start-Process or start blocked, run it directly', to: 'transcript' })
       }

@@ -929,25 +929,41 @@ function cloudLaunch(values) {
 // own parameters, and claude there is held once as a cloud launch whatever its arguments say.
 // Keep this block identical to model-guard's (rules.js).
 
-// Start-Process's switches and the parameters that take a value. PowerShell accepts any prefix of a name
-// (`-NoNew`, `-File`) and `-Name:value` as one word; an unknown name is taken to have a value.
-const START_SWITCHES = ['wait', 'nonewwindow', 'nnw', 'passthru', 'loaduserprofile', 'lup', 'usenewenvironment', 'verbose', 'debug', 'whatif', 'confirm']
+// Start-Process's switches and the parameters that take a value. PowerShell takes an exact name or alias
+// first (`-wi` is -WhatIf, not -WindowStyle), else any prefix of a name (`-NoNew`, `-File`). `-Name:value`
+// is one word, and `-Name:` before a space takes the next word. An unknown name is taken to have a value.
+const START_SWITCHES = ['wait', 'nonewwindow', 'nnw', 'passthru', 'loaduserprofile', 'lup', 'usenewenvironment', 'verbose', 'vb', 'debug', 'db', 'whatif', 'wi', 'confirm', 'cf']
 const START_VALUED = ['argumentlist', 'args', 'workingdirectory', 'windowstyle', 'verb', 'credential', 'environment', 'redirectstandardinput', 'redirectstandardoutput', 'redirectstandarderror', 'rsi', 'rso', 'rse']
 const START_FILE = ['filepath', 'path', 'pspath']
 // cmd's start switches that take the next word (`/D C:\dir`); the others (`/MIN`, `/WAIT`, `/B`) take none.
 const CMD_VALUED = ['d', 'node', 'affinity']
 
 function startSwitch(name) {
+  if (START_SWITCHES.includes(name)) return true
   return START_SWITCHES.some(s => s.startsWith(name)) && ![...START_VALUED, ...START_FILE].some(v => v.startsWith(name))
 }
 
-// The words after a starter, as units: a word, or a `( ... )` group with what touches it (`@('a','b')`,
-// `(Get-Command claude).Source`). The statement runs on past breaks made only of parentheses (and of
-// newlines inside them, or after a ` or \ line continuation) and ends at any other separator.
+// `{` minus `}` in a word's raw text, outside quotes.
+function braceDelta(raw) {
+  let d = 0
+  let q = ''
+  for (const ch of raw) {
+    if (q) { if (ch === q) q = '' } else if (ch === "'" || ch === '"') q = ch
+    else if (ch === '{') d++
+    else if (ch === '}') d--
+  }
+  return d
+}
+
+// The words after a starter, as units: a word, or a group with what touches it: `( ... )` (`@('a','b')`,
+// `(Get-Command claude).Source`) or a hashtable `@{ ... }` (`@{ A = 'b' }`). The statement runs on past
+// breaks made only of parentheses (and of newlines inside a group, or after a ` or \ line continuation,
+// and of a hashtable's `;`) and ends at any other separator.
 function starterUnits(command, segments, k, ci) {
   const units = []
   let prev = segments[k][ci]
   let depth = 0
+  let braces = 0
   let carry = false
   for (let s = k; s < segments.length; s++) {
     for (let j = s === k ? ci + 1 : 0; j < segments[s].length; j++) {
@@ -956,56 +972,67 @@ function starterUnits(command, segments, k, ci) {
       for (const ch of command.slice(prev.end, tok.start)) {
         if (ch === '(') depth++
         else if (ch === ')') depth = Math.max(0, depth - 1)
-        else if (ch === ' ' || ch === '\t' || ((ch === '\n' || ch === '\r') && (depth > 0 || carry))) apart = apart || depth === 0
-        else return units
+        else if (ch === ' ' || ch === '\t' || ((ch === '\n' || ch === '\r') && (depth > 0 || braces > 0 || carry))) apart = apart || (depth === 0 && braces === 0)
+        else if (ch !== ';' || braces === 0) return units
       }
       prev = tok
-      carry = /^[`\\]$/.test(command.slice(tok.start, tok.end))
+      const raw = command.slice(tok.start, tok.end)
+      carry = /^[`\\]$/.test(raw)
       if (carry) continue
       if (apart) units.push([tok])
       else units[units.length - 1].push(tok)
+      braces = Math.max(0, braces + braceDelta(raw))
     }
   }
   return units
 }
 
 // Whether a starter (Start-Process, start, saps, cmd's start) runs claude: the -FilePath value when one
-// is given, else the first positional word; cmd's start takes a double-quoted first word as the window
-// title (`start "" claude`). A path counts (`C:\x\claude.exe`), and so does a group naming claude
-// (`(Get-Command claude).Source`).
+// is given before the program, else the first positional word; cmd's start takes a double-quoted first
+// word as the window title (`start "" claude`). The words after the program word are its own (cmd's
+// `start claude -p x`, where `-p` is claude's): there only a -FilePath of two letters or more (`-File`,
+// `-Path`; claude's short flags have one) is still read, as PowerShell binds it. A path counts
+// (`C:\x\claude.exe`), and so does a group naming claude (`(Get-Command claude).Source`); a URL
+// (`https://.../claude`) does not.
 function startsClaude(command, segments, k, ci) {
   const units = starterUnits(command, segments, k, ci)
-  const names = u => u.some(t => isClaude(t.value))
+  const url = v => v.includes('://') && !/^file:/i.test(v)
+  const names = u => u.some(t => isClaude(t.value) && !url(t.value))
   // The last unit of a value: PowerShell's array commas (`'a', 'b'`) carry it on.
   const valueEnd = j => {
     while (j + 1 < units.length && (command[units[j][units[j].length - 1].end - 1] === ',' || command[units[j + 1][0].start] === ',')) j++
     return j
   }
+  const cmdStart = baseName(segments[k][ci].value) === 'start'
   let file = null // null: no -FilePath; else whether one names claude
-  const positional = []
+  let program = null
+  let title = false
   for (let i = 0; i < units.length; i++) {
     const word = units[i].length === 1 ? units[i][0].value : ''
     const param = /^-([a-z][a-z0-9]*)(?::([\s\S]*))?$/i.exec(word)
     if (param) {
       const name = param[1].toLowerCase()
-      if (START_FILE.some(f => f.startsWith(name))) {
-        file = !!file || names(param[2] !== undefined ? [{ value: param[2] }] : units[i + 1] || [])
-        if (param[2] === undefined) i = valueEnd(i + 1)
-      } else if (param[2] === undefined && !startSwitch(name)) i = valueEnd(i + 1)
+      const inline = param[2] ? [{ value: param[2] }] : null
+      if (START_FILE.some(f => f.startsWith(name)) && (!program || name.length > 1)) {
+        file = !!file || names(inline || units[i + 1] || [])
+        if (!inline) i = valueEnd(i + 1)
+      } else if (!program && !inline && (param[2] === '' || !startSwitch(name))) i = valueEnd(i + 1)
       continue
     }
+    if (program) continue
     const sw = /^\/\/?([a-z][^/]*)$/i.exec(word)
     if (sw && !isClaude(word)) {
       if (CMD_VALUED.includes(sw[1].toLowerCase())) i = valueEnd(i + 1)
       continue
     }
-    positional.push(units[i])
+    if (file !== null) continue // after -FilePath, positional words are its arguments
+    if (cmdStart && !title && command[units[i][0].start] === '"' && !names(units[i])) {
+      title = true
+      continue
+    }
+    program = units[i]
   }
-  if (file !== null) return file
-  if (!positional.length) return false
-  if (names(positional[0])) return true
-  const title = baseName(segments[k][ci].value) === 'start' && command[positional[0][0].start] === '"'
-  return title && positional.length > 1 && names(positional[1])
+  return (program !== null && names(program)) || !!file
 }
 
 // The first argument that is not a flag (`expect -f launch.exp`, `powershell -NoProfile -File x.ps1`).

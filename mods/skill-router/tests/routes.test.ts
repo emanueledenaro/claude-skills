@@ -453,6 +453,29 @@ describe('indirect launches: claude run by Start-Process or cmd start is a cloud
       'start "worker" /D C:\\repo /MIN claude.exe --cloud x',
       'cmd /c start "" claude --cloud x',
       "pwsh -Command \"Start-Process claude -ArgumentList '--cloud','x'\"",
+      // After the program word the words are claude's own: its -p is no prefix of -Path (the Bash tool's
+      // start is cmd's). Only a -FilePath of two letters or more is still read there, as PowerShell binds it.
+      'start claude -p x --model fable',
+      'cmd /c start claude -p x --model fable',
+      'start "" claude -p "m" --cloud s',
+      'start /b claude -p x',
+      'start claude --bg -p x',
+      'Start-Process claude -p x',
+      'bash -lc "start claude -p x"',
+      'Start-Process notepad -FilePath claude',
+      'Start-Process notepad -File claude',
+      // `-Name:` before a space takes the next word; -vb, -db, -cf are switches; a hashtable is one value.
+      "Start-Process -FilePath: claude -ArgumentList '-p','x','--model','fable'",
+      "Start-Process -ArgumentList: '--cloud', 'x' claude",
+      "Start-Process -Wait: $true claude -ArgumentList '--cloud','x'",
+      "Start-Process -vb claude -ArgumentList '--cloud','x'",
+      "Start-Process -db claude -ArgumentList '--cloud','x'",
+      "Start-Process -cf claude -ArgumentList '--cloud','x'",
+      "Start-Process -Environment @{ A = 'b' } claude -ArgumentList '--cloud','x'",
+      "Start-Process -Environment @{A='b';C='d'} claude -ArgumentList '--cloud','x'",
+      // A bare path cannot be told from claude.exe, and a file:// URL runs it.
+      'start D:\\x\\claude',
+      'Start-Process file:///C:/Tools/claude.exe',
     ]) expect(shellGates(c), c).toEqual(['cloud'])
   })
 
@@ -468,6 +491,19 @@ describe('indirect launches: claude run by Start-Process or cmd start is a cloud
       'Start-Process -FilePath notepad claude.exe',
       'Start-Process code D:\\Progetti\\claude',
       'start "" notepad claude',
+      "git commit -m 'start claude'",
+      "git commit -F - <<'EOF'\nstart claude -p x\nEOF",
+      "Start-Process notepad -ArgumentList 'claude'",
+      'start chrome https://claude.ai',
+      'start notepad -p claude',
+      'npm start',
+      'pm2 start claude',
+      'docker start claude',
+      // A URL or a folder is not claude.
+      'Start-Process https://www.anthropic.com/claude',
+      'Start-Process -FilePath https://www.anthropic.com/claude',
+      'start https://claude.ai/claude',
+      'Start-Process D:\\x\\claude\\',
     ]) expect(shellGates(c), c).toEqual([])
   })
 })
