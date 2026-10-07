@@ -43,7 +43,7 @@ Matt Pocock's skills give the flow from idea to shipped PR. `coordinator-method`
 
 ## 6. Review, PR, merge
 
-- `code-review` (upstream, inside `implement`) is the implementer's pre-PR check: its reviewers run on Opus high per `model-mix`. It does not replace `merge-gate`: the gate still reviews the PR head sha, sized by the diff.
+- `code-review` (upstream, inside `implement`) is the implementer's pre-PR check: its reviewers run on Opus high per `model-mix`. It does not replace `merge-gate`: the gate still reviews the PR head sha, sized by the diff. Its Standards axis takes `clean-code` as a standards source: block rules are hard violations there, over its smell baseline.
 - `pr` writes the body. Title in the `git-conventions` commit format; `Closes #N` in the body for tickets the PR completes; UI PRs carry before/after screenshots and wait for the person's ok.
 - The coordinator merges, with `coordinator-method`'s rule (`gh pr merge N --merge --match-head-commit <sha> --subject ...`), after `merge-gate`. No merger subagent merges into main, and no auto-merge. After the merge: close the tickets, update the roadmap.
 
