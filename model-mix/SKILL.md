@@ -7,13 +7,13 @@ Pick the model for each piece of delegated work from the table, then check the b
 
 ## Models
 
-Two models carry the work: **Sonnet 5.5** for volume, **Opus 5.5** where a mistake costs the most. Plan metering ratios are unpublished, so API list prices are the proxy. For output and uncached input, Opus costs about 2× Sonnet and Fable 5.1 about 5× Sonnet; cached re-reads of a long context cost about the same on all three.
+Three models carry the work: **Haiku 5.5** for short reading and small mechanical work, **Sonnet 5.5** for implementation, **Opus 5.5** where a mistake costs the most. Plan metering ratios are unpublished, so API list prices are the proxy. For output and uncached input, Haiku costs about 1/20 of Sonnet while its prompt stays under 100K tokens and about 1/4 above, Opus about 2× Sonnet and Fable 5.1 about 5× Sonnet. Cached re-reads cost about the same on Sonnet, Opus and Fable; on Haiku they cost 1/20 of that under 100K tokens.
 
 | Work | Model | Effort |
 | --- | --- | --- |
 | Implementing a ticket, a feature, a fix | Sonnet | high |
-| Small mechanical ticket: one file, a text, a false alarm | Sonnet | medium |
-| Broad reading: exploring a codebase, fan-out readers in a workflow | Sonnet | medium |
+| Small mechanical ticket: one file, a text, a false alarm | Haiku | medium |
+| Broad reading: exploring a codebase, fan-out readers in a workflow | Haiku | medium |
 | Security-critical work: consents, permissions, secrets, auth, sandboxing | Opus | high |
 | Verify and judge stages: adversarial refuters, scoring panels, final review of a diff before merge | Opus | high (Pro: medium) |
 | Coordination: planning, decisions with the person, merges | the main session | |
@@ -22,19 +22,26 @@ Two models carry the work: **Sonnet 5.5** for volume, **Opus 5.5** where a mista
 How to apply it:
 
 - **Always name the model.** Unpinned workflow agents and subagents, built-in Explore and Plan included, inherit the session model, which is Opus 5.5 by default on every plan. In a Fable session, Explore runs on Opus.
-- **Agent tool:** `model: "sonnet"` or `model: "opus"`.
-- **Workflow script:** `agent(prompt, { model: 'sonnet', effort: 'medium' })` on fan-out stages, `{ model: 'opus', effort: 'high' }` on verify and judge stages. Give every agent of one stage the same model, effort, agent type, tools, schema and working directory: the shared prompt prefix is cached only between identical settings.
-- **Cloud session:** `claude --model sonnet --effort high --cloud "<task>"`, or `--model opus` for the security-critical rows. The docs do not say these flags reach the cloud session: check the model shown in the first cloud session on each machine, and if it differs, start the task with `/model sonnet` and `/effort high` lines.
-- **Routines and scheduled tasks:** set their model selector to Sonnet, unless the routine runs a verify or judge row.
+- **Agent tool:** `model` (`"haiku"`, `"sonnet"` or `"opus"`) and, from Claude Code v2.1.292, `effort` from the table: `model: "haiku", effort: "medium"`.
+- **Workflow script:** `agent(prompt, { model: 'haiku', effort: 'medium' })` on reading fan-out stages, `{ model: 'sonnet', effort: 'high' }` on implementation stages, `{ model: 'opus', effort: 'high' }` on verify and judge stages. Give every agent of one stage the same model, effort, agent type, tools, schema and working directory: the shared prompt prefix is cached only between identical settings.
+- **Cloud session:** `claude --model sonnet --effort high --cloud "<task>"`, `--model claude-haiku-5-5 --effort medium` for a small mechanical ticket, or `--model opus` for the security-critical rows. The docs do not say these flags reach the cloud session: check the model shown in the first cloud session on each machine, and if it differs, start the task with `/model` and `/effort` lines.
+- **Routines and scheduled tasks:** set their model selector to Sonnet; Haiku when the routine only reads and reports; Opus when it runs a verify or judge row.
 - When a piece of work fits two rows, take the stronger model and the higher effort: a security fix or a security verify is Opus high even when it is small, also on Pro.
 - If agents fail with an "Opus limit" or "Sonnet limit" message (whether a plan still has these family limits is undocumented), rerun that stage on the other family at high effort, say so in the report, and tell the person.
+
+Haiku 5.5 (`claude-haiku-5-5`, released 2026-10-07):
+
+- **The alias:** in Claude Code v2.1.293 and later, `haiku` is Haiku 5.5 on the Anthropic API, which is what Pro and Max use. Check `claude --version` once per machine. On an older version, or on Bedrock, Google Cloud, Microsoft Foundry or Claude Platform on AWS, `haiku` is still Haiku 4.5: give the Haiku rows to Sonnet there. Never pin Haiku 4.5 (`claude-haiku-4-5-20251001`), even while it stays active (retirement not sooner than 2026-10-15): its last ticket came back wrong.
+- **Keep it short:** the price steps up 5× once a prompt passes 100K tokens, and a subagent resends its whole context every turn. One area per reader, no whole-repo or long-log reads. Work that needs more than about 100K tokens of context goes to Sonnet.
+- **Never on** a feature or a fix beyond the small-mechanical row, the security rows, or verify and judge stages, also when the budget is red.
+- **Trial:** the first Haiku ticket in each project gets an Opus review of its diff before merge. If a Haiku ticket or reading comes back wrong, move that row back to Sonnet in this project, say so in the report, and tell the person.
+- Thinking cannot be switched off on Haiku 5.5; effort is the lever, medium by default.
 
 Outside the default mix (these can bill usage credits):
 
 - **Fable 5.1:** off by default. Only on Max 20x with a green budget, and only for the single most consequential judgment (the final review of a security-critical diff). Never on Pro, where it is not part of the plan. Never on `-p`, background or cloud workers: past the Fable cap, `-p` runs bill credits without asking when credits are on, background and teammate sessions wait 5 minutes for consent and then drop the turn, and in cloud sessions the consent prompt depends on the app.
 - **Fast mode (`/fast`):** credits only. Never for delegated work.
 - **Ultrareview (`/code-review ultra`):** credits after 3 one-time free runs per account. Only when the person asks for it.
-- **Haiku:** not used. Haiku 4.5 is retired (too old, and its last ticket came back wrong), and the docs do not say which version the `haiku` alias points to, so never use the alias. When Haiku 5.5 ships, pin its full model ID, trial it on one small mechanical ticket with an Opus review, and if it passes, ask the person to update this row: it then takes the small-mechanical and broad-reading rows on Pro and in yellow.
 
 ## Plan profiles
 
@@ -69,4 +76,4 @@ Read `budget.md` next to this file: it turns the usage reading and the banked re
 - **Yellow**, margin over 10 up to 25: one profile down (Max 20x → Max 5x → Pro → Solo), with that profile's cloud-session column for new sessions. Open PRs finish before a new thread starts, and finishing open work continues as in red, also on Solo. Compact the main session at the next natural break.
 - **Red**, margin over 25 or weekly used ≥ 100 − reserve: start nothing new. Finishing open work continues: a fix message to a worker on its own open PR, a final review in the main session, merging what is green. Tell the person once, and ask them to redeem a banked weekly reset when `budget.md` says it is worth it. Compact the main session.
 
-**Why:** the 5-hour and weekly limits are shared by everything on the account, including the person's own chats, and Opus everywhere burns them. Sonnet carries the volume and Opus is kept for the work where a mistake costs the most. Pacing against the elapsed week instead of a fixed stop uses the whole plan without running dry before the reset.
+**Why:** the 5-hour and weekly limits are shared by everything on the account, including the person's own chats, and Opus everywhere burns them. Haiku takes the short reading and mechanical volume, Sonnet the implementation, and Opus is kept for the work where a mistake costs the most. Pacing against the elapsed week instead of a fixed stop uses the whole plan without running dry before the reset.

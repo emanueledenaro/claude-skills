@@ -31,7 +31,7 @@ Research that feeds a plan, a skill or a mod is only as good as its weakest clai
 
 ## 4. Readers
 
-- One reader per area, Sonnet medium per `model-mix`, read-only, web fetch and search allowed. Every reader of the stage gets the same settings and a shared prompt prefix.
+- One reader per area, Haiku medium per `model-mix` (Sonnet medium when an area needs more than about 100K tokens of sources), read-only, web fetch and search allowed. Every reader of the stage gets the same settings and a shared prompt prefix.
 - A reader returns atomic claims, one fact each, in the claim schema (`workflow.md`): id, claim, scope (plan, version, platform), source URL, source date, quote under 15 words, confidence (high, medium, low), kind (security, money, consent or other), and the sources it could not open.
 - Readers also return open questions: what they looked for and did not find. An empty list is suspicious.
 
