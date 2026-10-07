@@ -5,7 +5,7 @@ description: "Claude Code mods judgement: whether a mod or a lighter extension (
 
 A mod is a plugin whose JavaScript or TypeScript hooks module runs inside the Claude Code process, unsandboxed, with the person's permissions. This skill decides when to write one and how to ship it safely. API detail lives in the built-in `plugin-authoring` skill (`/plugin-authoring`) and in the types Claude Code writes into the mod's `.claude-plugin/types/` each time it loads the mod from `--plugin-dir` or loads a mod Claude wrote: those types match the running version and win over the docs pages and over memory. What a mod draws and how it looks: `mod-ui`.
 
-Model per piece of work (`model-mix`): a guard (`tool.call`, `tool.check`, `plugin.register` hooks), anything that reads secrets or approves tool calls, and vetting someone else's mod are its security-critical row, Opus high, even when small. Delegated vetting goes to one Opus high agent with the whole source, never to Sonnet fan-out readers. Panes, bands, commands and restyling are implementation: Sonnet high.
+Model per piece of work (`model-mix`): a guard (`tool.call`, `tool.check`, `plugin.register` hooks), anything that reads secrets or approves tool calls, and vetting someone else's mod are its security-critical row, Opus high, even when small. Delegated vetting goes to one Opus high agent with the whole source, never to fan-out readers. Panes, bands, commands and restyling are implementation: Sonnet high.
 
 ## 1. Gate: pick the lightest extension that does the job
 
