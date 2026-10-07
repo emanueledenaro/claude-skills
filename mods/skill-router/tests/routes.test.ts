@@ -332,6 +332,17 @@ describe('shell commands', () => {
     ]) expect(shellGates(c), c).toEqual(['cloud'])
   })
 
+  test('Start-Process: the words of a quoted prompt in -ArgumentList never read as flags', () => {
+    for (const c of [
+      "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'",
+      "Start-Process claude -ArgumentList '--model','fable','--cloud','\"explain -p\"'",
+      // A `(` or `;` in an element's text keeps the flags after it.
+      "Start-Process claude -ArgumentList '(a);b','--cloud','task'",
+    ]) expect(shellGates(c), c).toEqual(['cloud'])
+    // An element without inner quotes is split by Start-Process: its -p reaches claude as a flag (a follow-up).
+    expect(shellGates("Start-Process claude -ArgumentList '--cloud','session_1 -p x'")).toEqual([])
+  })
+
   test('PR merges', () => {
     expect(shellGates('gh pr merge 12 --squash --match-head-commit abc')).toEqual(['merge'])
     expect(shellGates('gh.exe pr merge 12 --auto')).toEqual(['merge'])
@@ -353,7 +364,7 @@ describe('shell commands', () => {
   })
 
   test('local headless runs (claude -p, --bg) are not gated here', () => {
-    for (const c of ['claude -p "refactor the parser"', 'claude --bg "nightly sweep"', 'claude --print --model fable "x"']) {
+    for (const c of ['claude -p "refactor the parser"', 'claude --bg "nightly sweep"', 'claude --print --model fable "x"', 'claude --resume abc -p "x"', 'claude --bg --resume abc']) {
       expect(shellGates(c), c).toEqual([])
     }
   })

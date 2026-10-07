@@ -216,6 +216,25 @@ describe('nested shells', () => {
     const x: any = decideShell({ tool: 'Bash', command: 'echo t | xargs claude --cloud' }, ctx(b))
     expect(x.input.command).toBe('echo t | xargs claude --model sonnet --cloud')
   })
+
+  test('Start-Process: the words of a quoted prompt in -ArgumentList never read as flags', () => {
+    const b = budget(40)
+    const fix = "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'"
+    expect(scanShell(fix)).toEqual([{ kind: 'cloud', hasModel: false, model: null, insertAt: null }])
+    expect(decideShell({ tool: 'PowerShell', command: fix }, ctx(b)).reason).toContain('nested shell script (or Start-Process)')
+    expect(decideShell({ tool: 'PowerShell', command: fix }, ctx(budget(80))).reason).toContain('Budget red')
+    const fable = "Start-Process claude -ArgumentList '--model','fable','--cloud','\"explain -p\"'"
+    expect(scanShell(fable)).toEqual([{ kind: 'cloud', hasModel: true, model: 'fable', insertAt: null }])
+    const d: any = decideShell({ tool: 'PowerShell', command: fable }, ctx(b))
+    expect(d.action).toBe('deny')
+    expect(d.reason).toContain('Cloud sessions never run Fable')
+    // A prompt that only mentions --model names no model.
+    expect(scanShell("Start-Process claude -ArgumentList '--cloud','\"pin --model fable\"'")).toEqual([expect.objectContaining({ kind: 'cloud', hasModel: false })])
+    // A `(` or `;` in an element's text keeps the flags after it.
+    expect(scanShell("Start-Process claude -ArgumentList '(a);b','--cloud','task'")).toEqual([expect.objectContaining({ kind: 'cloud' })])
+    // An element without inner quotes is split by Start-Process: its -p reaches claude as a flag (a follow-up).
+    expect(scanShell("Start-Process claude -ArgumentList '--cloud','session_1 -p x'")).toEqual([])
+  })
 })
 
 describe('heredocs and here-strings are data', () => {
@@ -316,7 +335,6 @@ describe('local headless sessions are launches (D5)', () => {
   test('claude -p, --print, --bg and --background are local launches; --model is read', () => {
     expect(scanShell('claude -p "refactor the parser" --max-turns 30')).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: 6 }])
     expect(scanShell('claude --bg "run the nightly sweep"')).toEqual([expect.objectContaining({ kind: 'local' })])
-    expect(scanShell('claude --background --resume abc')).toEqual([expect.objectContaining({ kind: 'local' })])
     expect(scanShell('claude --print --model opus "x"')).toEqual([expect.objectContaining({ kind: 'local', hasModel: true, model: 'opus' })])
     expect(scanShell("Start-Process claude -ArgumentList '-p','do it'")).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: null }])
   })
@@ -341,6 +359,67 @@ describe('local headless sessions are launches (D5)', () => {
     expect(decideShell({ tool: 'Bash', command: 'claude --bg --model haiku' }, ctx(budget(40))).reason).toContain('the haiku alias')
     expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(60, planFromOption('Pro')))).action).toBe('rewrite')
     expect(decideShell({ tool: 'Bash', command: "Start-Process claude -ArgumentList '-p','x'" }, ctx(budget(40))).reason).toContain('nested shell script (or Start-Process)')
+  })
+})
+
+describe('a local session resume finishes open work', () => {
+  const RESUMES = ['claude --resume abc -p "x"', 'claude -c -p "x"', 'claude --bg --resume abc']
+
+  test('-r/--resume, -c/--continue or --from-pr with -p or --bg is a resume; --fork-session keeps it local', () => {
+    expect(scanShell('claude --resume abc -p "x"')).toEqual([{ kind: 'resume', hasModel: false, model: null, insertAt: 6 }])
+    for (const c of [...RESUMES, 'claude --background --resume abc', 'claude --from-pr 12 --print "x"', 'claude --continue --bg']) {
+      expect(scanShell(c), c).toEqual([expect.objectContaining({ kind: 'resume' })])
+    }
+    expect(claudeLaunch(['-r', 'abc', '-p', 'x'])).toBe('resume')
+    expect(claudeLaunch(['--resume=abc', '--print', 'x'])).toBe('resume')
+    expect(scanShell('claude --resume abc -p "x" --fork-session')).toEqual([expect.objectContaining({ kind: 'local', hasModel: false })])
+    expect(scanShell("Start-Process claude -ArgumentList '--resume','abc','-p','x'")).toEqual([{ kind: 'resume', hasModel: false, model: null, insertAt: null }])
+    // An interactive resume (no -p, no --bg) is no delegated launch.
+    expect(scanShell('claude --resume abc')).toEqual([])
+    expect(scanShell('claude -c')).toEqual([])
+  })
+
+  test('red allows it with the resume note, green adds no --model, paused denies it', () => {
+    for (const command of RESUMES) {
+      const red: any = decideShell({ tool: 'Bash', command }, ctx(budget(80)))
+      expect(red, command).toMatchObject({ action: 'allow', log: expect.stringContaining('session resume allowed (open work)') })
+      expect(red.input).toBeUndefined()
+      expect(decideShell({ tool: 'Bash', command }, ctx(budget(80), { redPolicy: 'warn' })).action).toBe('allow')
+      const green: any = decideShell({ tool: 'Bash', command }, ctx(budget(40)))
+      expect(green, command).toMatchObject({ action: 'allow', log: '' })
+      expect(green.input).toBeUndefined()
+      const paused: any = decideShell({ tool: 'Bash', command }, ctx(budget(40, null, 95)))
+      expect(paused, command).toMatchObject({ action: 'deny', reason: expect.stringContaining('Wait until 13:00 UTC') })
+    }
+    expect(decideShell({ tool: 'Bash', command: RESUMES[0] }, ctx(budget(80), { lang: 'it' })).log).toContain('ripresa della sessione consentita')
+  })
+
+  test('no cloud-column check: Solo (Pro yellow) allows it; Start-Process without --model too', () => {
+    const solo = budget(60, planFromOption('Pro'))
+    for (const command of RESUMES) expect(decideShell({ tool: 'Bash', command }, ctx(solo)).action).toBe('allow')
+    const started: any = decideShell({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList '--resume','abc','-p','x'" }, ctx(budget(40)))
+    expect(started.action).toBe('allow')
+  })
+
+  test('an explicit Fable or bare haiku is still denied, red included', () => {
+    for (const b of [budget(40), budget(80)]) {
+      const fable: any = decideShell({ tool: 'Bash', command: 'claude --resume abc -p x --model fable' }, ctx(b))
+      expect(fable).toMatchObject({ action: 'deny', reason: expect.stringContaining('never run Fable') })
+      expect(decideShell({ tool: 'Bash', command: 'claude -c --bg --model haiku' }, ctx(b)).reason).toContain('the haiku alias')
+    }
+    expect(decideShell({ tool: 'Bash', command: 'claude --resume abc -p x --model opus' }, ctx(budget(80))).action).toBe('allow')
+  })
+
+  test('--fork-session is a new session: --model sonnet in green, denied while red', () => {
+    const fork = 'claude --resume abc -p "x" --fork-session'
+    expect((decideShell({ tool: 'Bash', command: fork }, ctx(budget(40))) as any).input.command).toBe('claude --model sonnet --resume abc -p "x" --fork-session')
+    expect(decideShell({ tool: 'Bash', command: fork }, ctx(budget(80))).reason).toContain('Budget red')
+  })
+
+  test('next to a new launch the command goes through the gate as a whole; only the new one gets --model', () => {
+    const mixed = 'claude --resume abc -p x && claude -p y'
+    expect(decideShell({ tool: 'Bash', command: mixed }, ctx(budget(80))).reason).toContain('Budget red')
+    expect((decideShell({ tool: 'Bash', command: mixed }, ctx(budget(40))) as any).input.command).toBe('claude --resume abc -p x && claude --model sonnet -p y')
   })
 })
 

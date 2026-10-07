@@ -917,9 +917,19 @@ function hasFlag(values, ...names) {
 
 // Whether claude's arguments start a cloud session: `--cloud`, except with `-p`/`--print` and no
 // `--environment`, which only queues a message to an existing session (`claude -p "<msg>" --cloud
-// <session_id|cse_id|url>`): steering open work, never held. Local `-p`/`--bg` runs are not gated here.
+// <session_id|cse_id|url>`): steering open work, never held. Local `-p`/`--bg` runs (a resume of a local
+// session included) are not gated here.
 function cloudLaunch(values) {
   return hasFlag(values, '--cloud') && !(hasFlag(values, '-p', '--print') && !hasFlag(values, '--environment'))
+}
+
+// The words claude receives from a starter's argument values: PowerShell's array commas split them, and
+// a quoted text inside an element (`'"fix the -p flag"'`) stays one word, as claude receives it, so the
+// words of a prompt never read as flags. Every segment is kept: a `(` or `;` in an element's text must
+// not drop the flags after it.
+// Keep this function identical to model-guard's (rules.js).
+function startedWords(values) {
+  return tokenize(values.join(' ').replace(/,/g, ' ')).flat().map(t => t.value)
 }
 
 // The first argument that is not a flag (`expect -f launch.exp`, `powershell -NoProfile -File x.ps1`).
@@ -945,7 +955,7 @@ function segmentGate(seg, ci) {
   }
   if (STARTERS.includes(name)) {
     const at = args.findIndex(a => isClaude(a))
-    if (at >= 0 && cloudLaunch(args.slice(at + 1).join(' ').split(/[\s,'"]+/).filter(Boolean))) return 'cloud'
+    if (at >= 0 && cloudLaunch(startedWords(args.slice(at + 1)))) return 'cloud'
     if (args.some(a => isLaunchScript(a) || /launch\.(exp|ps1)(['",]|$)/i.test(a))) return 'cloud'
   }
   if (/^gh(\.exe)?$/.test(name)) {

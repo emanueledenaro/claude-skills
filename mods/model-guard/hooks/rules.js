@@ -34,7 +34,7 @@ const TEXTS = {
     deniedRed: b => `model-guard: lancio bloccato, budget rosso (${budgetBrief(b, 'it')})`,
     deniedPaused: at => `model-guard: lancio bloccato, finestra 5 ore oltre il 90% fino alle ${at}`,
     warnRed: b => `model-guard: budget rosso (${budgetBrief(b, 'it')}), lancio consentito (redPolicy warn)`,
-    resumeRed: b => `model-guard: budget rosso (${budgetBrief(b, 'it')}), ripresa del workflow consentita (lavoro aperto)`,
+    resumeRed: (b, what) => `model-guard: budget rosso (${budgetBrief(b, 'it')}), ripresa ${what === 'session' ? 'della sessione' : 'del workflow'} consentita (lavoro aperto)`,
     unknown: 'model-guard: nessuna lettura del budget ancora, lancio consentito',
     cloudModel: 'model-guard: claude --cloud senza --model -> --model sonnet',
     localModel: 'model-guard: claude -p/--bg senza --model -> --model sonnet',
@@ -60,7 +60,7 @@ const TEXTS = {
     deniedRed: b => `model-guard: launch blocked, budget red (${budgetBrief(b, 'en')})`,
     deniedPaused: at => `model-guard: launch blocked, 5-hour window past 90% until ${at}`,
     warnRed: b => `model-guard: budget red (${budgetBrief(b, 'en')}), launch allowed (redPolicy warn)`,
-    resumeRed: b => `model-guard: budget red (${budgetBrief(b, 'en')}), workflow resume allowed (open work)`,
+    resumeRed: (b, what) => `model-guard: budget red (${budgetBrief(b, 'en')}), ${what === 'session' ? 'session' : 'workflow'} resume allowed (open work)`,
     unknown: 'model-guard: no budget reading yet, launch allowed',
     cloudModel: 'model-guard: claude --cloud without --model -> --model sonnet',
     localModel: 'model-guard: claude -p/--bg without --model -> --model sonnet',
@@ -544,40 +544,55 @@ function hasFlag(values, ...names) {
   return values.some(v => names.includes(v) || names.some(n => v.startsWith(n + '=')))
 }
 
-// What a claude command line starts, from its argument values: 'cloud', 'local' or null.
+// What a claude command line starts, from its argument values: 'cloud', 'local', 'resume' or null.
 //   `--cloud` with `-p`/`--print` (and no `--environment`) only queues a message to an existing cloud
 //   session (`claude -p "<msg>" --cloud <session_id|cse_id|url>`): steering open work, null. Without a
 //   terminal --cloud cannot create a session; `-p --environment <id> --cloud` does, so it stays a launch.
 //   `--cloud` otherwise: a new cloud session.
-//   `-p`/`--print` or `--bg`/`--background` without --cloud: a new local headless session.
-//   A management subcommand (`claude plugin ...`), --version or --help: null.
+//   `-p`/`--print` or `--bg`/`--background` without --cloud: a local headless session. With
+//   `-r`/`--resume`, `-c`/`--continue` or `--from-pr` (and no `--fork-session`) it carries on an existing
+//   local session: 'resume', open work. Otherwise (--fork-session included) a new one: 'local'.
+//   A management subcommand (`claude plugin ...`), --version or --help: null. An interactive session
+//   (`claude`, `claude --resume abc`) is no delegated launch: null.
 export function claudeLaunch(values) {
   if (hasFlag(values, '--cloud')) return hasFlag(values, '-p', '--print') && !hasFlag(values, '--environment') ? null : 'cloud'
   if (MANAGEMENT.includes(values[0]) || hasFlag(values, '--version', '-v', '--help', '-h')) return null
-  return hasFlag(values, '-p', '--print', '--bg', '--background') ? 'local' : null
+  if (!hasFlag(values, '-p', '--print', '--bg', '--background')) return null
+  if (hasFlag(values, '-r', '--resume', '-c', '--continue', '--from-pr') && !hasFlag(values, '--fork-session')) return 'resume'
+  return 'local'
 }
 
 // Start-Process's own parameters, left out of the words claude receives.
 const STARTER_PARAMS = /^-(argumentlist|args|filepath|wait|nonewwindow|passthru|windowstyle|workingdirectory|verb)$/i
 
+// The words claude receives from a starter's argument values: PowerShell's array commas split them, and
+// a quoted text inside an element (`'"fix the -p flag"'`) stays one word, as claude receives it, so the
+// words of a prompt never read as flags. Every segment is kept: a `(` or `;` in an element's text must
+// not drop the flags after it.
+// skill-router's routes.js holds a copy of this function: keep the two identical.
+function startedWords(values) {
+  return tokenize(values.join(' ').replace(/,/g, ' ')).flat().map(t => t.value)
+}
+
 // `Start-Process claude -ArgumentList '--cloud','task'` (or cmd's `start claude -p x`): a launch whose
-// arguments model-guard cannot edit in place, else null.
+// arguments model-guard cannot edit in place, else null. --model is read from the same words, so a
+// prompt that only mentions it names no model.
 function startedLaunch(seg, ci) {
   if (!STARTERS.includes(baseName(seg[ci].value))) return null
   const rest = seg.slice(ci + 1)
   const at = rest.findIndex(a => isClaude(a.value))
   if (at < 0) return null
-  const words = rest.slice(at + 1).map(a => a.value).join(' ').split(/[\s,'"]+/).filter(w => w && !STARTER_PARAMS.test(w))
+  const words = startedWords(rest.slice(at + 1).map(a => a.value)).filter(w => !STARTER_PARAMS.test(w))
   const kind = claudeLaunch(words)
   if (!kind) return null
-  const text = rest.map(a => a.value).join(' ')
-  const m = /(?:^|[\s,'"])--model(?:=|[\s,'"]+)([^\s,'"]+)/.exec(text)
-  return { kind, hasModel: /(^|[\s,'"])--model(?![\w-])/.test(text), model: m ? m[1] : null, insertAt: null }
+  const m = flagValue(words.map(value => ({ value })), '--model')
+  return { kind, hasModel: m.present, model: m.value, insertAt: null }
 }
 
 // The launches a command line holds:
 //   { kind: 'cloud', hasModel, model, insertAt }  for `claude ... --cloud ...` (not a -p follow-up)
 //   { kind: 'local', hasModel, model, insertAt }  for `claude -p ...`, `claude --bg ...` (headless, local)
+//   { kind: 'resume', hasModel, model, insertAt } for `claude --resume <id> -p ...`, `claude -c --bg ...`
 //     (insertAt null when the launch sits inside a nested shell's script that cannot be edited in place)
 //   { kind: 'launchExp', model }                  for `expect .../launch.exp <task> <rules> <log> <model> <effort>`
 // Nested shells (`bash -c "claude --cloud ..."`) are read too, up to 3 levels deep.
@@ -641,7 +656,8 @@ export function forbiddenModel(model) {
   return null
 }
 
-// A claude launch that takes --model on its own command line (cloud or local headless).
+// A claude launch that takes --model on its own command line (cloud or local headless). A local resume
+// carries on a session that already has its model: model-guard adds none there.
 function namesModel(l) {
   return l.kind === 'cloud' || l.kind === 'local'
 }
@@ -656,11 +672,18 @@ export function insertModelFlags(command, launches) {
 // launches: scanShell(input.command), computed by the caller before it reads the budget.
 // Cloud, local headless (-p, --bg) and launch.exp launches all pass the gate (red, paused) and the
 // model check; only cloud ones (and launch.exp) need a cloud slot in today's profile.
+// A command whose launches are all local resumes (--resume, --continue or --from-pr with -p or --bg)
+// finishes open work, as a Workflow resume does: allowed while red (redPolicy deny too) and on Solo,
+// denied only while the 5-hour window is paused. It gets no --model, but an explicit Fable or bare
+// haiku is still denied. Next to a new launch, the command goes through the gate as a whole.
 export function decideShell(input, ctx, launches) {
   const found = launches || scanShell(input.command)
   if (!found.length) return { action: 'allow', reason: 'No launch in this command.', log: '' }
+  const b = ctx.budget
   const t = texts(ctx.lang)
-  const gate = launchGate(ctx)
+  const resumesOnly = found.every(l => l.kind === 'resume')
+  if (resumesOnly && b.pausedFiveHour) return denied(pausedGate(b, t, ctx))
+  const gate = resumesOnly && b.color === 'red' ? { note: t.resumeRed(b, 'session') } : launchGate(ctx)
   if (gate && gate.deny) return denied(gate)
   for (const l of found) {
     const bad = forbiddenModel(l.model)
@@ -674,7 +697,7 @@ export function decideShell(input, ctx, launches) {
         to: 'transcript',
       }
     }
-    if (l.kind === 'local') {
+    if (l.kind === 'local' || l.kind === 'resume') {
       return {
         action: 'deny',
         reason: `Headless and background sessions (claude -p, --bg) never run ${name} (model-mix): use --model sonnet, or --model opus for security-critical work.`,
@@ -720,7 +743,7 @@ export function decideShell(input, ctx, launches) {
     if (gate && gate.unknownNoted) d.unknownNoted = true
     return d
   }
-  return allowWith(gate, 'Launch allowed.')
+  return allowWith(gate, resumesOnly ? 'Session resume allowed: it finishes open work.' : 'Launch allowed.')
 }
 
 // ---------------------------------------------------------------- workflow agents at agent.spawn (rules 3, 6)

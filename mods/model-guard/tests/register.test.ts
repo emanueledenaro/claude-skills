@@ -338,6 +338,20 @@ describe('model-guard', () => {
       expect(w.logs).toEqual([{ text: expect.stringContaining('ripresa del workflow consentita'), to: 'transcript' }])
     })
 
+    test('a local session resume (--resume, -c with -p or --bg) finishes open work: allowed untouched and logged', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const commands = ['claude --resume abc -p "x"', 'claude -c -p "x"', 'claude --bg --resume abc']
+      for (const command of commands) expect(isRefused(await $.tool.call({ tool: 'Bash', command } as any))).toBe(false)
+      expect(w.calls.map(c => c.command)).toEqual(commands)
+      expect(w.logs.length).toBe(3)
+      for (const l of w.logs) expect(l).toEqual({ text: expect.stringContaining('ripresa della sessione consentita'), to: 'transcript' })
+      // --fork-session starts a new session: denied while red.
+      const fork = await $.tool.call({ tool: 'Bash', command: 'claude --resume abc -p "x" --fork-session' } as any)
+      expect(denyText(fork)).toContain('Budget red')
+      expect(w.calls.length).toBe(3)
+    })
+
     test('a RemoteTrigger update that disables a routine passes, one that enables it does not', async ($, on) => {
       const w = world(on, RED)
       await start($)
@@ -393,6 +407,17 @@ describe('model-guard', () => {
       await start($)
       const r = await $.tool.call({ tool: 'PowerShell', command: 'claude -p "x" --model sonnet' } as any)
       expect(denyText(r)).toContain('Wait until 13:00 UTC')
+      expect(w.calls).toEqual([])
+    })
+
+    test('denies a local session resume too', async ($, on) => {
+      const w = world(on, PAUSED)
+      await start($)
+      for (const command of ['claude --resume abc -p "x"', 'claude -c -p "x"', 'claude --bg --resume abc']) {
+        const r = await $.tool.call({ tool: 'Bash', command } as any)
+        expect(isRefused(r)).toBe(true)
+        expect(denyText(r)).toContain('Wait until 13:00 UTC')
+      }
       expect(w.calls).toEqual([])
     })
 
@@ -611,6 +636,32 @@ describe('model-guard', () => {
       const r = await $.tool.call({ tool: 'Bash', command: 'claude -p "x"' } as any)
       expect(isRefused(r)).toBe(false)
       expect(w.calls[0].command).toBe('claude --model sonnet -p "x"')
+    })
+
+    test('a resume gets no --model in green; --fork-session does; Fable on a resume is denied', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      const commands = ['claude --resume abc -p "x"', 'claude -c -p "x"', 'claude --bg --resume abc']
+      for (const command of commands) await $.tool.call({ tool: 'Bash', command } as any)
+      await $.tool.call({ tool: 'Bash', command: 'claude --resume abc -p "x" --fork-session' } as any)
+      const fable = await $.tool.call({ tool: 'Bash', command: 'claude --resume abc -p x --model fable' } as any)
+      expect(denyText(fable)).toContain('never run Fable')
+      expect(w.calls.map(c => c.command)).toEqual([...commands, 'claude --model sonnet --resume abc -p "x" --fork-session'])
+      expect(w.logs.map(l => l.text)).toEqual([expect.stringContaining('claude -p/--bg'), expect.stringContaining('fable')])
+    })
+  })
+
+  describe('Start-Process: words inside a quoted prompt are no flags', () => {
+    test('a cloud launch whose prompt mentions -p is still a launch: no --model denied, --model fable denied, opus passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const none = await $.tool.call({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'" } as any)
+      expect(denyText(none)).toContain('nested shell script (or Start-Process)')
+      const fable = await $.tool.call({ tool: 'PowerShell', command: "Start-Process claude -ArgumentList '--model','fable','--cloud','\"explain -p\"'" } as any)
+      expect(denyText(fable)).toContain('Cloud sessions never run Fable')
+      const opus = "Start-Process claude -ArgumentList '--model','opus','--cloud','\"fix the -p flag parsing\"'"
+      expect(isRefused(await $.tool.call({ tool: 'PowerShell', command: opus } as any))).toBe(false)
+      expect(w.calls.map(c => c.command)).toEqual([opus])
     })
   })
 

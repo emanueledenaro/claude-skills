@@ -438,6 +438,20 @@ describe('skill-router', () => {
       expect(isRefused(r)).toBe(true)
     })
 
+    for (const command of [
+      "Start-Process claude -ArgumentList '--cloud','\"fix the -p flag parsing\"'",
+      "Start-Process claude -ArgumentList '--model','fable','--cloud','\"explain -p\"'",
+    ]) {
+      test('Start-Process with -p only inside a quoted prompt is a cloud launch: held once: ' + command, async ($, on) => {
+        const w = world(on)
+        await start($)
+        const r = await $.tool.call({ tool: 'PowerShell', command } as any)
+        expect(denyText(r)).toContain('before launching a cloud session, load model-mix and cloud-worker')
+        expect(isRefused(await $.tool.call({ tool: 'PowerShell', command } as any))).toBe(false)
+        expect(w.calls).toEqual([expect.objectContaining({ command })])
+      })
+    }
+
     test('the cloud gate skips cloud-worker when it is not installed', async ($, on) => {
       world(on, without('cloud-worker'))
       await start($)
