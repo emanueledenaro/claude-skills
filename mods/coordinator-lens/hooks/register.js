@@ -8,10 +8,10 @@
 
 import { bandView, cardView, paneView, summaryText, budgetLine, workflowSuffix } from './views.js'
 import {
-  createState, setPlan, planFromContext, planFromOption, applyUsage, budgetOf, onAgentToolCall, onAgentToolResult,
+  createState, setPlan, userPlan, planFromOption, applyUsage, budgetOf, onAgentToolCall, onAgentToolResult,
   onAgentSpawned, onTurnComplete, touch, onWorkflowLaunch, onTaskNotification, onMeasure, onShellCommand, onPrList,
   onSkill, onFileWrite, onQuestion, onQuestionAnswered, onWake, onColorChange, setNight, tick, viewModel,
-  notifications, estimateRun, dump, restore, mergeRunCost,
+  notifications, estimateRun, dump, restore, mergeRunCost, mergeRedeemed,
 } from './tracker.js'
 import { t, colorWord } from './i18n.js'
 
@@ -27,19 +27,26 @@ let paneOpen = false
 let lastVm = null
 let lastSig = null
 let lastSaved = ''
+let lastRedeemed = ''
+// Where the plan came from: the user CLAUDE.md read in this module's life wins over the stored line.
+let planFromUser = false
 let shown = new Set()
 let timers = []
 let prFails = 0
-let prOff = false
+// After three gh failures in a row the poll backs off (15, 30, then 60 minutes) and keeps trying.
+let prRetryAt = 0
 let registered = { command: false, tool: false, tries: 0 }
 let questionSeq = 0
 let started = false
+// Whether the minute and pull request timers run: a session with nobody at the prompt (a -p run, or an SDK
+// host such as the Desktop app) starts them when a surface attaches.
+let timersOn = false
 let nightDirty = false
 let announcedColor = null
 let pendingColor = null
 // Card snapshots by the text the command returned: the newest run with a text wins it. A card is found by
 // text only the first time a transcript row draws; after that the row keeps its own snapshot, pinned by
-// the row's requestId, so two rows with the same text (the text carries no times) never share one.
+// the row's requestId, so two rows with the same text (a fresh reading's text carries no times) never share one.
 const cards = new Map()
 const pinned = new Map()
 
@@ -149,14 +156,27 @@ async function refresh($, announce) {
 async function persist($) {
   try {
     const d = dump(S)
-    const sig = JSON.stringify(d)
+    const sig = JSON.stringify({ runCost: d.runCost, night: d.night })
     if (sig === lastSaved) return
     const merged = mergeRunCost(S, await $.store.get('runCost'))
     await $.store.set('runCost', { samples: merged.samples, last: merged.last })
     const night = S.night.on || nightDirty ? await storedNight($) : null
     if (nightDirty || (night && night.on === true && night.since === S.night.since)) await $.store.set('night', d.night)
     nightDirty = false
-    lastSaved = JSON.stringify(dump(S))
+    const after = dump(S)
+    lastSaved = JSON.stringify({ runCost: after.runCost, night: after.night })
+  } catch {}
+}
+
+// Redeemed resets and the weekly mark go to their own key whenever they change, so a reload never counts
+// a redeemed reset again (folded with what other sessions stored: a redemption is account-wide).
+async function persistRedeemed($) {
+  try {
+    const sig = JSON.stringify(dump(S).redeemed)
+    if (sig === lastRedeemed) return
+    const merged = mergeRedeemed(S, await $.store.get('redeemed'), await nowOf($))
+    await $.store.set('redeemed', merged)
+    lastRedeemed = JSON.stringify(dump(S).redeemed)
   } catch {}
 }
 
@@ -174,6 +194,7 @@ async function readUsage($, fresh) {
     const now = await nowOf($)
     applyUsage(S, { rateLimits: u && u.rateLimits, now, fresh: !!fresh })
   } catch {}
+  await persistRedeemed($)
 }
 
 async function pulse($) {
@@ -184,8 +205,12 @@ async function pulse($) {
   await refresh($)
 }
 
+const PR_BACKOFF_MIN = [15, 30, 60]
+
 async function pollPrs($) {
-  if (prOff || !OPT.prPolling) return
+  if (!OPT.prPolling) return
+  const now = await nowOf($)
+  if (now < prRetryAt) return
   try {
     const cwd = await $.session.cwd()
     const r = await $.process.run(
@@ -195,10 +220,11 @@ async function pollPrs($) {
     if (!r || r.exitCode !== 0) throw new Error('gh pr list failed')
     onPrList(S, r.stdout, await nowOf($))
     prFails = 0
+    prRetryAt = 0
     await refresh($)
   } catch {
     prFails += 1
-    if (prFails >= 3) prOff = true
+    if (prFails >= 3) prRetryAt = now + PR_BACKOFF_MIN[Math.min(prFails - 3, PR_BACKOFF_MIN.length - 1)] * 60000
   }
 }
 
@@ -209,10 +235,12 @@ function stopTimers() {
     } catch {}
   }
   timers = []
+  timersOn = false
 }
 
 function startTimers($) {
   stopTimers()
+  timersOn = true
   try {
     timers.push($.clock.every(60000, () => {
       pulse($).catch(() => undefined)
@@ -243,7 +271,7 @@ async function ensureRegistered($) {
         description: 'Weekly points a planned run would cost and whether it fits the budget',
         inputSchema: {
           type: 'object',
-          properties: { sonnet: { type: 'number' }, opus: { type: 'number' }, fable: { type: 'number' } },
+          properties: { haiku: { type: 'number' }, sonnet: { type: 'number' }, opus: { type: 'number' }, fable: { type: 'number' } },
         },
       })
       registered.tool = true
@@ -257,15 +285,20 @@ async function init($, e) {
     const runCost = await $.store.get('runCost')
     const night = await $.store.get('night')
     restore(S, { runCost, night }, await nowOf($))
-    // The plan read from CLAUDE.md survives a reload (prompt.context does not fire again).
-    if (!S.plan) {
-      const raw = await $.store.get('planLine')
-      if (typeof raw === 'string') setPlan(S, planFromOption(raw))
-    }
+  } catch {}
+  try {
+    // The plan line read from the user CLAUDE.md survives a reload (prompt.context does not fire again)
+    // and wins over the planLine option, which is only the fallback.
+    const raw = await $.store.get('planLine')
+    const stored = typeof raw === 'string' ? planFromOption(raw) : null
+    if (stored && !planFromUser) setPlan(S, stored)
+  } catch {}
+  try {
+    restore(S, { redeemed: await $.store.get('redeemed') }, await nowOf($))
   } catch {}
   await readUsage($, false)
   await refresh($, false)
-  if (!(e && e.isInteractive === false)) startTimers($)
+  if (!(e && e.isInteractive === false) || (await surfaceCount($)) > 0) startTimers($)
   await ensureRegistered($)
 }
 
@@ -275,6 +308,18 @@ async function ensureStarted($) {
   try {
     await init($, null)
   } catch {}
+}
+
+// How many surfaces the session draws on now; null when it cannot be read. A plain -p run has none, so a
+// pane would never be drawn there. The Desktop app reports nobody at the prompt as -p does, but it has a
+// surface, so this is read rather than session.start's isInteractive.
+async function surfaceCount($) {
+  try {
+    const list = await $.session.surfaces()
+    return Array.isArray(list) ? list.length : null
+  } catch {
+    return null
+  }
 }
 
 async function openPane($) {
@@ -307,6 +352,13 @@ async function toggleNight($) {
   await changeNight($, !S.night.on)
 }
 
+async function closePane($) {
+  try {
+    await $.ui.close({ id: PANE_ID })
+  } catch {}
+  paneOpen = false
+}
+
 function actionsFor($) {
   return {
     setTab: key => {
@@ -314,6 +366,9 @@ function actionsFor($) {
     },
     toggleNight: () => {
       toggleNight($).catch(() => undefined)
+    },
+    close: () => {
+      closePane($).catch(() => undefined)
     },
   }
 }
@@ -329,6 +384,15 @@ function outputOf(r) {
 }
 
 // What decides whether the model gets a new budget line: color, profile, 5-hour pause, weekly 5-point bucket.
+// A shell command that goes on in the background (run_in_background, or moved there on its timeout) has
+// not ended yet: its task id, or true when it carries none; null for one that ran to its end.
+function backgroundOf(r) {
+  const res = r && r.result
+  if (!res || typeof res !== 'object') return null
+  if (typeof res.backgroundTaskId === 'string' && res.backgroundTaskId) return res.backgroundTaskId
+  return typeof res.timedOutAfterMs === 'number' || res.backgroundedByUser === true ? true : null
+}
+
 function contextSig(budget) {
   const weekly = budget.weekly ? Math.floor(budget.weekly.used / 5) : 'x'
   return [budget.color, budget.profile ? budget.profile.name : '', budget.pausedFiveHour ? 'paused' : 'open', weekly].join('|')
@@ -345,12 +409,15 @@ export function register(on, options) {
   lastVm = null
   lastSig = null
   lastSaved = ''
+  lastRedeemed = ''
+  planFromUser = false
   shown = new Set()
   timers = []
   prFails = 0
-  prOff = false
+  prRetryAt = 0
   registered = { command: false, tool: false, tries: 0 }
   started = false
+  timersOn = false
   nightDirty = false
   announcedColor = null
   pendingColor = null
@@ -365,6 +432,16 @@ export function register(on, options) {
     return result
   }).catch(async ($, e, next) => next(e))
 
+  // A surface that attaches to a session started with nobody at the prompt (the Desktop app is an SDK host)
+  // starts the timers there. Observe only.
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (started && !timersOn) startTimers($)
+    } catch {}
+    return result
+  }).catch(async ($, e, next) => next(e))
+
   on('session.end', async ($, e, next) => {
     stopTimers()
     return next(e)
@@ -372,6 +449,8 @@ export function register(on, options) {
 
   on('classic.SessionStart', async ($, e, next) => {
     try {
+      // A fresh conversation (clear, resume, compact) has not seen the budget line: send it on its first prompt.
+      if (e.source === 'clear' || e.source === 'resume' || e.source === 'compact') lastSig = null
       if (e.source === 'clear' || e.source === 'resume') {
         registered = { command: false, tool: false, tries: 0 }
         await ensureRegistered($)
@@ -381,14 +460,21 @@ export function register(on, options) {
     return next(e)
   }).catch(async ($, e, next) => next(e))
 
-  // The plan line from the user CLAUDE.md. Observe only.
+  // The plan line from the person's own CLAUDE.md (kind 'user'): a project, local or memory file never sets
+  // it. Only that line is kept in the machine-wide store, and the stored one is dropped only when the user
+  // file was read and has no line. Observe only.
   on('prompt.context', async ($, e, next) => {
     try {
-      const fromFiles = planFromContext(e.instructionFiles, '')
-      const plan = fromFiles || planFromOption(OPT.planLine)
-      if (plan) setPlan(S, plan)
-      if (fromFiles && fromFiles.raw) await $.store.set('planLine', fromFiles.raw)
-      else await $.store.delete('planLine')
+      const user = userPlan(e.instructionFiles)
+      if (user.plan) {
+        planFromUser = true
+        setPlan(S, user.plan)
+        if (user.plan.raw) await $.store.set('planLine', user.plan.raw)
+      } else if (user.read) {
+        planFromUser = true
+        setPlan(S, planFromOption(OPT.planLine))
+        await $.store.delete('planLine')
+      }
     } catch {}
     return next(e)
   }).catch(async ($, e, next) => next(e))
@@ -408,6 +494,7 @@ export function register(on, options) {
         } catch {}
       }
       await persist($)
+      await persistRedeemed($)
       await refresh($)
     } catch {}
     return next(e)
@@ -450,6 +537,7 @@ export function register(on, options) {
         output: outputOf(r),
         isError: !!(r && r.isError),
         denied: !!(r && typeof r.deny === 'string'),
+        background: backgroundOf(r),
         now: await nowOf($),
       })
       await refresh($)
@@ -487,19 +575,23 @@ export function register(on, options) {
     return next(e)
   }).catch(async ($, e, next) => next(e))
 
+  // A wake is recorded once the call went through: a denied or failed one never wakes.
   on('tool.call', { tool: 'ScheduleWakeup' }, async ($, e, next) => {
+    const r = await next(e)
     try {
-      onWake(S, { delaySeconds: e.delaySeconds, stop: e.stop, now: await nowOf($) })
-      await refresh($)
+      if (!(r && (typeof r.deny === 'string' || r.isError))) {
+        onWake(S, { delaySeconds: e.delaySeconds, stop: e.stop, now: await nowOf($) })
+        await refresh($)
+      }
     } catch {}
-    return next(e)
+    return r
   }).catch(async ($, e, next) => next(e))
 
   // The tool the model can call: what a planned run would cost and whether it fits.
   on('tool.call', { tool: TOOL_NAME }, async ($, e, next) => {
     await readUsage($, false)
     const now = await nowOf($)
-    return { result: estimateRun(S, budgetOf(S, now), { sonnet: e.sonnet, opus: e.opus, fable: e.fable }) }
+    return { result: estimateRun(S, budgetOf(S, now), { haiku: e.haiku, sonnet: e.sonnet, opus: e.opus, fable: e.fable }) }
   }).catch(async ($, e, next) => {
     if (next.error && next.error.kind === 're-entry') return next(e)
     return { deny: 'budget_estimate failed: ' + (next.error ? next.error.kind : 'unknown') }
@@ -566,7 +658,7 @@ export function register(on, options) {
       if (OPT.contextLine) {
         const budget = budgetOf(S, now)
         const sig = contextSig(budget)
-        if (sig !== lastSig && !(lastSig === null && budget.color === 'unknown')) extra = { line: budgetLine({ budget }), sig }
+        if (sig !== lastSig && !(lastSig === null && budget.color === 'unknown')) extra = { line: budgetLine({ budget, now }), sig }
       }
     } catch {}
     if (!extra) return next(e)
@@ -581,13 +673,14 @@ export function register(on, options) {
     let lead = ''
     if (args === 'night on' || args === 'night off') await changeNight($, args === 'night on')
     else if (args === 'pane') {
-      if (await openPane($)) return {}
+      if ((await surfaceCount($)) !== 0 && (await openPane($))) return {}
     } else if (args) lead = '/coord: unknown argument "' + args.slice(0, 40) + '" (use pane, night on, night off)\n'
     const now = await nowOf($)
     // The card is drawn from this snapshot, not from the live state at render time. The newest snapshot
     // takes the text (delete first, so it is also the last to be pruned).
     const vm = viewModelAt(now)
-    const text = lead + summaryText(vm)
+    // at most 10 lines with the lead (mod-ui): the summary gives up its last line for it
+    const text = lead ? lead + summaryText(vm).split('\n').slice(0, 9).join('\n') : summaryText(vm)
     cards.delete(text)
     cards.set(text, vm)
     if (cards.size > MAX_CARDS) cards.delete(cards.keys().next().value)
@@ -597,8 +690,8 @@ export function register(on, options) {
     return { text: '/coord failed: ' + (next.error ? next.error.kind : 'unknown'), exitCode: 1 }
   })
 
-  // The pane has no close button of its own: the person closes it with the pane's close mark or Esc
-  // (opened with closeOnEscape). Either way it ends here, and the open flag follows.
+  // The pane closes with its close button (x), its close mark or Esc (opened with closeOnEscape). Every way
+  // ends here, and the open flag follows.
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE_ID) paneOpen = false
     return next(e)

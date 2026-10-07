@@ -3,7 +3,7 @@
 //
 //   bandView(vm, E, { cols, surface })                  the line above the prompt (or null): one row, two at most, always within cols
 //   cardView(vm, E, { cols, surface })                  the inline /coord card
-//   paneView(vm, E, { cols, surface, tab, actions })    the /coord pane, five tabs
+//   paneView(vm, E, { cols, surface, tab, actions })    the /coord pane, five tabs and a close button (x)
 //   summaryText(vm)                                     /coord command text for the model (English, <= 10 lines)
 //   budgetLine(vm)                                      one English line for the model context
 //   paceSvg(vm, width, height)                          weekly pace bar as SVG markup (hex colors live only here)
@@ -17,9 +17,11 @@
 // only when it is not the plan's (yellow steps down, red launches nothing).
 // An old reading: budget.md's 10-minute rule is for launch decisions, so the person still sees the color of
 // the last known reading, the word dim with its age after it ('Budget verde (lettura di 12m fa)'; the band,
-// the card title and the BUDGET block). 'in attesa' is for no reading at all, or one of unknown age. The
-// texts for the model (summaryText, budgetLine) keep the rule: an old green reading is 'unknown', an old red
-// or yellow one keeps its color.
+// the card title and the BUDGET block). 'in attesa' is for no reading at all, or a green one of unknown age
+// (a poll before any response); a red or yellow one of unknown age keeps its color and is drawn as it is.
+// The texts for the model (summaryText, budgetLine) keep the rule: an old green reading is 'unknown', an old
+// red or yellow one keeps its color, and both say the reading is old and how old ('old reading, read 3h
+// ago'), or that its age is unknown.
 
 import { modelFamily, estimatePoints, PROFILES } from './budget.js'
 import { t, tn, has, colorWord, fmtDuration, fmtPoints, normalizeLang } from './i18n.js'
@@ -261,7 +263,7 @@ function pair(label, value, valueStyle) {
 // The state word and what follows it, as segs, in variants from the fullest to the shortest. A fresh reading
 // is the word in the pace color, bold. A reading older than 10 minutes keeps its color word but dim, with
 // its age after it: 'verde (lettura di 12m fa)', then '(12m fa)', then the word alone. 'in attesa' is only
-// for no reading at all (or one of unknown age).
+// for no reading at all, or a green one of unknown age; a red or yellow one of unknown age is drawn as it is.
 function stateValues(vm) {
   const lang = langOf(vm)
   const key = colorKey(vm)
@@ -561,7 +563,7 @@ function workerCells(vm, w) {
   let model
   const parts =
     w.kind === 'workflow' && w.agents
-      ? ['sonnet', 'opus', 'fable', 'other'].filter(k => w.agents[k] > 0).map(k => w.agents[k] + ' ' + k)
+      ? ['haiku', 'sonnet', 'opus', 'fable', 'other'].filter(k => w.agents[k] > 0).map(k => w.agents[k] + ' ' + k)
       : []
   if (parts.length) model = parts.join(' ')
   else {
@@ -929,7 +931,11 @@ function budgetRows(vm, E, o) {
     const bits = []
     if (!planKnown) bits.push(t(lang, 'budget.planAssumed', { name: planName }))
     if (isNum(b.plan.reserve)) bits.push(t(lang, 'budget.reserve', { reserve: b.plan.reserve }))
-    for (const r of listOf(b.resets).slice(0, 2)) if (r.expires) bits.push(t(lang, 'budget.banked', { date: r.expires }))
+    // relative, as every time the person reads (mod-ui): the reset is lost at the start of its expiry day
+    for (const r of listOf(b.resets).slice(0, 2)) {
+      const left = r.expires && isNum(vm.now) ? Date.parse(r.expires + 'T00:00:00Z') - vm.now : NaN
+      if (Number.isFinite(left) && left > 0) bits.push(t(lang, 'budget.banked', { in: fmtDuration(lang, left) }))
+    }
     pushPacked('lbl.plan', planKnown ? planName : t(lang, 'budget.planUnknown'), bits, { dim: true })
   }
   if (isNum(b.lastReadingAt) && isNum(vm.now)) {
@@ -1059,16 +1065,26 @@ function normalizeTab(tab) {
   return 'overview'
 }
 
+// The pull request list is polled every 5 minutes: past 15 minutes (three polls missed) it is old, so its
+// check colors are drawn dim with the age of the list beside the count.
+const PRS_OLD_AFTER = 15 * 60000
+
+function prsAge(vm) {
+  if (!vm || !isNum(vm.prsAt) || !isNum(vm.now) || vm.now - vm.prsAt <= PRS_OLD_AFTER) return null
+  return vm.now - vm.prsAt
+}
+
 function prLines(vm, E, inner) {
   const lang = langOf(vm)
   const prs = listOf(vm.prs)
   if (!prs.length) return block(t(lang, 'sec.prs'), [[seg(t(lang, 'empty.prs'), { dim: true })]])
+  const old = prsAge(vm)
   const avail = inner - LABEL_W
   const numW = Math.max(...prs.map(p => width('#' + p.number)))
   const checkWord = { green: t(lang, 'checks.green'), red: t(lang, 'checks.red'), pending: '…', none: '' }
   const checkColor = { green: 'success', red: 'error', pending: 'warning', none: undefined }
   const checkMark = { green: '✓', red: '✗', pending: '○', none: '–' }
-  const rows = [[seg(String(prs.length))]]
+  const rows = [old == null ? [seg(String(prs.length))] : [seg(String(prs.length)), seg(' ' + t(lang, 'band.stale', { ago: fmtDuration(lang, old) }), { dim: true })]]
   const shown = prs.slice(0, 20)
   const stateOf = p => {
     const word = has(lang, 'pr.' + p.state) ? t(lang, 'pr.' + p.state) : clean(p.state)
@@ -1089,13 +1105,16 @@ function prLines(vm, E, inner) {
     const state = stateOf(p)
     const checks = p.checks in checkMark ? p.checks : 'none'
     const segs = []
+    // numbers are right-aligned (mod-ui): the padding goes before the number, and before its Link
     if (isHttps(p.url) && E.Link) {
+      const lead = ' '.repeat(Math.max(0, numW - width(num)))
+      if (lead) segs.push(seg(lead))
       segs.push({ el: E.Link({ href: p.url, label: num }), elWidth: width(num) })
-      segs.push(seg(' '.repeat(Math.max(0, numW - width(num)) + 2)))
-    } else segs.push(seg(pad(num, numW + 2)))
+      segs.push(seg('  '))
+    } else segs.push(seg(padL(num, numW) + '  '))
     segs.push(seg(pad(fit(state, stateW), stateW + 2), { dim: true }))
-    segs.push(seg(checkMark[checks] + ' ', { color: checkColor[checks], dim: checks === 'none' }))
-    if (checkW) segs.push(seg(pad(checkWord[checks], checkW), { color: checkColor[checks] }))
+    segs.push(seg(checkMark[checks] + ' ', { color: checkColor[checks], dim: checks === 'none' || old != null }))
+    if (checkW) segs.push(seg(pad(checkWord[checks], checkW), { color: checkColor[checks], dim: old != null }))
     segs.push(seg(fit(p.title, room), { wrap: 'truncate-end' }))
     rows.push(segs)
   }
@@ -1275,12 +1294,15 @@ export function paneView(vm, E, opts) {
   const tab = normalizeTab(opts && opts.tab)
   const actions = (opts && opts.actions) || {}
 
-  // Plain buttons: the terminal draws `1: Quadro`. The current tab is at full strength, the others dim.
+  // Plain buttons: the terminal draws `1: Quadro`. A desktop draws its native button whatever `plain` says,
+  // so there the number goes into the label (`1 Quadro`, mod-ui). The current tab is at full strength, the
+  // others dim.
+  const desktop = opts && opts.surface === 'desktop'
   const tabButtons = TABS.map((key, i) =>
     E.Button(
       props({
         key: 'tab-' + key,
-        label: t(lang, 'tab.' + key),
+        label: (desktop ? i + 1 + ' ' : '') + t(lang, 'tab.' + key),
         hotkey: String(i + 1),
         plain: true,
         dimColor: key !== tab,
@@ -1289,9 +1311,25 @@ export function paneView(vm, E, opts) {
       }),
     ),
   )
-  // No close button of our own: the pane already draws its close mark at the top right, and Esc closes it
-  // (opened with closeOnEscape), so a second "x: Close" would only repeat it.
-  const tabsRow = E.Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: cols < 76 ? 1 : 3, children: tabButtons })
+  // The close button on the right (mod-ui): `x` closes the pane, as Esc does (opened with closeOnEscape).
+  // role 'dismiss' lets a desktop draw it as its own close control.
+  const closeButton = E.Button(
+    props({
+      key: 'close',
+      label: t(lang, 'btn.close'),
+      hotkey: 'x',
+      role: 'dismiss',
+      plain: true,
+      dimColor: true,
+      variant: 'secondary',
+      onPress: () => (actions.close ? actions.close() : undefined),
+    }),
+  )
+  const tabsRow = E.Box({
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    children: [E.Box({ flexDirection: 'row', flexWrap: 'wrap', columnGap: cols < 76 ? 1 : 3, children: tabButtons }), closeButton],
+  })
   const rule = E.Text({ children: '─'.repeat(inner), color: 'subtle' })
 
   let lines
@@ -1310,17 +1348,48 @@ function reasonEn(reason) {
   return has('en', 'reason.' + reason) ? t('en', 'reason.' + reason) : clean(reason)
 }
 
+function enDuration(ms) {
+  return fmtDuration('en', ms)
+}
+
+// budget.md's 10-minute rule, as budget.js applies it.
+const READING_MAX_AGE = 10 * 60000
+
+// What the model is told about the age of the reading its color comes from: ['old reading', 'read 3h ago']
+// past 10 minutes, ['reading of unknown age'] for a poll before any response, [] for a fresh one. A budget
+// with no `now` beside it (or no reading time) says nothing it cannot know.
+function readingAgeEn(vm) {
+  const b = modelBudget(vm)
+  if (colorOf(b) === 'unknown' && b.reason !== 'stale-reading') return []
+  const now = vm && isNum(vm.now) ? vm.now : null
+  if (isNum(b.lastReadingAt) && now != null && now - b.lastReadingAt > READING_MAX_AGE) {
+    return ['old reading', 'read ' + enDuration(now - b.lastReadingAt) + ' ago']
+  }
+  if (b.lastReadingAt === null && b.weekly) return ['reading of unknown age']
+  return []
+}
+
+// Said beside the profile when no plan line named the plan: budget.js then assumes Max 5x (model-mix).
+const PLAN_ASSUMED = 'plan assumed (no Claude plan line; Pro accounts use Pro)'
+
+function planAssumed(b) {
+  return !!(b.plan && b.plan.known === false)
+}
+
 // One line for the model context, e.g.
 // coordinator-lens budget: green (margin -4) · profile Max 20x: 16 agents/run, 3 cloud sessions · weekly 17% (pace 20) · 5h 0% · Fable window not readable
 export function budgetLine(vm) {
-  // the model reads the budget with budget.md's 10-minute rule: an old green reading is 'unknown (old reading)'
+  // the model reads the budget with budget.md's 10-minute rule: an old green reading is 'unknown (old
+  // reading, read 12m ago)', an old red or yellow one keeps its color and says how old it is
   const b = modelBudget(vm)
   const color = colorOf(b)
+  const age = readingAgeEn(vm)
   const bits = []
-  if (color === 'unknown') bits.push(reasonEn(b.reason || 'no-reading'))
+  if (color === 'unknown') bits.push(...(age.length ? age : [reasonEn(b.reason || 'no-reading')]))
   else {
     if (b.reason && b.reason !== 'pace') bits.push(reasonEn(b.reason))
     if (isNum(b.margin)) bits.push('margin ' + signed(b.margin))
+    bits.push(...age)
   }
   const parts = ['coordinator-lens budget: ' + color + (bits.length ? ' (' + bits.join(', ') + ')' : '')]
   const p = b.profile
@@ -1334,6 +1403,7 @@ export function budgetLine(vm) {
           : p.width + ' agents/run, ' + p.cloud + ' cloud session' + (p.cloud === 1 ? '' : 's')),
     )
   }
+  if (planAssumed(b)) parts.push(PLAN_ASSUMED)
   if (b.weekly && isNum(b.weekly.used)) {
     const extra = []
     if (isNum(b.pace)) extra.push('pace ' + pctText(b.pace))
@@ -1354,23 +1424,23 @@ export function budgetLine(vm) {
   return parts.join(' · ')
 }
 
-function enDuration(ms) {
-  return fmtDuration('en', ms)
-}
 
 // The /coord command text: at most 10 lines, English.
 export function summaryText(vm) {
   const lines = []
-  // the model reads the budget with budget.md's 10-minute rule: an old green reading is 'budget: unknown'
+  // the model reads the budget with budget.md's 10-minute rule: an old green reading is 'budget: unknown',
+  // and an old reading of any color says how old it is
   const b = modelBudget(vm)
   const color = colorOf(b)
   const now = vm && isNum(vm.now) ? vm.now : null
+  const age = readingAgeEn(vm)
 
-  const head = ['budget: ' + color]
+  const head = ['budget: ' + color + (age.length ? ' (' + age.join(', ') + ')' : '')]
   if (color !== 'unknown' && isNum(b.margin)) head.push('margin ' + signed(b.margin))
   if (b.weekly && isNum(b.weekly.used)) head.push('weekly ' + pctText(b.weekly.used) + '%' + (isNum(b.pace) ? ' (pace ' + pctText(b.pace) + ')' : ''))
   if (b.fiveHour && isNum(b.fiveHour.used)) head.push('5h ' + pctText(b.fiveHour.used) + '%' + (b.pausedFiveHour ? ' paused' : ''))
   if (b.profile) head.push('profile ' + b.profile.name)
+  if (planAssumed(b)) head.push(PLAN_ASSUMED)
   // commas, not ' · ': when no card is drawn the person reads this row as it is
   lines.push(head.join(', '))
 
@@ -1380,7 +1450,8 @@ export function summaryText(vm) {
   const wparts = []
   if (active.length) {
     const named = active.slice(0, 3).map(w => {
-      const base = fit(w.label || w.id, 28) + ' ' + (has('en', 'kind.' + w.kind) ? t('en', 'kind.' + w.kind) : clean(w.kind))
+      const name = w.named === false && has('en', 'label.' + w.kind) ? t('en', 'label.' + w.kind) : w.label || w.id
+      const base = fit(name, 28) + ' ' + (has('en', 'kind.' + w.kind) ? t('en', 'kind.' + w.kind) : clean(w.kind))
       const prog = w.kind === 'workflow' && w.agents ? ' ' + wfProgress(vm, w, b) : ''
       return base + prog + (w.stalled ? ' stalled' : '')
     })
@@ -1395,7 +1466,8 @@ export function summaryText(vm) {
   const prs = listOf(vm && vm.prs)
   if (prs.length) {
     const shown = prs.slice(0, 4).map(p => '#' + p.number + ' ' + clean(p.state) + (p.checks && p.checks !== 'none' ? ' ' + p.checks : ''))
-    lines.push('prs: ' + shown.join(', ') + (prs.length > 4 ? ' (+' + (prs.length - 4) + ' more)' : ''))
+    const old = prsAge(vm)
+    lines.push('prs' + (old == null ? '' : ' (list read ' + enDuration(old) + ' ago)') + ': ' + shown.join(', ') + (prs.length > 4 ? ' (+' + (prs.length - 4) + ' more)' : ''))
   }
 
   const steps = listOf(vm && vm.merge && vm.merge.steps)

@@ -20,7 +20,7 @@
     {
       "name": "coordinator-lens",
       "source": "./mods/coordinator-lens",
-      "description": "Makes the coordinator's work visible: budget color and pace, workers, merges, the round, the skill flow, night mode and decisions, in a band above the prompt, a /coord pane and card, and a few toasts. It observes only and spends nothing."
+      "description": "Makes the coordinator's work visible: budget color and pace, workers, merges, the round, the skill flow, night mode and decisions, in a band above the prompt, a /coord pane and card, and a few toasts. It adds one hidden budget line to a prompt when the budget changes (option contextLine) and gives the model a budget_estimate tool; otherwise it only observes, never blocks or changes your work or the model's, and calls no model."
     }
   ]
 }

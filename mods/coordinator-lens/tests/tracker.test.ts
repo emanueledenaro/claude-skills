@@ -6,7 +6,7 @@ import {
   createState, setPlan, planFromContext, planFromOption, applyUsage, budgetOf, onAgentToolCall, onAgentToolResult,
   onAgentSpawned, onTurnComplete, touch, onWorkflowLaunch, onTaskNotification, onMeasure, onShellCommand, onPrList,
   onSkill, onFileWrite, onQuestion, onQuestionAnswered, onWake, onColorChange, setNight, tick, viewModel, notifications,
-  estimateRun, dump, restore, mergeRunCost, MERGE_STEPS, ROUND_ITEMS, STAGES,
+  estimateRun, dump, restore, mergeRunCost, mergeRedeemed, userPlan, MERGE_STEPS, ROUND_ITEMS, STAGES,
 } from '../hooks/tracker.js'
 import { parsePlanLine } from '../hooks/budget.js'
 import * as budgetModule from '../hooks/budget.js'
@@ -44,7 +44,8 @@ function spawnWf(s, runId, index, model, now = NOW, agentId = 'a' + runId + inde
 describe('view model', () => {
   test('an empty state has the full contract shape', () => {
     const vm = vmOf(createState())
-    expect(Object.keys(vm).sort()).toEqual(['budget', 'decisions', 'flow', 'lang', 'merge', 'night', 'now', 'prs', 'round', 'runCost', 'workers'])
+    expect(Object.keys(vm).sort()).toEqual(['budget', 'decisions', 'flow', 'lang', 'merge', 'night', 'now', 'prs', 'prsAt', 'round', 'runCost', 'workers'])
+    expect(vm.prsAt).toBe(null)
     expect(vm.budget.color).toBe('unknown')
     expect(vm.budget.lastReadingAt).toBe(null)
     expect(vm.merge.steps.map(x => x.key)).toEqual(MERGE_STEPS)
@@ -125,7 +126,9 @@ describe('budget', () => {
     // a second redemption takes the one entry left
     applyUsage(s, { rateLimits: limits(60), now: NOW + 2 * MIN, fresh: true })
     applyUsage(s, { rateLimits: limits(1), now: NOW + 3 * MIN, fresh: true })
-    expect(s.redeemedKeys).toEqual(['weekly:2026-10-20', 'weekly:2026-10-28'])
+    // pinned before as ['weekly:2026-10-20', 'weekly:2026-10-28']: the key of the entry the person took out
+    // stayed and would cancel a new entry of that date
+    expect(s.redeemedKeys).toEqual(['weekly:2026-10-28'])
     expect(budgetOf(s, NOW + 3 * MIN).resets).toHaveLength(0)
   })
 
@@ -229,13 +232,15 @@ describe('budget', () => {
     expect(notifications(before, after).filter(n => n.kind === 'color')).toEqual([])
   })
 
-  test('plan: the user file first, then another file, then the option; a bare option text gets its prefix', () => {
+  test('plan: only the user file, then the option; a bare option text gets its prefix', () => {
     const files = [
       { path: '/repo/CLAUDE.md', kind: 'project', content: 'Claude plan: Pro' },
       { path: '/home/u/.claude/CLAUDE.md', kind: 'user', content: '# Notes\n' + PLAN + '\n' },
     ]
     expect(planFromContext(files, '').name).toBe('Max 20x')
-    expect(planFromContext([files[0]], '').name).toBe('Pro')
+    // a project file never sets the plan (pinned before as 'Pro': a cloned repository decided it)
+    expect(planFromContext([files[0]], '')).toBe(null)
+    expect(planFromContext([files[0]], 'Max 5x').name).toBe('Max 5x')
     expect(planFromContext([], 'Max 5x · reserve 15%').name).toBe('Max 5x')
     expect(planFromContext(undefined, '')).toBe(null)
     expect(planFromOption('  ')).toBe(null)
@@ -261,7 +266,7 @@ describe('workflow cost', () => {
     for (let i = 5; i < 7; i++) spawnWf(s, 'wf_1', i, 'claude-opus-4-8', NOW + MIN)
     spawnWf(s, 'wf_1', 3, 'sonnet', NOW + MIN)
     w = worker(s, 'wf_1', NOW + MIN)
-    expect(w.agents).toEqual({ total: 7, sonnet: 5, opus: 2, fable: 0, other: 0 })
+    expect(w.agents).toEqual({ total: 7, haiku: 0, sonnet: 5, opus: 2, fable: 0, other: 0 })
     onTaskNotification(s, '<task-id>task1</task-id>\n<status>completed</status>\n<summary>ok</summary>\n<agent_count>7</agent_count>\n<subagent_tokens>1.5M</subagent_tokens>', NOW + 30 * MIN)
     w = worker(s, 'wf_1', NOW + 30 * MIN)
     expect(w.status).toBe('done')
@@ -275,17 +280,37 @@ describe('workflow cost', () => {
     expect(vm.runCost.last).toEqual({ label: 'deep-review', points: 4, agents: 7 })
   })
 
-  test('the unit is the mean over runs; a run that missed agents is not a sample', () => {
+  test('the unit is total points over total weight; a run that missed agents is not a sample', () => {
     const s = fresh(20)
     run(s, { runId: 'wf_1', after: 24 })
     run(s, { runId: 'wf_2', t0: NOW + 2 * HOUR, spawns: [['sonnet', 4]], after: 26 })
     const vm = vmOf(s, NOW + 3 * HOUR)
     expect(vm.runCost.samples).toBe(2)
-    expect(near(vm.runCost.unitPoints, (4 / 9 + 2 / 4) / 2)).toBe(true)
+    // pinned before as the mean of the ratios, (4/9 + 2/4) / 2, where a light run weighed as much as a heavy one
+    expect(near(vm.runCost.unitPoints, (4 + 2) / (9 + 4))).toBe(true)
     const m = fresh(20)
     run(m, { spawns: [['sonnet', 3]], notice: '<task-id>task1</task-id><status>completed</status><agent_count>9</agent_count>', after: 30 })
     expect(vmOf(m, NOW + HOUR).runCost.samples).toBe(0)
     expect(worker(m, 'wf_1', NOW + HOUR).points).toBe(10)
+  })
+
+  test('a small Haiku run next to Sonnet runs barely moves the unit or the estimate', () => {
+    const s = fresh(20)
+    for (let k = 0; k < 4; k++) run(s, { runId: 'wf_s' + k, t0: NOW + k * 2 * HOUR, spawns: [['sonnet', 4]], after: 22 + 2 * k })
+    expect(near(vmOf(s, NOW + 8 * HOUR).runCost.unitPoints, 0.5)).toBe(true)
+    expect(estimateRun(s, budgetOf(s, NOW + 8 * HOUR), { sonnet: 16 }).points).toBe(8)
+    // two Haiku agents (weight 0.1) over one whole weekly point: its ratio would be 10 points per agent
+    run(s, { runId: 'wf_h', t0: NOW + 8 * HOUR, spawns: [['claude-haiku-5-5', 2]], after: 29 })
+    const t = NOW + 10 * HOUR
+    expect(worker(s, 'wf_h', t).points).toBe(1)
+    expect(vmOf(s, t).runCost).toMatchObject({ unitPoints: 0.5, samples: 4, last: { points: 1, agents: 2 } })
+    expect(estimateRun(s, budgetOf(s, t), { sonnet: 16 }).points).toBe(8)
+    // a light sample already stored (weight under one Sonnet agent) is left out too; one of weight 1 counts by its weight
+    s.runCost.samples.push({ label: 'old', points: 1, weight: 0.1, agents: 2, at: NOW, plan: 'Max 20x' })
+    expect(vmOf(s, t).runCost.unitPoints).toBe(0.5)
+    s.runCost.samples.push({ label: 'one', points: 1, weight: 1, agents: 20, at: NOW, plan: 'Max 20x' })
+    expect(near(vmOf(s, t).runCost.unitPoints, 9 / 17)).toBe(true)
+    expect(estimateRun(s, budgetOf(s, t), { sonnet: 16 }).samples).toBe(5)
   })
 
   test('the points wait for the first reading after the notification', () => {
@@ -473,11 +498,13 @@ describe('agents', () => {
     expect(worker(s, 'wf_5').agents.total).toBe(1)
   })
 
-  test('a model name of another family counts as other, a missing model too', () => {
+  test('a Haiku model counts as haiku; an unknown or missing model counts as other', () => {
+    // pinned before as other: 2, which weighed a Haiku agent as a whole Sonnet one
     const s = fresh()
     spawnWf(s, 'wf_1', 0, 'claude-haiku-4-5')
     onAgentSpawned(s, { toolUseId: 'q', input: { workflow: { runId: 'wf_1', agentIndex: 1 } }, result: { model: undefined, agentId: 'q' }, now: NOW })
-    expect(worker(s, 'wf_1').agents).toMatchObject({ total: 2, other: 2 })
+    spawnWf(s, 'wf_1', 2, 'gpt-9')
+    expect(worker(s, 'wf_1').agents).toMatchObject({ total: 3, haiku: 1, other: 2 })
   })
 })
 
@@ -1111,7 +1138,7 @@ describe('persistence', () => {
     setNight(s, true, NOW)
     onWake(s, { delaySeconds: 600, now: NOW })
     const saved = JSON.parse(JSON.stringify(dump(s)))
-    expect(Object.keys(saved).sort()).toEqual(['night', 'runCost'])
+    expect(Object.keys(saved).sort()).toEqual(['night', 'redeemed', 'runCost'])
     const t2 = createState()
     restore(t2, saved, NOW + HOUR)
     setPlan(t2, parsePlanLine(PLAN))
@@ -1241,5 +1268,462 @@ describe('budget.js is the same file in model-guard and coordinator-lens', () =>
     let hash = 0x811c9dc5
     for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0
     expect(hash.toString(16).padStart(8, '0') + ':' + text.length).toBe(BUDGET_FINGERPRINT)
+  })
+})
+
+// ---------- merge-gate fixes (PR #10) ----------
+
+describe('the plan comes only from the user CLAUDE.md', () => {
+  test('a project, local or memory file never sets the plan, the reserve or the banked resets', () => {
+    const line = 'Claude plan: Max 20x · reserve 0% · banked: weekly reset, expires 2026-10-14; weekly reset, expires 2026-10-14'
+    for (const kind of ['project', 'local', 'memory', undefined]) {
+      const files = [{ path: '/home/u/.claude/CLAUDE.md', kind: 'user', content: '# no plan here' }, { path: '/repo/CLAUDE.md', kind, content: line }]
+      expect(userPlan(files), String(kind)).toEqual({ read: true, plan: null })
+      expect(planFromContext(files, ''), String(kind)).toBe(null)
+    }
+    // at 88% weekly the user plan says red; a project file must not turn it green
+    const s = createState()
+    setPlan(s, planFromContext([{ path: '/repo/CLAUDE.md', kind: 'project', content: line }], ''))
+    applyUsage(s, { rateLimits: limits(88, 10), now: NOW, fresh: true })
+    expect(budgetOf(s, NOW).color).toBe('red')
+  })
+
+  test('userPlan tells a user file without the line apart from no user file at all', () => {
+    expect(userPlan(undefined)).toEqual({ read: false, plan: null })
+    expect(userPlan([{ path: '/repo/CLAUDE.md', kind: 'project', content: PLAN }])).toEqual({ read: false, plan: null })
+    expect(userPlan([{ path: '/home/u/.claude/CLAUDE.md', kind: 'user', content: 'x' }])).toEqual({ read: true, plan: null })
+    expect(userPlan([{ path: '/home/u/.claude/CLAUDE.md', kind: 'user', content: PLAN }]).plan.name).toBe('Max 20x')
+  })
+})
+
+describe('Haiku weighs 0.05 of a Sonnet agent', () => {
+  test('a Haiku-heavy workflow stores its weight and unit the way estimatePoints counts them', () => {
+    const s = fresh(20)
+    onWorkflowLaunch(s, { toolUseId: 'tuw', input: {}, result: { status: 'async_launched', taskId: 'task1', runId: 'wf_h', workflowName: 'readers' }, now: NOW })
+    for (let i = 0; i < 14; i++) spawnWf(s, 'wf_h', i, 'claude-haiku-5-5', NOW + MIN)
+    for (let i = 14; i < 16; i++) spawnWf(s, 'wf_h', i, 'claude-opus-5-5', NOW + MIN)
+    expect(worker(s, 'wf_h', NOW + MIN).agents).toEqual({ total: 16, haiku: 14, sonnet: 0, opus: 2, fable: 0, other: 0 })
+    onTaskNotification(s, '<task-id>task1</task-id><status>completed</status><agent_count>16</agent_count>', NOW + 30 * MIN)
+    onMeasure(s, { rateLimits: limits(24.5), now: NOW + 31 * MIN })
+    expect(near(s.runCost.samples[0].weight, 4.7)).toBe(true)
+    const unit = 4.5 / 4.7
+    expect(near(vmOf(s, NOW + 31 * MIN).runCost.unitPoints, unit)).toBe(true)
+    const est = estimateRun(s, budgetOf(s, NOW + 31 * MIN), { sonnet: 8 })
+    expect(est.points).toBe(Math.round(8 * unit * 100) / 100)
+    expect(estimateRun(s, budgetOf(s, NOW + 31 * MIN), { haiku: 20 }).points).toBe(Math.round(budgetModule.estimatePoints({ haiku: 20 }, unit) * 100) / 100)
+  })
+
+  test('a single Haiku cloud session counts 0.05 in flight, not a whole Sonnet agent', () => {
+    const s = fresh(20)
+    s.runCost.samples.push({ label: 'x', points: 2, weight: 1, agents: 1, at: NOW, plan: 'Max 20x' })
+    onAgentToolCall(s, { toolUseId: 'h', input: { description: 'haiku remote', isolation: 'remote', model: 'claude-haiku-5-5' }, now: NOW })
+    onAgentToolResult(s, { toolUseId: 'h', result: { status: 'remote_launched', taskId: 'ht' }, now: NOW })
+    expect(near(budgetOf(s, NOW).inFlight, 0.1)).toBe(true)
+  })
+})
+
+describe('redeemed resets', () => {
+  const ONE = 'Claude plan: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-21'
+
+  test('a redemption survives a dump and a restore: the redeemed reset never counts again', () => {
+    const s = createState()
+    setPlan(s, parsePlanLine(ONE))
+    applyUsage(s, { rateLimits: limits(80), now: NOW, fresh: true })
+    applyUsage(s, { rateLimits: limits(1), now: NOW + MIN, fresh: true })
+    expect(budgetOf(s, NOW + MIN).resets).toHaveLength(0)
+    const saved = JSON.parse(JSON.stringify(dump(s)))
+    expect(saved.redeemed).toEqual({ keys: ['weekly:2026-10-21'], had: { 'weekly:2026-10-21': 1 }, mark: { resetsAt: NOW + 144 * HOUR, used: 1 } })
+    // a reload: a new state, the same plan line, the store, the same reading
+    const r = createState()
+    setPlan(r, parsePlanLine(ONE))
+    restore(r, saved, NOW + 2 * MIN)
+    applyUsage(r, { rateLimits: limits(1), now: NOW + 2 * MIN, fresh: true })
+    const b = budgetOf(r, NOW + 2 * MIN)
+    expect(b.resets).toHaveLength(0)
+    expect(b.bankedWeekly).toBe(0)
+  })
+
+  test('the weekly mark survives too: a redemption between a reading before the reload and one after it is seen', () => {
+    const s = createState()
+    setPlan(s, parsePlanLine(ONE))
+    applyUsage(s, { rateLimits: limits(80), now: NOW, fresh: true })
+    const r = createState()
+    setPlan(r, parsePlanLine(ONE))
+    restore(r, JSON.parse(JSON.stringify(dump(s))), NOW + MIN)
+    applyUsage(r, { rateLimits: limits(1), now: NOW + 2 * MIN, fresh: true })
+    expect(r.redeemedKeys).toEqual(['weekly:2026-10-21'])
+    expect(budgetOf(r, NOW + 2 * MIN).resets).toHaveLength(0)
+  })
+
+  test('mergeRedeemed folds in the keys of other sessions once, and drops expired keys', () => {
+    const s = createState()
+    s.redeemedKeys = ['weekly:2026-10-21']
+    const out = mergeRedeemed(s, { keys: ['weekly:2026-10-21', 'weekly:2026-10-30', 'weekly:2026-10-01', 'junk', 7] }, NOW)
+    expect(out.keys).toEqual(['weekly:2026-10-21', 'weekly:2026-10-30'])
+    expect(s.redeemedKeys).toEqual(['weekly:2026-10-21', 'weekly:2026-10-30'])
+    // two resets of the same day redeemed one after the other stay two
+    const two = createState()
+    two.redeemedKeys = ['weekly:2026-10-21', 'weekly:2026-10-21']
+    expect(mergeRedeemed(two, { keys: ['weekly:2026-10-21'] }, NOW).keys).toEqual(['weekly:2026-10-21', 'weekly:2026-10-21'])
+    expect(mergeRedeemed(createState(), 'junk', NOW)).toEqual({ keys: [], had: {}, mark: null })
+  })
+
+  test('a redeemed undated reset is forgotten once the plan line has no undated entry', () => {
+    const s = createState()
+    setPlan(s, parsePlanLine('Claude plan: Max 20x · banked: weekly reset'))
+    restore(s, { redeemed: { keys: ['weekly:'], mark: null } }, NOW)
+    expect(budgetOf(s, NOW).bankedWeekly).toBe(0)
+    setPlan(s, parsePlanLine('Claude plan: Max 20x'))
+    expect(s.redeemedKeys).toEqual([])
+    expect(mergeRedeemed(s, { keys: ['weekly:'] }, NOW).keys).toEqual([])
+  })
+
+  test('two entries of one date, one redeemed and then taken out of the plan line: the one left counts, after a reload too', () => {
+    const TWO = 'Claude plan: Max 20x · banked: weekly reset, expires 2026-10-20; weekly reset, expires 2026-10-20'
+    const LEFT = 'Claude plan: Max 20x · banked: weekly reset, expires 2026-10-20'
+    const s = createState()
+    setPlan(s, parsePlanLine(TWO))
+    applyUsage(s, { rateLimits: limits(80), now: NOW, fresh: true })
+    applyUsage(s, { rateLimits: limits(1), now: NOW + MIN, fresh: true })
+    expect(budgetOf(s, NOW + MIN).resets).toHaveLength(1)
+    const saved = JSON.parse(JSON.stringify(dump(s)))
+    expect(saved.redeemed.had).toEqual({ 'weekly:2026-10-20': 2 })
+    // a reload with the edited plan line
+    const r = createState()
+    setPlan(r, parsePlanLine(LEFT))
+    restore(r, saved, NOW + 2 * MIN)
+    applyUsage(r, { rateLimits: limits(1), now: NOW + 2 * MIN, fresh: true })
+    let b = budgetOf(r, NOW + 2 * MIN)
+    expect(b.resets).toHaveLength(1)
+    expect(b.bankedWeekly).toBe(1)
+    expect(r.redeemedKeys).toEqual([])
+    // the same edit in the running session
+    setPlan(s, parsePlanLine(LEFT))
+    expect(budgetOf(s, NOW + 2 * MIN).resets).toHaveLength(1)
+    // another session's store still holds the old key: folding it in does not cancel the entry left
+    expect(mergeRedeemed(r, saved, NOW + 3 * MIN).keys).toEqual([])
+    expect(mergeRedeemed(s, saved, NOW + 3 * MIN).keys).toEqual([])
+    b = budgetOf(s, NOW + 3 * MIN)
+    expect(b.resets).toHaveLength(1)
+    // a reload with the plan line unchanged keeps the redemption
+    const u = createState()
+    setPlan(u, parsePlanLine(TWO))
+    restore(u, saved, NOW + 2 * MIN)
+    expect(budgetOf(u, NOW + 2 * MIN).resets).toHaveLength(1)
+  })
+
+  test('two undated entries, one redeemed and then taken out: the one left counts again, weeks later too', () => {
+    const s = createState()
+    setPlan(s, parsePlanLine('Claude plan: Max 20x · banked: weekly reset; weekly reset'))
+    applyUsage(s, { rateLimits: limits(80), now: NOW, fresh: true })
+    applyUsage(s, { rateLimits: limits(1), now: NOW + MIN, fresh: true })
+    expect(s.redeemedKeys).toEqual(['weekly:'])
+    expect(budgetOf(s, NOW + MIN).bankedWeekly).toBe(1)
+    const saved = JSON.parse(JSON.stringify(dump(s)))
+    const r = createState()
+    setPlan(r, parsePlanLine('Claude plan: Max 20x · banked: weekly reset'))
+    restore(r, saved, NOW + 30 * 24 * HOUR)
+    expect(r.redeemedKeys).toEqual([])
+    expect(budgetOf(r, NOW + 30 * 24 * HOUR).bankedWeekly).toBe(1)
+  })
+
+  test('both entries of one date redeemed, one taken out: the one left stays redeemed', () => {
+    const s = createState()
+    setPlan(s, parsePlanLine('Claude plan: Max 20x · banked: weekly reset, expires 2026-10-20; weekly reset, expires 2026-10-20'))
+    applyUsage(s, { rateLimits: limits(80), now: NOW, fresh: true })
+    applyUsage(s, { rateLimits: limits(1), now: NOW + MIN, fresh: true })
+    applyUsage(s, { rateLimits: limits(70), now: NOW + 2 * MIN, fresh: true })
+    applyUsage(s, { rateLimits: limits(1), now: NOW + 3 * MIN, fresh: true })
+    expect(s.redeemedKeys).toEqual(['weekly:2026-10-20', 'weekly:2026-10-20'])
+    setPlan(s, parsePlanLine('Claude plan: Max 20x · banked: weekly reset, expires 2026-10-20'))
+    expect(s.redeemedKeys).toEqual(['weekly:2026-10-20'])
+    expect(budgetOf(s, NOW + 3 * MIN).resets).toHaveLength(0)
+    // a new entry of the same date added later counts
+    setPlan(s, parsePlanLine('Claude plan: Max 20x · banked: weekly reset, expires 2026-10-20; weekly reset, expires 2026-10-20'))
+    expect(budgetOf(s, NOW + 3 * MIN).resets).toHaveLength(1)
+  })
+
+  test('an expired entry is never the one redeemed', () => {
+    const s = createState()
+    setPlan(s, parsePlanLine('Claude plan: Max 20x · banked: weekly reset, expires 2026-10-01; weekly reset, expires 2026-10-21'))
+    applyUsage(s, { rateLimits: limits(70), now: NOW, fresh: true })
+    expect(budgetOf(s, NOW).resets.map(r => r.expires)).toEqual(['2026-10-21'])
+    applyUsage(s, { rateLimits: limits(0), now: NOW + MIN, fresh: true })
+    expect(s.redeemedKeys).toEqual(['weekly:2026-10-21'])
+    expect(budgetOf(s, NOW + MIN).resets).toEqual([])
+    // an undated reset and one expiring today can still be redeemed
+    const u = createState()
+    setPlan(u, parsePlanLine('Claude plan: Max 20x · banked: weekly reset, expires 2026-10-01; weekly reset'))
+    applyUsage(u, { rateLimits: limits(70), now: NOW, fresh: true })
+    applyUsage(u, { rateLimits: limits(0), now: NOW + MIN, fresh: true })
+    expect(u.redeemedKeys).toEqual(['weekly:'])
+    expect(budgetOf(u, NOW + MIN).bankedWeekly).toBe(0)
+    const today = createState()
+    setPlan(today, parsePlanLine('Claude plan: Max 20x · banked: weekly reset, expires 2026-10-07'))
+    applyUsage(today, { rateLimits: limits(70), now: NOW, fresh: true })
+    applyUsage(today, { rateLimits: limits(0), now: NOW + MIN, fresh: true })
+    expect(today.redeemedKeys).toEqual(['weekly:2026-10-07'])
+  })
+})
+
+describe('a remote Agent call that runs locally', () => {
+  test('async_launched: a local agent, running, then done when its turn completes', () => {
+    const s = fresh()
+    onAgentToolCall(s, { toolUseId: 'r', input: { description: 'fell back', isolation: 'remote' }, now: NOW })
+    expect(worker(s, 'tool:r')).toMatchObject({ kind: 'cloud', status: 'launched' })
+    onAgentToolResult(s, { toolUseId: 'r', result: { status: 'async_launched', agentId: 'ar' }, now: NOW + MIN })
+    expect(worker(s, 'tool:r', NOW + MIN)).toMatchObject({ kind: 'agent', status: 'running', lastSeenAt: NOW + MIN, url: null })
+    expect(s.workers[0].pre).toBe(null)
+    onTurnComplete(s, { agentId: 'ar', now: NOW + 5 * MIN, reason: 'answer' })
+    expect(worker(s, 'tool:r', NOW + 5 * MIN)).toMatchObject({ kind: 'agent', status: 'done' })
+  })
+
+  test('completed: a local agent, done at once; no cloud session stays open', () => {
+    const s = fresh()
+    onAgentToolCall(s, { toolUseId: 'r', input: { description: 'fell back', isolation: 'remote' }, now: NOW })
+    onAgentToolResult(s, { toolUseId: 'r', result: { status: 'completed', agentId: 'ar' }, now: NOW + MIN })
+    expect(worker(s, 'tool:r', NOW + MIN)).toMatchObject({ kind: 'agent', status: 'done', endedAt: NOW + MIN })
+    expect(vmOf(s, NOW + MIN).workers.filter(w => w.kind === 'cloud')).toEqual([])
+  })
+})
+
+describe('only real cloud launches count', () => {
+  const run = (s, command, output = '', extra = {}) => onShellCommand(s, { command, output, isError: false, now: NOW, ...extra })
+  const merged = () => {
+    const s = fresh()
+    s.merge = { pr: 3, steps: { merged: true } }
+    return s
+  }
+
+  test('a command that only reads, edits or names launch.exp launches nothing', () => {
+    const s = merged()
+    const exp = '~/.claude/skills/coordinator-method/launch.exp'
+    for (const cmd of ['sed -n 1,40p ' + exp, 'head ' + exp, 'chmod +x launch.exp', 'grep -n spawn ' + exp, 'vim ' + exp, 'ls -l launch.exp launch.ps1', 'cat launch.ps1', 'bash -c "sed -i s/a/b/ launch.exp"']) {
+      run(s, cmd, '#!/usr/bin/expect https://claude.ai/code/session_zzz')
+    }
+    expect(vmOf(s).workers).toEqual([])
+    expect(s.merge.steps.unblocked).toBeUndefined()
+  })
+
+  test('steering a session that exists starts nothing and leaves that session as it is', () => {
+    const s = merged()
+    run(s, 'claude -p "please rebase" --cloud session_01ABC --output-format json', '')
+    run(s, 'claude -p "please rebase" --cloud session_01ABC --output-format json', '{"ok":true,"session_id":"session_01ABC","url":"https://claude.ai/code/session_01ABC"}')
+    run(s, 'claude --print "go on" --cloud https://claude.ai/code/session_02', '')
+    run(s, 'claude --cloud session_03 "a message"', '')
+    expect(vmOf(s).workers).toEqual([])
+    expect(s.merge.steps.unblocked).toBeUndefined()
+    run(s, 'claude --cloud "a new task"', 'https://claude.ai/code/session_04')
+    s.workers[0].status = 'running'
+    s.merge = { pr: 3, steps: { merged: true } }
+    run(s, 'claude -p "status?" --cloud https://claude.ai/code/session_04 --output-format json', '{"ok":true,"url":"https://claude.ai/code/session_04"}')
+    expect(vmOf(s).workers.map(w => [w.label, w.status])).toEqual([['a new task', 'running']])
+    expect(s.merge.steps.unblocked).toBeUndefined()
+  })
+
+  test('launch.exp run by expect, directly or through wsl, is a launch', () => {
+    const s = fresh()
+    run(s, './launch.exp ci-fix rules.md /tmp/ci.log opus xhigh', 'https://claude.ai/code/session_e1')
+    run(s, 'expect -f ~/launch.exp docs - /tmp/docs.log', 'https://claude.ai/code/session_e2')
+    run(s, 'wsl -d Ubuntu expect ~/launch.exp wsl-task none /tmp/w.log fable max', 'https://claude.ai/code/session_e3')
+    expect(vmOf(s).workers.map(w => [w.label, w.model, w.effort, w.status])).toEqual([
+      ['ci-fix', 'opus', 'xhigh', 'launched'],
+      ['docs', 'sonnet', 'high', 'launched'],
+      ['wsl-task', 'fable', 'max', 'launched'],
+    ])
+  })
+
+  test('launch.ps1 run is a launch; a dry run or a refusal for want of a terminal is not', () => {
+    const s = fresh()
+    const ps1 = '"$HOME\\.claude\\skills\\cloud-worker\\launch.ps1"'
+    run(s, 'powershell.exe -NoProfile -File ' + ps1 + ' task.md none w.log -DryRun', 'dry run: nothing launched')
+    run(s, 'powershell.exe -NoProfile -File ' + ps1 + ' task.md none w.log opus high', 'launch.ps1: a new cloud session needs a real terminal (TTY): run this in a terminal tab', { isError: true })
+    expect(vmOf(s).workers).toEqual([])
+    run(s, 'powershell.exe -NoProfile -File ' + ps1 + ' task.md none w.log opus high', 'https://claude.ai/code/session_w1')
+    run(s, '& ' + ps1 + ' -Ref main ps-task.md none w.log -Effort max', 'https://claude.ai/code/session_w2')
+    expect(vmOf(s).workers.map(w => [w.label, w.model, w.effort, w.url])).toEqual([
+      ['task', 'opus', 'high', 'https://claude.ai/code/session_w1'],
+      ['ps-task', 'sonnet', 'max', 'https://claude.ai/code/session_w2'],
+    ])
+  })
+})
+
+describe('second fix round', () => {
+  const run = (s, command, output = '', extra = {}) => onShellCommand(s, { command, output, isError: false, now: NOW, ...extra })
+  const merged = () => {
+    const s = fresh()
+    s.merge = { pr: 3, steps: { merged: true } }
+    return s
+  }
+
+  test('a bash or PowerShell line continuation keeps the next line in the same command', () => {
+    const s = fresh()
+    run(s, 'gh pr merge 12 --merge \\\n  --match-head-commit abc123 \\\n  --subject "x (#12)"', '✓ Merged')
+    expect(steps(vmOf(s))).toMatchObject({ merged: true, headPinned: true })
+    expect(vmOf(s).merge.pr).toBe(12)
+    const p = fresh()
+    run(p, 'gh pr merge 13 --merge `\r\n  --match-head-commit abc', '✓ Merged')
+    expect(steps(vmOf(p))).toMatchObject({ merged: true, headPinned: true })
+    const c = fresh()
+    run(c, 'claude --model sonnet --effort high \\\n  --cloud "wrapped task"', 'https://claude.ai/code/session_wrap')
+    expect(vmOf(c).workers).toHaveLength(1)
+    expect(vmOf(c).workers[0]).toMatchObject({ kind: 'cloud', label: 'wrapped task', model: 'sonnet', effort: 'high' })
+    // a backslash inside a word is still a path character, and a new line with none before it still splits
+    const q = fresh()
+    run(q, 'cd C:\\repo\ngh pr merge 14 --merge', '✓ Merged')
+    expect(vmOf(q).merge.pr).toBe(14)
+  })
+
+  test('cmd /c and powershell -Command run all the words after the flag; bash -c only the next one', () => {
+    const s = fresh()
+    run(s, 'cmd /c gh pr merge 12 --merge --match-head-commit abc', '✓ Merged')
+    expect(steps(vmOf(s))).toMatchObject({ merged: true, headPinned: true })
+    const p = fresh()
+    run(p, 'powershell -NoProfile -Command claude --cloud --model sonnet "ps task"', 'https://claude.ai/code/session_ps')
+    expect(vmOf(p).workers.map(w => [w.kind, w.label, w.model])).toEqual([['cloud', 'ps task', 'sonnet']])
+    const q = fresh()
+    run(q, 'pwsh -c "gh pr merge 15 --merge"', '✓ Merged')
+    expect(vmOf(q).merge.pr).toBe(15)
+    // the words after bash -c "..." are its $0, $1: never a command
+    const b = fresh()
+    run(b, 'bash -c "gh pr view 1" gh pr merge 9 --merge', 'ok')
+    expect(steps(vmOf(b)).merged).toBe(false)
+  })
+
+  test('next work counts as launched only once a launch is known neither denied nor failed', () => {
+    const wfDenied = merged()
+    onWorkflowLaunch(wfDenied, { toolUseId: 't1', input: { script: 'x' }, result: { deny: 'red' }, now: NOW })
+    const wfFailed = merged()
+    onWorkflowLaunch(wfFailed, { toolUseId: 't2', input: { script: 'x' }, result: { error: 'syntax' }, now: NOW })
+    for (const s of [wfDenied, wfFailed]) expect(steps(vmOf(s)).unblocked).toBe(false)
+    const wfOk = merged()
+    onWorkflowLaunch(wfOk, { toolUseId: 't3', input: { script: 'x' }, result: { status: 'async_launched', runId: 'r', taskId: 'k' }, now: NOW })
+    expect(steps(vmOf(wfOk)).unblocked).toBe(true)
+
+    const agent = merged()
+    onAgentToolCall(agent, { toolUseId: 'a1', input: { description: 'fix' }, now: NOW })
+    // before its answer the launch is not known yet
+    expect(steps(vmOf(agent)).unblocked).toBe(false)
+    onAgentToolResult(agent, { toolUseId: 'a1', deny: 'red', now: NOW })
+    expect(steps(vmOf(agent)).unblocked).toBe(false)
+    onAgentToolCall(agent, { toolUseId: 'a2', input: { description: 'fix' }, now: NOW })
+    onAgentToolResult(agent, { toolUseId: 'a2', isError: true, now: NOW })
+    expect(steps(vmOf(agent)).unblocked).toBe(false)
+    onAgentToolCall(agent, { toolUseId: 'a3', input: { description: 'fix' }, now: NOW })
+    onAgentToolResult(agent, { toolUseId: 'a3', result: { status: 'async_launched', agentId: 'ag3' }, now: NOW })
+    expect(steps(vmOf(agent)).unblocked).toBe(true)
+  })
+
+  test('a merge or close that goes on in the background waits for its notification', () => {
+    const s = fresh()
+    run(s, 'gh pr merge 12 --merge --match-head-commit abc', '', { background: 'b1' })
+    run(s, 'gh issue close 7', '', { background: 'b2' })
+    let vm = vmOf(s)
+    expect(steps(vm)).toMatchObject({ merged: false, ticketsClosed: false, headPinned: false })
+    expect(vm.decisions).toEqual([])
+    const notice = (id, status) => '<task-notification>\n<task-id>' + id + '</task-id>\n<status>' + status + '</status>\n<summary>Background command</summary>\n</task-notification>'
+    expect(onTaskNotification(s, notice('b2', 'failed'), NOW + MIN)).toBe(null)
+    expect(steps(vmOf(s)).ticketsClosed).toBe(false)
+    onTaskNotification(s, notice('b1', 'completed'), NOW + MIN)
+    vm = vmOf(s, NOW + MIN)
+    expect(steps(vm)).toMatchObject({ merged: true, headPinned: true })
+    expect(vm.decisions[0]).toMatchObject({ kind: 'merge', text: 'Merged #12' })
+    // a second notification for the same task settles nothing more
+    onTaskNotification(s, notice('b1', 'completed'), NOW + 2 * MIN)
+    expect(vmOf(s, NOW + 2 * MIN).decisions.filter(d => d.kind === 'merge')).toHaveLength(1)
+    // with no task id the outcome can never be known: left out
+    const t = fresh()
+    run(t, 'gh pr merge 20 --merge', '', { background: true })
+    expect(steps(vmOf(t)).merged).toBe(false)
+    expect(vmOf(t).merge.pr).toBe(null)
+    // other commands in the background are read as before
+    const c = fresh()
+    run(c, 'gh pr list --state open', '', { background: 'b3' })
+    expect(vmOf(c).round.items.find(i => i.key === 'prsAndIssues').done).toBe('probable')
+  })
+
+  test('a wake is clamped to the [60, 3600] seconds the runtime allows', () => {
+    const s = fresh()
+    onWake(s, { delaySeconds: 10, now: NOW })
+    expect(vmOf(s).night.nextWakeAt).toBe(NOW + 60000)
+    onWake(s, { delaySeconds: 7200, now: NOW })
+    expect(vmOf(s).night.nextWakeAt).toBe(NOW + 3600000)
+  })
+
+  test('the pull request list keeps the time it was fetched', () => {
+    const s = fresh()
+    expect(vmOf(s).prsAt).toBe(null)
+    onPrList(s, [{ number: 1, title: 'a', state: 'OPEN' }], NOW + 5 * MIN)
+    expect(vmOf(s, NOW + 30 * MIN).prsAt).toBe(NOW + 5 * MIN)
+    onPrList(s, 'not json', NOW + 10 * MIN)
+    expect(vmOf(s, NOW + 30 * MIN).prsAt).toBe(NOW + 5 * MIN)
+  })
+
+  test('budget_estimate says the 5-hour window is not projected, and when the plan is assumed', () => {
+    const s = fresh()
+    s.runCost.samples.push({ label: 'x', points: 4, weight: 8, agents: 8, at: NOW, plan: 'Max 20x' })
+    applyUsage(s, { rateLimits: limits(20, 42), now: NOW, fresh: true })
+    const r = estimateRun(s, budgetOf(s, NOW), { sonnet: 2 })
+    expect(r).toMatchObject({ fits: true, fiveHourUsed: 42 })
+    expect(r.note).toContain('fits does not project the 5-hour window (now 42%)')
+    expect(r.note).not.toContain('plan assumed')
+    const none = createState()
+    applyUsage(none, { rateLimits: limits(20, null), now: NOW, fresh: true })
+    const n = estimateRun(none, budgetOf(none, NOW), { sonnet: 2 })
+    expect(n.fiveHourUsed).toBe(null)
+    expect(n.note).toContain('the 5-hour window is not readable and not projected')
+    expect(n.note).toContain('plan assumed (no Claude plan line; Pro accounts use Pro)')
+  })
+
+  test('a worker with no name of its own gets its kind in the person\'s language', () => {
+    const s = fresh()
+    onWorkflowLaunch(s, { toolUseId: 't1', input: {}, result: { status: 'async_launched', runId: 'r1', taskId: 'k1' }, now: NOW })
+    run(s, 'claude --cloud --model sonnet', 'https://claude.ai/code/session_n')
+    onAgentToolCall(s, { toolUseId: 'a1', input: {}, now: NOW })
+    expect(vmOf(s, NOW, 'it').workers.map(w => [w.label, w.named])).toEqual([['workflow', false], ['sessione cloud', false], ['agente', false]])
+    expect(vmOf(s, NOW, 'en').workers.map(w => w.label)).toEqual(['workflow', 'cloud session', 'agent'])
+    // the stalled toast names them in Italian too
+    const before = vmOf(s, NOW, 'it')
+    tick(s, NOW + 30 * MIN, 10)
+    const it = notifications(before, vmOf(s, NOW + 30 * MIN, 'it')).filter(n => n.kind === 'stalled').map(n => n.text)
+    expect(it).toHaveLength(2)
+    expect(it.join(' ')).toContain('agente')
+    expect(it.join(' ')).not.toMatch(/\bagent\b|cloud session/)
+  })
+})
+
+describe('budget.md boundaries in budget.js', () => {
+  const at = (used, hours, o = {}) =>
+    budgetModule.computeBudget({
+      rateLimits: [{ kind: 'seven_day', percentUsed: used, resetsAt: new Date(NOW + hours * HOUR).toISOString() }],
+      now: NOW,
+      plan: parsePlanLine(o.plan || 'Claude plan: Max 20x · reserve 10%'),
+      inFlight: o.inFlight || 0,
+    })
+
+  test('margin 10 is green and just above is yellow; 25 is yellow and just above is red', () => {
+    // 84 hours left: d = 3.5, pace 50
+    expect(at(60, 84)).toMatchObject({ color: 'green', margin: 10 })
+    expect(at(60.1, 84).color).toBe('yellow')
+    expect(at(75, 84)).toMatchObject({ color: 'yellow', margin: 25 })
+    expect(at(75.1, 84).color).toBe('red')
+  })
+
+  test('the last 12 hours are green below the reserve; 12.1 hours are not the last 12', () => {
+    expect(at(89, 12, { inFlight: 30 })).toMatchObject({ color: 'green', reason: 'last-12-hours' })
+    expect(at(89, 12.1, { inFlight: 30 }).color).toBe('red')
+  })
+
+  test('d never drops under 0.5 days', () => {
+    const b = at(1, 168)
+    expect(b.d).toBe(0.5)
+    expect(Math.abs(b.pace - 100 / 14)).toBeLessThan(1e-9)
+  })
+
+  test('a banked weekly reset that expires today no longer counts; one that expires tomorrow does', () => {
+    expect(at(10, 84, { plan: 'Claude plan: Max 20x · banked: weekly reset, expires 2026-10-07' }).resets).toHaveLength(0)
+    const tomorrow = at(10, 84, { plan: 'Claude plan: Max 20x · banked: weekly reset, expires 2026-10-08' })
+    expect(tomorrow.resets).toHaveLength(1)
+    expect(tomorrow.pace).toBe(100)
   })
 })

@@ -766,16 +766,32 @@ describe('an old reading', () => {
     }
   })
 
-  test('the texts for the model keep the rule: an old reading is unknown, with no pace, whatever `shown` holds', () => {
+  test('the texts for the model keep the rule: an old reading is unknown, with no pace, whatever `shown` holds, and says how old it is', () => {
     const vm = old()
-    expect(summaryText(vm).split('\n')[0]).toBe('budget: unknown, weekly 17%, 5h 0%, profile Max 20x')
+    expect(summaryText(vm).split('\n')[0]).toBe('budget: unknown (old reading, read 12m ago), weekly 17%, 5h 0%, profile Max 20x')
     const line = budgetLine(vm)
-    expect(line).toMatch(/^coordinator-lens budget: unknown \(old reading\) · profile Max 20x: 16 agents\/run, 3 cloud sessions · weekly 17% · 5h 0%/)
+    expect(line).toMatch(/^coordinator-lens budget: unknown \(old reading, read 12m ago\) · profile Max 20x: 16 agents\/run, 3 cloud sessions · weekly 17% · 5h 0%/)
     expect(line).not.toContain('pace')
     const bare = { ...vm, budget: { ...vm.budget, shown: null } }
     expect(summaryText(vm)).toBe(summaryText(bare))
     expect(budgetLine(vm)).toBe(budgetLine(bare))
-    expect(summaryText(vm)).not.toMatch(/ ago|budget: waiting/)
+    expect(summaryText(vm)).not.toMatch(/budget: waiting/)
+  })
+  test('an old red or yellow reading keeps its color for the model and says it is old and how old (budget.md: it no longer counts)', () => {
+    const red = old(180, { weekly: 60 })
+    expect(red.budget.color).toBe('red')
+    expect(budgetLine(red)).toMatch(/^coordinator-lens budget: red \(margin \+\d+, old reading, read 3h ago\) · profile Red: no new launches/)
+    expect(summaryText(red).split('\n')[0]).toMatch(/^budget: red \(old reading, read 3h ago\), margin \+\d+, weekly 60%/)
+    // a fresh one says nothing of its age
+    expect(budgetLine(fullVm({ budget: budgetFor({ weekly: 60 }) }))).not.toContain('reading')
+    expect(summaryText(fullVm({ budget: budgetFor({ weekly: 60 }) }))).not.toContain('reading')
+    // a poll before any response: its age is unknown, and a red one says so
+    const unknownAge = fullVm({ budget: budgetFor({ weekly: 60, unknownAge: true }) })
+    expect(unknownAge.budget).toMatchObject({ color: 'red', lastReadingAt: null })
+    expect(budgetLine(unknownAge)).toMatch(/^coordinator-lens budget: red \(margin \+\d+, reading of unknown age\)/)
+    expect(summaryText(unknownAge).split('\n')[0]).toMatch(/^budget: red \(reading of unknown age\), margin/)
+    // with no time beside the budget, the line says only what it knows
+    expect(budgetLine({ budget: red.budget })).toMatch(/^coordinator-lens budget: red \(margin \+\d+\) · /)
   })
   test('what the person sees follows the last known profile, what the model reads follows the rule', () => {
     const vm = old(12, { weekly: 45 })
@@ -783,7 +799,7 @@ describe('an old reading', () => {
     // old yellow reading keeps holding
     expect(bandText(vm, 300)).toContain('wf deep-review 7/8')
     expect(summaryText(vm).split('\n')[1]).toContain('deep-review wf 7/8')
-    expect(summaryText(vm).split('\n')[0]).toBe('budget: yellow, margin +24, weekly 45% (pace 21), 5h 0%, profile Max 5x')
+    expect(summaryText(vm).split('\n')[0]).toBe('budget: yellow (old reading, read 12m ago), margin +24, weekly 45% (pace 21), 5h 0%, profile Max 5x')
     expect(workflowSuffix(vm)).toBe('  wf deep-review 7/8')
   })
 })
@@ -1213,10 +1229,12 @@ describe('card', () => {
 describe('pane', () => {
   const makeActions = () => {
     const calls = []
-    return { calls, setTab: k => calls.push(['setTab', k]), toggleNight: () => calls.push(['toggleNight']) }
+    return { calls, setTab: k => calls.push(['setTab', k]), toggleNight: () => calls.push(['toggleNight']), close: () => calls.push(['close']) }
   }
 
-  test('five plain tabs with hotkeys 1-5, the current at full strength; no close button and no x hotkey, the tab row holds only the five tabs', () => {
+  // Pinned before as 'no close button and no x hotkey': mod-ui asks for a close button on the right
+  // (hotkey x, role dismiss), and the tab row now holds the five tabs on the left and that button.
+  test('five plain tabs with hotkeys 1-5, the current at full strength, and a close button on x at the right', () => {
     const actions = makeActions()
     const tree = paneView(fullVm(), fakeE('terminal'), { cols: 120, surface: 'terminal', tab: 'workers', actions })
     const tabs = all(tree, 'Button').filter(b => b.props.key.startsWith('tab-'))
@@ -1228,35 +1246,36 @@ describe('pane', () => {
     // the current tab is at full strength, the others dim
     expect(tabs.map(b => b.props.dimColor)).toEqual([true, undefined, true, true, true])
     expect(tabs.map(b => b.props.variant)).toEqual(['secondary', 'primary', 'secondary', 'secondary', 'secondary'])
-    // the pane draws its own close mark at the top right and Esc closes it: no close Button of ours, no `x` hotkey
-    expect(button(tree, 'close')).toBeUndefined()
-    // the tab row is the Box of the five tabs and nothing else, so the five tabs are the only Buttons on the overview
+    // the close button: hotkey x, role dismiss, secondary and dim, its press calls the close action
+    expect(button(tree, 'close').props).toMatchObject({ label: 'Close', hotkey: 'x', role: 'dismiss', variant: 'secondary', plain: true, dimColor: true })
+    button(tree, 'close').props.onPress()
+    expect(actions.calls).toEqual([['close']])
+    // the row: the Box of the five tabs on the left, the close button on the right
     const tabsRow = kids(tree)[0]
     expect(tabsRow.type).toBe('Box')
-    expect(kids(tabsRow)).toHaveLength(5)
-    expect(kids(tabsRow).every(k => k.type === 'Button')).toBe(true)
-    expect(kids(tabsRow).map(k => k.props.key)).toEqual(TABS.map(k => 'tab-' + k))
-    expect(tabsRow.props.justifyContent).toBeUndefined()
-    expect(all(paneView(fullVm(), fakeE('terminal'), { cols: 120, tab: 'overview' }), 'Button')).toHaveLength(5)
+    expect(tabsRow.props.justifyContent).toBe('space-between')
+    expect(kids(tabsRow).map(k => k.type)).toEqual(['Box', 'Button'])
+    expect(kids(kids(tabsRow)[0]).map(k => k.props.key)).toEqual(TABS.map(k => 'tab-' + k))
+    expect(kids(tabsRow)[1].props.key).toBe('close')
+    expect(all(paneView(fullVm(), fakeE('terminal'), { cols: 120, tab: 'overview' }), 'Button')).toHaveLength(6)
   })
-  test('no close Button, no x hotkey and no dismiss role on any tab, width or language', () => {
+  test('one close button on x with role dismiss on every tab, width and language, and only it has x or dismiss', () => {
     for (const lang of ['en', 'it']) {
       for (const cols of [44, 60, 90, 120]) {
         for (const tab of TABS) {
           const buttons = all(paneView({ ...fullVm(), lang }, fakeE('terminal'), { cols, surface: 'terminal', tab }), 'Button')
           const where = [lang, cols, tab].join(' ')
-          expect(buttons.map(b => b.props.hotkey), where).not.toContain('x')
-          expect(buttons.map(b => b.props.role), where).not.toContain('dismiss')
-          expect(buttons.map(b => b.props.key), where).not.toContain('close')
-          expect(buttons.map(b => b.props.label), where).not.toContain('Close')
-          expect(buttons.map(b => b.props.label), where).not.toContain('Chiudi')
+          expect(buttons.filter(b => b.props.hotkey === 'x').map(b => b.props.key), where).toEqual(['close'])
+          expect(buttons.filter(b => b.props.role === 'dismiss').map(b => b.props.key), where).toEqual(['close'])
+          expect(button({ type: 'Box', props: { children: buttons } }, 'close').props.label, where).toBe(lang === 'it' ? 'Chiudi' : 'Close')
         }
       }
     }
   })
-  test('the i18n table no longer carries a close button text, in either language', () => {
-    expect(KEYS).not.toContain('btn.close')
-    for (const lang of ['en', 'it']) expect(has(lang, 'btn.close')).toBe(false)
+  test('the close button text is in the i18n table, in both languages', () => {
+    expect(KEYS).toContain('btn.close')
+    expect(t('en', 'btn.close')).toBe('Close')
+    expect(t('it', 'btn.close')).toBe('Chiudi')
   })
   test('a thin rule of ─ in the subtle color sits under the tab row, as wide as the pane', () => {
     for (const cols of [60, 90, 120]) {
@@ -1280,6 +1299,7 @@ describe('pane', () => {
   })
   test('no actions given: pressing does nothing and does not throw', () => {
     const tree = paneView(fullVm(), fakeE('terminal'), { cols: 120, tab: 'night' })
+    button(tree, 'close').props.onPress()
     button(tree, 'tab-flow').props.onPress()
     button(tree, 'night-toggle').props.onPress()
   })
@@ -1325,6 +1345,12 @@ describe('pane', () => {
     const none = textOf(paneView(quietVm(), fakeE('terminal'), { cols: 100, tab: 'overview' }))
     expect(none).toMatch(/Week\s+no reading yet/)
     expect(none).not.toMatch(/[━╋]/)
+  })
+  test('workers tab: a workflow of Haiku agents names them, never drops them from the model cell', () => {
+    const vm = fullVm()
+    vm.workers[0] = { ...vm.workers[0], agents: { total: 16, haiku: 14, sonnet: 0, opus: 2, fable: 0, other: 0 } }
+    const text = linesOf(paneView(vm, fakeE('terminal'), { cols: 100, tab: 'workers' })).join('\n')
+    expect(text).toContain('14 haiku 2 opus')
   })
   test('workers tab: header, aligned columns, every worker', () => {
     const lines = linesOf(paneView(fullVm(), fakeE('terminal'), { cols: 100, tab: 'workers' }))
@@ -1441,7 +1467,10 @@ describe('pane', () => {
     expect(text).toMatch(/^BUDGET {6}green\n/m)
     expect(text).toMatch(/Week\s+17%   pace \d+%   margin -\d+   resets in 6d/)
     expect(text).toMatch(/5 hours\s+0%   resets in 4h 10m/)
-    expect(text).toMatch(/Plan\s+Max 20x   reserve 10%   weekly reset until 2026-10-22/)
+    // a relative time, as every time the person reads (was the raw date 'until 2026-10-22')
+    expect(text).toMatch(/Plan\s+Max 20x   reserve 10%   weekly reset, expires in 14d 12h/)
+    expect(textOf(paneView({ ...fullVm(), lang: 'it' }, fakeE('terminal'), { cols: 100, tab: 'night' }))).toMatch(/reset settimanale, scade tra 14g 12h/)
+    expect(text).not.toContain('2026-10-22')
     expect(text).toMatch(/Reading\s+2m ago/)
     const on = paneView(fullVm({ night: nightOn() }), fakeE('terminal'), { cols: 100, tab: 'night' })
     expect(button(on, 'night-toggle').props.label).toBe('Turn night off')
@@ -1696,7 +1725,11 @@ for (const surface of ['terminal', 'desktop']) {
         toggleNight: () => {
           night = !night
         },
+        close: () => {
+          closed += 1
+        },
       }
+      let closed = 0
       on('ui.render', { component: 'Pane' }, async ($, e, next) => {
         if (e.requestId !== 'viewpane') return next(e)
         const vm = fullVm({ night: night ? nightOn() : { on: false, since: null, nextWakeAt: null, pointsSince: null } })
@@ -1725,9 +1758,11 @@ for (const surface of ['terminal', 'desktop']) {
       await ui.unmount()
       ui = await draw()
       expect((await ui.find({ key: 'night-toggle' })).props.label).toBe('Turn night off')
-      // the pane has no close Button of ours: the engine's close mark and Esc are the way out
-      expect(await ui.find({ key: 'close' })).toBeUndefined()
-      expect((await ui.findAll({ type: 'Button' })).filter(b => !b.props.key.startsWith('tab-'))).toHaveLength(1)
+      // the close button on x reaches the close action (pinned before as no close Button)
+      expect((await ui.find({ key: 'close' })).props).toMatchObject({ hotkey: 'x', role: 'dismiss' })
+      expect((await ui.findAll({ type: 'Button' })).filter(b => !b.props.key.startsWith('tab-')).map(b => b.props.key)).toEqual(['close', 'night-toggle'])
+      await ui.press({ key: 'close' })
+      expect(closed).toBe(1)
       await ui.unmount()
     })
   })
@@ -1765,5 +1800,62 @@ describe('Solo profile', () => {
       expect(text).not.toContain('nessun nuovo avvio')
     }
     expect(t('en', 'budget.profileSolo', { name: 'Solo' })).toBe('Solo   no workflows   one agent at most   no cloud sessions')
+  })
+})
+
+// ---------- second fix round ----------
+
+describe('second fix round', () => {
+  const mergeLines = (vm, cols = 100, surface = 'terminal') => linesOf(paneView(vm, fakeE(surface), { cols, surface, tab: 'merge' }))
+
+  test('with no plan line the model reads that the plan is assumed, in the budget line and the command text', () => {
+    const vm = fullVm({ budget: budgetFor({ plan: null }) })
+    expect(vm.budget.plan.known).toBe(false)
+    expect(budgetLine(vm)).toContain('profile Max 5x: 8 agents/run, 1 cloud session · plan assumed (no Claude plan line; Pro accounts use Pro) · weekly 17%')
+    expect(summaryText(vm).split('\n')[0]).toMatch(/, profile Max 5x, plan assumed \(no Claude plan line; Pro accounts use Pro\)$/)
+    expect(budgetLine(fullVm())).not.toContain('assumed')
+    expect(summaryText(fullVm())).not.toContain('assumed')
+  })
+
+  test('an old pull request list: its age beside the count, its check colors dim; the model is told when it was read', () => {
+    const fresh = mergeLines(fullVm({ prsAt: NOW - 4 * MIN }))
+    expect(fresh.join('\n')).not.toMatch(/ago\)/)
+    const oldVm = fullVm({ prsAt: NOW - 40 * MIN })
+    const tree = paneView(oldVm, fakeE('terminal'), { cols: 100, surface: 'terminal', tab: 'merge' })
+    expect(linesOf(tree)).toContain('PR          3 (read 40m ago)')
+    expect(textNode(tree, 'green    ').props).toMatchObject({ color: 'success', dimColor: true })
+    expect(textNode(paneView(fullVm({ prsAt: NOW - 4 * MIN }), fakeE('terminal'), { cols: 100, surface: 'terminal', tab: 'merge' }), 'green    ').props.dimColor).toBeUndefined()
+    expect(linesOf(paneView({ ...oldVm, lang: 'it' }, fakeE('terminal'), { cols: 100, surface: 'terminal', tab: 'merge' })).join('\n')).toContain('3 (lettura di 40m fa)')
+    expect(summaryText(oldVm)).toContain('prs (list read 40m ago): #42 open green')
+    expect(summaryText(fullVm({ prsAt: NOW - 4 * MIN }))).toContain('prs: #42 open green')
+    // a list never polled (pull requests only seen in commands) carries no age
+    expect(summaryText(fullVm())).toContain('prs: #42 open green')
+  })
+
+  test('pull request numbers are right-aligned in their column, with or without a link', () => {
+    const prs = [
+      { number: 5, title: 'small', state: 'open', checks: 'none', mergeable: null, url: null, draft: false },
+      { number: 123, title: 'big', state: 'open', checks: 'none', mergeable: null, url: null, draft: false },
+      { number: 7, title: 'linked', state: 'open', checks: 'none', mergeable: null, url: 'https://github.com/a/b/pull/7', draft: false },
+    ]
+    const rows = mergeLines(fullVm({ prs })).filter(l => /#\d+/.test(l) && /small|big|linked/.test(l))
+    expect(rows).toHaveLength(3)
+    const ends = rows.map(r => /#\d+/.exec(r).index + /#\d+/.exec(r)[0].length)
+    expect(new Set(ends).size).toBe(1)
+    expect(rows[0]).toMatch(/  #5  /)
+  })
+
+  test('on Desktop the tab labels carry their number; the terminal draws it from the plain hotkey', () => {
+    const desk = all(paneView(fullVm(), fakeE('desktop'), { cols: 120, surface: 'desktop', tab: 'overview' }), 'Button').filter(b => b.props.key.startsWith('tab-'))
+    expect(desk.map(b => b.props.label)).toEqual(['1 Overview', '2 Workers', '3 Merge', '4 Flow', '5 Night'])
+    const it = all(paneView({ ...fullVm(), lang: 'it' }, fakeE('desktop'), { cols: 120, surface: 'desktop', tab: 'overview' }), 'Button').filter(b => b.props.key.startsWith('tab-'))
+    expect(it[0].props.label).toBe('1 Quadro')
+    const term = all(paneView(fullVm(), fakeE('terminal'), { cols: 120, surface: 'terminal', tab: 'overview' }), 'Button').filter(b => b.props.key.startsWith('tab-'))
+    expect(term.map(b => b.props.label)).toEqual(['Overview', 'Workers', 'Merge', 'Flow', 'Night'])
+  })
+
+  test('a worker named after its kind is in English for the model, whatever the language', () => {
+    const vm = fullVm({ lang: 'it', workers: [worker({ id: 'c', kind: 'cloud', label: 'sessione cloud', named: false, status: 'launched' })] })
+    expect(summaryText(vm).split('\n')[1]).toBe('workers: 1 running (cloud session cloud)')
   })
 })

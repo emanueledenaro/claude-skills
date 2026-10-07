@@ -31,6 +31,8 @@ function world(on, o = {}) {
     toasts: [], logs: [], commands: [], tools: [], opens: [], closes: [], renders: [],
     runs: [], calls: [], spawns: [], submits: [], usageCalls: 0, answers: {},
     placed: true, deny: {}, rewriteAgentModel: false, dropSubmit: false,
+    // what $.session.surfaces() answers: a plain -p run draws nowhere ([])
+    surfaces: o.surfaces || ['terminal'],
     gh: { exitCode: 0, stdout: '[]', stderr: '' },
   }
   const gate = name => (w.deny[name] ? { deny: name + ' is down' } : null)
@@ -55,7 +57,7 @@ function world(on, o = {}) {
     return gate('session.usage') || { value: { startedAt: NOW, context: { window: 200000 }, rateLimits: w.rateLimits } }
   })
   on('session.cwd', async () => ({ value: 'C:/repo' }))
-  on('session.surfaces', async () => ({ value: ['terminal'] }))
+  on('session.surfaces', async () => ({ value: w.surfaces }))
   on('ui.toast', async ($, e) => gate('ui.toast') || (w.toasts.push(e.text), { value: undefined }))
   on('ui.log', async ($, e) => gate('ui.log') || (w.logs.push({ text: e.text, to: e.to }), { value: undefined }))
   on('ui.status', async () => ({ value: undefined }))
@@ -64,7 +66,7 @@ function world(on, o = {}) {
     return { value: w.placed ? { isPlaced: true } : { isPlaced: false, reason: 'too narrow' } }
   })
   on('ui.close', async ($, e) => (w.closes.push(e), { value: undefined }))
-  on('command.register', async ($, e) => gate('command.register') || (w.commands.push(e), { value: { command: e.name } }))
+  on('command.register', async ($, e) => ((w.registerTries = (w.registerTries || 0) + 1), gate('command.register') || (w.commands.push(e), { value: { command: e.name } })))
   on('tool.register', async ($, e) => gate('tool.register') || (w.tools.push(e), { value: { tool: 'mcp__coordinator-lens__' + e.name } }))
   on('process.run', async ($, e) => {
     w.runs.push(e.argv)
@@ -83,6 +85,7 @@ function world(on, o = {}) {
   })
   on('session.start', async ($, e) => ({ cwd: e.cwd }))
   on('session.end', async ($, e) => ({ sessionId: e.sessionId }))
+  on('session.attach', async ($, e) => ({ clientId: e.clientId }))
   on('classic.SessionStart', async () => ({}))
   on('prompt.context', async ($, e) => ({ blocks: e.blocks, instructionFiles: e.instructionFiles }))
   on('session.measure', async ($, e) => ({ changed: e.changed }))
@@ -140,7 +143,7 @@ describe('session start', () => {
     expect(w.commands[0].description).toBe('Vista coordinatore: budget, worker, merge')
     expect(w.tools).toHaveLength(1)
     expect(w.tools[0]).toMatchObject({ name: 'budget_estimate', description: expect.stringContaining('Weekly points') })
-    expect(w.tools[0].inputSchema.properties).toEqual({ sonnet: { type: 'number' }, opus: { type: 'number' }, fable: { type: 'number' } })
+    expect(w.tools[0].inputSchema.properties).toEqual({ haiku: { type: 'number' }, sonnet: { type: 'number' }, opus: { type: 'number' }, fable: { type: 'number' } })
     expect(w.usageCalls).toBeGreaterThan(0)
     const r = await coord($)
     expect(r.text).toContain('budget: green')
@@ -197,13 +200,54 @@ describe('session start', () => {
     expect(w.storeDeletes).toEqual(['planLine'])
   })
 
-  test('the planLine option wins over the store and is not stored', { options: { ...EN, planLine: 'Pro · reserve 25%' } }, async ($, on) => {
+  // Pinned before as 'the planLine option wins over the store': the option is the fallback, so after a
+  // reload the line read from the user CLAUDE.md (kept in the store) wins over it.
+  test('after a reload the stored user line wins over the planLine option; the option is never stored', { options: { ...EN, planLine: 'Pro · reserve 25%' } }, async ($, on) => {
     const w = world(on, { store: { planLine: 'Max 20x' } })
+    await start($)
+    await warm($, w)
+    expect((await coord($)).text).toContain('profile Max 20x')
+    // no user file read: the stored line stays
+    await $.prompt.context({ blocks: [], instructionFiles: [] })
+    expect(w.store.get('planLine')).toBe('Max 20x')
+    // the user file has no line: the stored one goes, and the option is the fallback
+    await $.prompt.context({ blocks: [], instructionFiles: [{ path: 'C:/Users/me/.claude/CLAUDE.md', kind: 'user', content: 'nothing' }] })
+    expect(w.store.has('planLine')).toBe(false)
+    expect((await coord($)).text).toContain('profile Pro')
+  })
+
+  test('the planLine option holds when nothing is stored, and is not stored', { options: { ...EN, planLine: 'Pro · reserve 25%' } }, async ($, on) => {
+    const w = world(on)
     await start($)
     await warm($, w)
     expect((await coord($)).text).toContain('profile Pro')
     await $.prompt.context({ blocks: [], instructionFiles: [] })
     expect(w.store.has('planLine')).toBe(false)
+  })
+
+  test('a project, local or memory file never sets the plan and is never stored', { options: { ...EN, planLine: 'Pro · reserve 25%' } }, async ($, on) => {
+    // 88% with 10 hours left: green on the project file's reserve 0, red over the option's reserve 25
+    const w = world(on, { rateLimits: [weekly(88, 10), five(10)] })
+    await start($)
+    await warm($, w)
+    const line = 'Claude plan: Max 20x · reserve 0% · banked: weekly reset, expires 2026-10-14; weekly reset, expires 2026-10-14'
+    for (const kind of ['project', 'local', 'memory']) {
+      await $.prompt.context({ blocks: [], instructionFiles: [{ path: 'C:/repo/CLAUDE.md', kind, content: line }] })
+    }
+    expect(w.storeSets).not.toContain('planLine')
+    expect(w.store.has('planLine')).toBe(false)
+    const text = (await coord($)).text
+    expect(text).toContain('budget: red')
+    expect(text).not.toContain('profile Max 20x')
+  })
+
+  test('a stored user line is kept when no user file was read (a hook rewrote the instructions)', async ($, on) => {
+    const w = world(on, { store: { planLine: 'Max 20x' } })
+    await start($)
+    await $.prompt.context({ blocks: [] })
+    await $.prompt.context({ blocks: [], instructionFiles: [{ path: 'C:/repo/CLAUDE.md', kind: 'project', content: 'nothing' }] })
+    expect(w.storeDeletes).toEqual([])
+    expect(w.store.get('planLine')).toBe('Max 20x')
   })
 
   test('the command description follows the language option', { options: EN }, async ($, on) => {
@@ -231,12 +275,43 @@ describe('session start', () => {
     expect(w.commands).toHaveLength(1)
   })
 
-  test('a session with nobody at the prompt starts no timers', async ($, on) => {
+  test('a host that keeps refusing the registration is asked three times in all, not on every prompt', async ($, on) => {
     const w = world(on)
+    w.deny = { 'command.register': 1 }
+    await start($)
+    for (let i = 0; i < 5; i++) await submit($, 'p' + i)
+    expect(w.registerTries).toBe(3)
+    expect(w.commands).toHaveLength(0)
+  })
+
+  test('a session with nobody at the prompt starts no timers', async ($, on) => {
+    // a plain -p run: nobody at the prompt and no surface
+    const w = world(on, { surfaces: [] })
     await start($, { surface: null, isInteractive: false })
     const before = w.usageCalls
     await w.clock.advance(10 * MIN)
     expect(w.usageCalls).toBe(before)
+  })
+
+  test('an SDK host that attaches a surface (the Desktop app) starts the timers then', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    await start($, { surface: null, isInteractive: false })
+    let before = w.usageCalls
+    await w.clock.advance(10 * MIN)
+    expect(w.usageCalls).toBe(before)
+    w.surfaces = ['desktop']
+    await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+    before = w.usageCalls
+    await w.clock.advance(10 * MIN)
+    expect(w.usageCalls).toBeGreaterThan(before)
+  })
+
+  test('an SDK session that already has a surface at start runs the timers', async ($, on) => {
+    const w = world(on, { surfaces: ['desktop'] })
+    await start($, { surface: null, isInteractive: false })
+    const before = w.usageCalls
+    await w.clock.advance(10 * MIN)
+    expect(w.usageCalls).toBeGreaterThan(before)
   })
 })
 
@@ -264,7 +339,7 @@ describe('/coord', () => {
     expect(fallback.text).toContain('budget: green')
   })
 
-  test('every open of the pane asks for Esc to close it: the pane has no close Button, and the lens never closes it itself', async ($, on) => {
+  test('every open of the pane asks for Esc to close it, and the lens never closes it unasked', async ($, on) => {
     const w = world(on)
     await start($)
     await warm($, w)
@@ -312,7 +387,7 @@ describe('the context line', () => {
     await submit($, 'one')
     expect(w.submits[0].text).toBe('one')
     expect(w.submits[0].context).toHaveLength(1)
-    expect(w.submits[0].context[0]).toMatch(/^coordinator-lens budget: green \(margin [+-]?\d+\) · profile Max 5x: 8 agents\/run, 1 cloud session · weekly 17% \(pace \d+\) · 5h 0% · Fable window not readable$/)
+    expect(w.submits[0].context[0]).toMatch(/^coordinator-lens budget: green \(margin [+-]?\d+\) · profile Max 5x: 8 agents\/run, 1 cloud session · plan assumed \(no Claude plan line; Pro accounts use Pro\) · weekly 17% \(pace \d+\) · 5h 0% · Fable window not readable$/)
     await submit($, 'two')
     expect(w.submits[1].context).toBeUndefined()
     await measure($, [weekly(19), five(0)])
@@ -364,7 +439,7 @@ describe('the context line', () => {
     await submit($)
     await w.clock.advance(11 * MIN)
     await submit($)
-    expect(w.submits[1].context[0]).toContain('budget: unknown (old reading)')
+    expect(w.submits[1].context[0]).toContain('budget: unknown (old reading, read 11m ago)')
   })
 
   test('a prompt that was dropped below does not count as sent', async ($, on) => {
@@ -427,6 +502,14 @@ describe('budget_estimate', () => {
     expect(big.result.fits).toBe(false)
     expect((await coord($)).text).toContain('run cost: 0.5 weekly points per Sonnet-sized agent (1 samples), last deep-review 3 points')
     expect(w.store.get('runCost')).toMatchObject({ samples: [{ label: 'deep-review', points: 3, weight: 6, plan: null }] })
+  })
+
+  test('budget_estimate prices Haiku agents at 0.05 of a Sonnet one', async ($, on) => {
+    const w = world(on, { store: { runCost: { samples: [{ label: 'x', points: 2, weight: 2, agents: 2, at: NOW, plan: null }], last: null } } })
+    await start($)
+    await warm($, w)
+    expect((await $.tool.call({ tool: TOOL, haiku: 20 })).result).toMatchObject({ points: 1, unitPoints: 1 })
+    expect((await $.tool.call({ tool: TOOL, haiku: 20, sonnet: 1 })).result.points).toBe(2)
   })
 
   test('no launch fits while the 5-hour window is paused or the reading is stale', async ($, on) => {
@@ -500,7 +583,11 @@ describe('observers never rewrite or block', () => {
       const r = await $.tool.call(input)
       expect(r.deny).toBe('budget is red')
     }
-    expect((await coord($)).text).toContain('workers: 2 denied')
+    const text = (await coord($)).text
+    expect(text).toContain('workers: 2 denied')
+    // the refused merge is no merge: no step, no toast
+    expect(text).toContain('merge: none in progress')
+    expect(w.toasts).toEqual([])
   })
 
   test('agent.spawn, turn.complete, skill.prompt and the expansion pass on as sent', async ($, on) => {
@@ -584,16 +671,45 @@ describe('workers from the engine', () => {
     expect((await coord($)).text).toContain('workers: 2 running (fix ci cloud, docs cloud)')
   })
 
-  test('the pull request poll feeds the prs line; three failures switch it off', async ($, on) => {
+  // Pinned before as "three failures switch it off": the poll now backs off (15, 30, then 60 minutes)
+  // after three failures in a row and keeps trying, and an old list says how old it is.
+  test('the pull request poll feeds the prs line; after three failures it backs off and keeps trying', async ($, on) => {
     const w = world(on)
-    w.gh.stdout = JSON.stringify([{ number: 42, title: 'feat', state: 'OPEN', url: 'https://github.com/a/b/pull/42', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [{ conclusion: 'SUCCESS', status: 'COMPLETED' }] }])
+    const OK = { exitCode: 0, stdout: JSON.stringify([{ number: 42, title: 'feat', state: 'OPEN', url: 'https://github.com/a/b/pull/42', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [{ conclusion: 'SUCCESS', status: 'COMPLETED' }] }]), stderr: '' }
+    w.gh = OK
     await start($)
     expect(w.runs[0]).toEqual(['gh', 'pr', 'list', '--json', 'number,title,state,url,isDraft,mergeable,statusCheckRollup', '--limit', '20'])
     expect((await coord($)).text).toContain('prs: #42 open green')
     w.gh = { exitCode: 1, stdout: '', stderr: 'not logged in' }
     const before = w.runs.length
+    // fails at 5, 10 and 15 minutes, then waits 15 minutes: the next try is at 30, then 30 more
     await w.clock.advance(40 * MIN)
-    expect(w.runs.length).toBe(before + 3)
+    expect(w.runs.length).toBe(before + 4)
+    // the list from the start is old now: the model is told when it was read
+    expect((await coord($)).text).toContain('prs (list read 40m ago): #42 open green')
+    w.gh = OK
+    await w.clock.advance(20 * MIN)
+    expect(w.runs.length).toBe(before + 5)
+    expect((await coord($)).text).toContain('prs: #42 open green')
+    await w.clock.advance(5 * MIN)
+    expect(w.runs.length).toBe(before + 6)
+  })
+
+  test('a poll that succeeds starts the failure count over', async ($, on) => {
+    const w = world(on)
+    const FAIL = { exitCode: 1, stdout: '', stderr: 'offline' }
+    await start($)
+    expect(w.runs).toHaveLength(1)
+    w.gh = FAIL
+    await w.clock.advance(10 * MIN)
+    w.gh = { exitCode: 0, stdout: '[]', stderr: '' }
+    await w.clock.advance(5 * MIN)
+    w.gh = FAIL
+    await w.clock.advance(10 * MIN)
+    expect(w.runs).toHaveLength(6)
+    // two failures since the last success: no back-off yet, the next poll runs
+    await w.clock.advance(5 * MIN)
+    expect(w.runs).toHaveLength(7)
   })
 
   test('prPolling off never runs gh', { options: EN_NO_PR }, async ($, on) => {
@@ -603,12 +719,13 @@ describe('workers from the engine', () => {
     expect(w.runs).toEqual([])
   })
 
-  test('a gh that cannot start is quietly off', async ($, on) => {
+  test('a gh that cannot start backs off quietly', async ($, on) => {
     const w = world(on)
     w.deny = { 'process.run': 1 }
     await start($)
     await w.clock.advance(30 * MIN)
-    expect(w.runs.length).toBe(3)
+    // at 0, 5 and 10 minutes, then 15 minutes later
+    expect(w.runs.length).toBe(4)
     expect((await coord($)).text).toContain('budget:')
     expect(w.toasts).toEqual([])
   })
@@ -622,6 +739,8 @@ describe('toasts', () => {
     await start($)
     await $.tool.call(ASK)
     expect(w.toasts).toEqual(['Waiting for you: Merge #42 now?'])
+    // the call came back: the question no longer waits
+    expect((await coord($)).text).toContain('decisions: none waiting')
     await $.tool.call({ ...ASK, tool_use_id: 'ask2' })
     expect(w.toasts).toHaveLength(2)
   })
@@ -870,8 +989,8 @@ describe('drawing', () => {
       const first = await row('row-1', text)
       expect(await first.find({ type: 'Text', text: /resets in 4h$/ })).toBeDefined()
       await first.unmount()
-      // 15 minutes later with the same percentages the command answers the same text (it carries no
-      // times), while the card shows times: 4h to the reset has become 3h 45m
+      // 15 minutes later with the same percentages the command answers the same text (a fresh reading's
+      // text carries no times), while the card shows times: 4h to the reset has become 3h 45m
       await w.clock.advance(15 * MIN)
       await measure($, w.rateLimits)
       const later = (await coord($)).text
@@ -986,24 +1105,26 @@ describe('drawing', () => {
       await ui.unmount()
     })
 
-    test('pane on ' + surface + ': tabs switch, night toggles, and the pane draws no close Button of its own', { options: EN }, async ($, on) => {
+    // Pinned before as 'the pane draws no close Button of its own': mod-ui asks for one on x (role dismiss).
+    test('pane on ' + surface + ': tabs switch, night toggles, and the close button on x closes the pane', { options: EN }, async ($, on) => {
       const w = world(on)
       await start($)
       const ui = await $.ui.mount({ plugin: 'coordinator-lens', surface, component: 'Pane', requestId: 'coord', props: PANE })
       expect((await ui.find({ key: 'tab-overview' })).props.variant).toBe('primary')
-      // the tab row holds only the five tabs; the pane's own close mark and Esc are the way out
       const tabs = (await ui.findAll({ type: 'Button' })).filter(b => b.props.key.startsWith('tab-'))
       expect(tabs.map(b => b.props.key)).toEqual(['tab-overview', 'tab-workers', 'tab-merge', 'tab-flow', 'tab-night'])
-      expect(await ui.find({ key: 'close' })).toBeUndefined()
-      expect((await ui.findAll({ type: 'Button' })).map(b => b.props.hotkey)).not.toContain('x')
+      expect((await ui.find({ key: 'close' })).props).toMatchObject({ label: 'Close', hotkey: 'x', role: 'dismiss' })
       await ui.press({ key: 'tab-night' })
       expect((await ui.find({ key: 'tab-night' })).props.variant).toBe('primary')
       expect((await ui.find({ key: 'night-toggle' })).props.label).toBe('Turn night on')
       await ui.press({ key: 'night-toggle' })
       expect((await ui.find({ key: 'night-toggle' })).props.label).toBe('Turn night off')
       expect((await coord($)).text).toContain('night: on')
-      // nothing in the pane closes it
+      // nothing but the close button closes it
       expect(w.closes).toEqual([])
+      await ui.press({ key: 'close' })
+      expect(w.closes).toHaveLength(1)
+      expect(w.closes[0]).toMatchObject({ id: 'coord' })
       await ui.unmount()
     })
 
@@ -1144,13 +1265,13 @@ describe('a reading older than 10 minutes', () => {
     expect(w.submits[0].context[0]).toContain('budget: green')
     await w.clock.advance(12 * MIN)
     expect(await bandLine($)).toMatch(/^Budget green \(read 12m ago\) /)
-    // the command text is for the model and for where nothing draws: unchanged, the reading is old
+    // the command text is for the model and for where nothing draws: the color is unknown, and it says
+    // the reading is old and how old
     const text = (await coord($)).text
-    expect(text).toContain('budget: unknown')
-    expect(text).not.toMatch(/ ago/)
+    expect(text).toContain('budget: unknown (old reading, read 12m ago)')
     await submit($, 'two')
     expect(w.submits[1].context).toHaveLength(1)
-    expect(w.submits[1].context[0]).toContain('budget: unknown (old reading)')
+    expect(w.submits[1].context[0]).toContain('budget: unknown (old reading, read 12m ago)')
     expect(w.submits[1].context[0]).not.toContain('pace')
     expect((await $.tool.call({ tool: TOOL, sonnet: 2 })).result).toMatchObject({ points: 1, fits: null, color: 'unknown' })
   })
@@ -1270,7 +1391,62 @@ describe('the shared store', () => {
   })
 })
 
+describe('redeemed resets across a reload', () => {
+  const LINE = 'Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22'
+
+  test('a redemption is kept in the store as soon as it is seen', async ($, on) => {
+    const w = world(on, { store: { planLine: LINE }, rateLimits: [weekly(40), five(0)] })
+    await start($)
+    await measure($, [weekly(40), five(0)])
+    w.rateLimits = [weekly(2), five(0)]
+    await measure($, [weekly(2), five(0)])
+    expect(w.store.get('redeemed')).toMatchObject({ keys: ['weekly:2026-10-22'], mark: { used: 2 } })
+    await submit($)
+    expect(w.submits[0].context[0]).not.toContain('weekly reset banked')
+  })
+
+  test('after a reload the redeemed reset does not count again', async ($, on) => {
+    const w = world(on, { store: { planLine: LINE, redeemed: { keys: ['weekly:2026-10-22'], mark: null } } })
+    await start($)
+    await warm($, w)
+    await submit($)
+    expect(w.submits[0].context[0]).toContain('budget:')
+    expect(w.submits[0].context[0]).not.toContain('weekly reset banked until 2026-10-22')
+  })
+
+  test('a high reading before the reload and a low one after it is still a redemption', async ($, on) => {
+    const w = world(on, { store: { planLine: LINE, redeemed: { keys: [], mark: { resetsAt: NOW + 144 * HOUR, used: 60 } } }, rateLimits: [weekly(3), five(0)] })
+    await start($)
+    expect(w.store.get('redeemed')).toMatchObject({ keys: ['weekly:2026-10-22'] })
+  })
+})
+
 describe('the session', () => {
+  for (const source of ['clear', 'resume', 'compact']) {
+    test('after a ' + source + ' the first prompt carries the budget line again', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await warm($, w)
+      await submit($, 'one')
+      expect(w.submits[0].context).toHaveLength(1)
+      await submit($, 'two')
+      expect(w.submits[1].context).toBeUndefined()
+      await $.classic.SessionStart({ source })
+      await submit($, 'three')
+      expect(w.submits[2].context).toHaveLength(1)
+    })
+  }
+
+  test('a startup does not send the budget line again', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await warm($, w)
+    await submit($, 'one')
+    await $.classic.SessionStart({ source: 'startup' })
+    await submit($, 'two')
+    expect(w.submits[1].context).toBeUndefined()
+  })
+
   test('a clear registers the command and the tool again; a startup does not', async ($, on) => {
     const w = world(on)
     await start($)
@@ -1280,6 +1456,9 @@ describe('the session', () => {
     expect(w.tools).toHaveLength(2)
     await $.classic.SessionStart({ source: 'startup' })
     expect(w.commands).toHaveLength(2)
+    await $.classic.SessionStart({ source: 'resume' })
+    expect(w.commands).toHaveLength(3)
+    expect(w.tools).toHaveLength(3)
   })
 
   test('the end of the session stops the timers', async ($, on) => {
@@ -1306,11 +1485,132 @@ describe('the session', () => {
     expect(w.submits[1].context).toHaveLength(1)
   })
 
+  test('after a hot reload, /coord as the first event starts the lens', async ($, on) => {
+    const w = world(on, { store: { night: { on: true, since: NOW - HOUR, nextWakeAt: null, pointsBase: 10, baseResetsAt: null, carry: 0, pointsSince: 1 } } })
+    const r = await coord($)
+    expect(w.commands).toHaveLength(1)
+    expect(w.tools).toHaveLength(1)
+    // the store was read: the night that was on comes back
+    expect(r.text).toContain('night: on')
+  })
+
+  test('after a hot reload, a measure as the first event starts the lens', async ($, on) => {
+    const w = world(on, { store: { runCost: { samples: [{ label: 'deep-review', points: 4, weight: 8, agents: 8, at: NOW }], last: null } } })
+    await measure($, GREEN)
+    expect(w.commands).toHaveLength(1)
+    expect(w.tools).toHaveLength(1)
+    expect((await coord($)).text).toContain('run cost: 0.5 weekly points per Sonnet-sized agent (1 samples)')
+  })
+
   test('the timer reads usage every minute', async ($, on) => {
     const w = world(on)
     await start($)
     const before = w.usageCalls
     await w.clock.advance(3 * MIN)
     expect(w.usageCalls).toBe(before + 3)
+  })
+})
+
+describe('second fix round', () => {
+  test('a Workflow call that comes back as an error shows a failed worker, not a running one', async ($, on) => {
+    const w = world(on)
+    w.answers.Workflow = () => ({ result: 'script failed', isError: true, text: 'script failed' })
+    await start($)
+    await $.tool.call({ tool: 'Workflow', script: 'x' })
+    expect((await coord($)).text).toContain('workers: 1 failed')
+  })
+
+  test('a session URL on stderr, or only in the text of an error answer, is still a cloud worker', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.answers.Bash = () => ({ result: { stdout: '', stderr: 'Started https://claude.ai/code/session_ERR1\n', interrupted: false } })
+    await $.tool.call({ tool: 'Bash', command: 'claude --cloud --model sonnet "on stderr"' })
+    w.answers.Bash = () => ({ result: 'exit 1', isError: true, text: 'Started https://claude.ai/code/session_TXT2' })
+    await $.tool.call({ tool: 'Bash', command: 'claude --cloud --model sonnet "in text"' })
+    expect((await coord($)).text).toContain('workers: 2 running (on stderr cloud, in text cloud)')
+    // the URL itself was read: a notification that names it ends that worker, and only that one
+    const notice = '<task-notification>\n<task-id>other</task-id>\n<status>completed</status>\n<summary>https://claude.ai/code/session_ERR1 finished</summary>\n</task-notification>'
+    await submit($, notice, { kind: 'task-notification' })
+    expect((await coord($)).text).toContain('workers: 1 running (in text cloud), 1 done')
+  })
+
+  test('/coord pane in a -p run (no surface) answers with the text and opens nothing', async ($, on) => {
+    const w = world(on, { surfaces: [] })
+    await start($, { surface: null, isInteractive: false })
+    await warm($, w)
+    const r = await coord($, 'pane')
+    expect(r.text).toContain('budget: green')
+    expect(w.opens).toEqual([])
+  })
+
+  test('/coord pane in an SDK session with a desktop surface opens the pane', async ($, on) => {
+    // the Desktop app is an SDK host: session.start says nobody is at the prompt, yet it draws panes
+    const w = world(on, { surfaces: ['desktop'] })
+    await start($, { surface: null, isInteractive: false })
+    await warm($, w)
+    const r = await coord($, 'pane')
+    expect(w.opens).toHaveLength(1)
+    expect(r.text).toBeUndefined()
+  })
+
+  test('an unknown argument keeps the whole answer at 10 lines', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await warm($, w)
+    await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q', questions: [{ question: 'Merge?', header: 'M', options: [], multiSelect: false }] })
+    await coord($, 'night on')
+    await $.tool.call({ tool: 'Bash', command: 'gh issue create --title x' })
+    await $.tool.call({ tool: 'Bash', command: 'gh pr merge 3 --merge' })
+    await $.tool.call({ tool: 'Skill', skill: 'grill-me' })
+    expect(lines((await coord($)).text).length).toBe(10)
+    const r = await coord($, 'dance')
+    expect(lines(r.text)).toHaveLength(10)
+    expect(lines(r.text)[0]).toBe('/coord: unknown argument "dance" (use pane, night on, night off)')
+  })
+
+  test('a wake is shown only once the call went through, at the time the runtime clamps it to', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await coord($, 'night on')
+    w.answers.ScheduleWakeup = () => ({ deny: 'not now' })
+    await $.tool.call({ tool: 'ScheduleWakeup', delaySeconds: 600, reason: 'night' })
+    expect((await coord($)).text).not.toContain('next wake')
+    w.answers.ScheduleWakeup = () => ({ result: 'scheduled' })
+    await $.tool.call({ tool: 'ScheduleWakeup', delaySeconds: 10, reason: 'night' })
+    expect((await coord($)).text).toContain('next wake in 1m')
+    await $.tool.call({ tool: 'ScheduleWakeup', delaySeconds: 99999, reason: 'night' })
+    expect((await coord($)).text).toContain('next wake in 1h')
+  })
+
+  test('a merge that goes on in the background is recorded only when its notification says it ended well', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.answers.Bash = () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bash_1' } })
+    await $.tool.call({ tool: 'Bash', command: 'gh pr merge 12 --merge --match-head-commit abc', run_in_background: true })
+    expect((await coord($)).text).not.toContain('merged')
+    expect(w.toasts).toEqual([])
+    const done = '<task-notification>\n<task-id>bash_1</task-id>\n<status>completed</status>\n<summary>Background command completed (exit code 0)</summary>\n</task-notification>'
+    await submit($, done, { kind: 'task-notification' })
+    expect((await coord($)).text).toMatch(/merge: #12 \d\/7 steps/)
+    expect(w.toasts).toEqual(['Merge fatto: #12'])
+    // one that ended badly, or that timed out into the background with no id, is no merge
+    w.answers.Bash = () => ({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bash_2' } })
+    await $.tool.call({ tool: 'Bash', command: 'gh pr merge 13 --merge' })
+    await submit($, done.replace('bash_1', 'bash_2').replace('completed</status>', 'failed</status>'), { kind: 'task-notification' })
+    w.answers.Bash = () => ({ result: { stdout: '', stderr: '', interrupted: false, timedOutAfterMs: 120000 } })
+    await $.tool.call({ tool: 'Bash', command: 'gh pr merge 14 --merge' })
+    expect(w.toasts).toEqual(['Merge fatto: #12'])
+    const text = (await coord($)).text
+    expect(text).toContain('merge: #13 0/7 steps')
+    expect(text).not.toContain('#14')
+  })
+
+  test('with no plan line the model reads that the plan is assumed', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await warm($, w)
+    expect(lines((await coord($)).text)[0]).toContain('profile Max 5x, plan assumed (no Claude plan line; Pro accounts use Pro)')
+    await $.prompt.context({ blocks: [], instructionFiles: [{ path: '/u/CLAUDE.md', kind: 'user', content: PLAN }] })
+    expect((await coord($)).text).not.toContain('plan assumed')
   })
 })

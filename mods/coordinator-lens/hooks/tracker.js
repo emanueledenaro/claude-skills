@@ -114,12 +114,16 @@ export function createState() {
     reading: { rateLimits: [], at: null, sig: '' },
     weeklyMark: null,
     redeemedKeys: [],
+    // per redeemed key, how many entries of that key the plan line had when it was last seen
+    redeemedHad: {},
     workers: [],
     runs: {},
     tasks: {},
     toolUses: {},
     agentIds: {},
     prs: [],
+    prsAt: null,
+    pendingShell: {},
     merge: { pr: null, steps: {} },
     round: { since: null, items: {}, signals: {} },
     flow: { stages: {}, side: [], artifacts: [], warnings: [], lastSkill: null },
@@ -132,18 +136,67 @@ export function createState() {
 
 export function setPlan(state, plan) {
   state.plan = plan && typeof plan === 'object' ? plan : null
+  keepByPlan(state, state.redeemedKeys, state.redeemedHad)
   return state
 }
 
-// The plan line from the instruction files `prompt.context` gives (the user CLAUDE.md first), else the option.
-export function planFromContext(files, fallbackLine) {
-  const list = Array.isArray(files) ? files.filter(Boolean) : []
-  const ordered = [...list.filter(f => f.kind === 'user'), ...list.filter(f => f.kind !== 'user')]
-  for (const f of ordered) {
-    const plan = typeof f.content === 'string' ? parsePlanLine(f.content) : null
-    if (plan) return plan
+function planCount(plan, key) {
+  return plan.banked.filter(b => b && resetKey(b) === key).length
+}
+
+// Redeemed keys against the plan line now. A key matches by type and date only, so it remembers how many
+// entries of its key the plan line had (`had`). Entries gone since then are taken as redeemed ones, since
+// budget.md has the person remove the redeemed entry: that many keys go, and never more keys stay than
+// the plan line has entries of that key. A key with no `had` (none stored) keeps the count it finds.
+// Sets state.redeemedKeys and state.redeemedHad; with no plan line read, both stay as given.
+function keepByPlan(state, keys, had) {
+  const plan = state.plan
+  const h = had && typeof had === 'object' ? had : {}
+  if (!plan || !Array.isArray(plan.banked)) {
+    state.redeemedKeys = keys
+    state.redeemedHad = hadFor(keys, h)
+    return
   }
-  return planFromOption(fallbackLine)
+  const counts = new Map()
+  for (const k of keys) counts.set(k, (counts.get(k) || 0) + 1)
+  const left = new Map()
+  const nextHad = {}
+  for (const [k, r] of counts) {
+    const c = planCount(plan, k)
+    const before = isNum(h[k]) ? h[k] : c
+    const keep = Math.min(c, Math.max(0, r - Math.max(0, before - c)))
+    left.set(k, keep)
+    if (keep > 0) nextHad[k] = c
+  }
+  state.redeemedKeys = keys.filter(k => {
+    const n = left.get(k) || 0
+    left.set(k, n - 1)
+    return n > 0
+  })
+  state.redeemedHad = nextHad
+}
+
+function hadFor(keys, had) {
+  const out = {}
+  for (const k of keys) if (isNum(had[k]) && had[k] >= 0) out[k] = Math.floor(had[k])
+  return out
+}
+
+// The plan line of the person's own CLAUDE.md (kind 'user'), as model-guard reads it. A project, local or
+// memory file never sets the plan, the reserve or the banked resets: a cloned repository would decide them.
+// `read` says whether a user file was there to read, so a missing line is told apart from no file at all.
+export function userPlan(files) {
+  const list = Array.isArray(files) ? files.filter(f => f && f.kind === 'user' && typeof f.content === 'string') : []
+  for (const f of list) {
+    const plan = parsePlanLine(f.content)
+    if (plan) return { read: true, plan }
+  }
+  return { read: list.length > 0, plan: null }
+}
+
+// The plan line from the user CLAUDE.md among the instruction files `prompt.context` gives, else the option.
+export function planFromContext(files, fallbackLine) {
+  return userPlan(files).plan || planFromOption(fallbackLine)
 }
 
 export function planFromOption(line) {
@@ -171,8 +224,12 @@ export function applyUsage(state, { rateLimits, now, fresh }) {
   if (wk && wk.resetsAt && state.weeklyMark && sameWindow(state.weeklyMark.resetsAt, wk.resetsAt) && state.weeklyMark.used - wk.used > 2) {
     // Only a redemption lowers weekly use inside a window (budget.md): stop counting one banked reset
     // and drop every run-cost reading that straddles it.
-    const gone = firstCountedWeekly(state)
-    if (gone) state.redeemedKeys.push(resetKey(gone))
+    const gone = firstCountedWeekly(state, now)
+    if (gone) {
+      const key = resetKey(gone)
+      state.redeemedKeys.push(key)
+      if (state.plan && Array.isArray(state.plan.banked)) state.redeemedHad[key] = planCount(state.plan, key)
+    }
     for (const w of state.workers) if (w.pre && isActiveOrAwaiting(w)) w.pre = null
   }
   if (wk) state.weeklyMark = { resetsAt: wk.resetsAt, used: wk.used }
@@ -211,24 +268,31 @@ function effectivePlan(state) {
 }
 
 // The weekly reset that expires first among those still counted: the one a redemption uses (budget.md).
-function firstCountedWeekly(state) {
+// An expired entry is never redeemed; one with no date, or expiring today, still can be (budget.js bankedWeekly).
+function firstCountedWeekly(state, now) {
   const plan = effectivePlan(state)
   if (!plan || !Array.isArray(plan.banked)) return null
+  const today = isNum(now) ? new Date(now).toISOString().slice(0, 10) : ''
   const weekly = plan.banked
-    .filter(b => b.type === 'weekly')
+    .filter(b => b && b.type === 'weekly' && (!b.expires || b.expires >= today))
     .sort((a, b) => (a.expires || '9999').localeCompare(b.expires || '9999'))
   return weekly[0] || null
 }
 
+// Sonnet-weighted agents, the same weights as budget.js estimatePoints: Haiku 0.05, Opus 2, Fable 5.
 function weight(agents) {
   const a = agents || {}
-  return (a.sonnet || 0) + 2 * (a.opus || 0) + 5 * (a.fable || 0) + (a.other || 0)
+  return 0.05 * (a.haiku || 0) + (a.sonnet || 0) + 2 * (a.opus || 0) + 5 * (a.fable || 0) + (a.other || 0)
+}
+
+function noAgents() {
+  return { total: 0, haiku: 0, sonnet: 0, opus: 0, fable: 0, other: 0 }
 }
 
 function workerAgents(w) {
   if (w.agents) return w.agents
   const fam = modelFamily(w.model)
-  return { total: 1, sonnet: 0, opus: 0, fable: 0, other: 0, [fam === 'sonnet' || fam === 'opus' || fam === 'fable' ? fam : 'sonnet']: 1 }
+  return { ...noAgents(), total: 1, [fam === 'haiku' || fam === 'sonnet' || fam === 'opus' || fam === 'fable' ? fam : 'sonnet']: 1 }
 }
 
 function planKey(state) {
@@ -240,10 +304,20 @@ function samplesFor(samples, plan) {
   return samples.filter(s => (s.plan || null) === (plan || null))
 }
 
+// A sample's points are the account-wide weekly step over the run, whole points at best and with any other
+// use in the account in them: a run lighter than one Sonnet agent (a few Haiku agents) would turn that
+// noise into its whole cost per agent, so it is no sample. The unit is total points over total weight, so
+// a light run moves it by its share of the weight, not by its own ratio.
+const MIN_SAMPLE_WEIGHT = 1
+
+function unitSamples(samples, plan) {
+  return samplesFor(samples, plan).filter(s => isNum(s.points) && isNum(s.weight) && s.weight >= MIN_SAMPLE_WEIGHT).slice(-MAX_SAMPLES)
+}
+
 function unitOf(samples, plan) {
-  const xs = samplesFor(samples, plan).filter(s => isNum(s.points) && isNum(s.weight) && s.weight > 0).slice(-MAX_SAMPLES)
+  const xs = unitSamples(samples, plan)
   if (!xs.length) return null
-  return xs.reduce((sum, s) => sum + s.points / s.weight, 0) / xs.length
+  return xs.reduce((sum, s) => sum + s.points, 0) / xs.reduce((sum, s) => sum + s.weight, 0)
 }
 
 // Weekly points still to come from work that runs now: the run-cost unit times what has been seen of
@@ -266,8 +340,10 @@ function inFlightPoints(state) {
 // that never loosens the guard, so a green one turns 'unknown' (reason 'stale-reading') and a red or yellow
 // one keeps its color. That is what the model, budget_estimate and the toasts read. What the person sees is
 // `shown`: the same budget worked out without the staleness cut, from the last known reading, only for a
-// reading of known age that is older than 10 minutes (null otherwise: a fresh reading is the budget itself;
-// a poll before any response has an unknown age and stays 'unknown'). The views draw its age from it.
+// reading of known age that is older than 10 minutes (null otherwise: a fresh reading is the budget itself).
+// A poll before any response has an unknown age (`lastReadingAt` null): it counts as old, so a green one is
+// 'unknown' and a red or yellow one keeps its color, with no `shown`. The views draw the age from
+// `lastReadingAt`, and the texts for the model say the reading is old, or of unknown age.
 export function budgetOf(state, now) {
   const input = { rateLimits: state.reading.rateLimits, now, plan: effectivePlan(state), inFlight: inFlightPoints(state) }
   const at = state.reading.at
@@ -283,11 +359,18 @@ export function budgetOf(state, now) {
 
 // ---------- workers ----------
 
+// A run-cost sample keeps a name the model and every session can read: the worker's own, else its kind's
+// English word.
+function sampleLabel(w) {
+  return w.label || t('en', 'label.' + w.kind)
+}
+
 function newWorker(state, o) {
   const w = {
     id: o.id,
     kind: o.kind,
-    label: fit(o.label || o.kind, 80),
+    // no name of its own: '' here, and the view model puts the kind's word in the person's language
+    label: fit(o.label || '', 80),
     model: o.model || null,
     effort: o.effort || null,
     status: o.status || 'running',
@@ -358,7 +441,7 @@ function finish(w, status, now) {
 }
 
 function agentLabel(input) {
-  return clean(input && (input.description || input.name || input.subagent_type || input.subagentType)) || 'agent'
+  return clean(input && (input.description || input.name || input.subagent_type || input.subagentType))
 }
 
 export function onAgentToolCall(state, { toolUseId, input, now }) {
@@ -376,7 +459,6 @@ export function onAgentToolCall(state, { toolUseId, input, now }) {
     now,
     pre: remote ? preReading(state) : null,
   })
-  launchedWork(state)
   return state
 }
 
@@ -385,6 +467,17 @@ export function onAgentToolResult(state, { toolUseId, result, deny, isError, now
   const w = workerById(state, state.toolUses[toolUseId])
   if (!w) return state
   const res = result && typeof result === 'object' ? result : {}
+  // An isolation 'remote' call can fall back to a local run (coordinator-method): its answer is then a
+  // local one, so the worker becomes a local agent, running, measured as no cloud session.
+  if (typeof deny !== 'string' && !isError && (res.status === 'async_launched' || res.status === 'completed') && w.kind === 'cloud' && w.status === 'launched') {
+    w.kind = 'agent'
+    w.status = 'running'
+    w.pre = null
+    w.lastSeenAt = now
+    w.stalled = false
+  }
+  // The merge's "next work launched" step ticks only for a launch that was neither denied nor failed.
+  if (typeof deny !== 'string' && !isError) launchedWork(state)
   if (typeof deny === 'string') finish(w, 'denied', now)
   else if (isError) finish(w, 'failed', now)
   else if (res.status === 'remote_launched') {
@@ -412,7 +505,7 @@ export function onAgentToolResult(state, { toolUseId, result, deny, isError, now
 
 function familyOf(model) {
   const f = modelFamily(model)
-  return f === 'sonnet' || f === 'opus' || f === 'fable' ? f : 'other'
+  return f === 'haiku' || f === 'sonnet' || f === 'opus' || f === 'fable' ? f : 'other'
 }
 
 // AgentSpawnInput + what next(e) answered. A workflow's agents are counted by unique agentIndex per runId.
@@ -424,7 +517,7 @@ export function onAgentSpawned(state, { toolUseId, input, result, now }) {
   if (wf && wf.runId) {
     let w = workerById(state, state.runs[wf.runId])
     if (!w) {
-      w = newWorker(state, { id: wf.runId, kind: 'workflow', label: 'workflow', now, runId: wf.runId, pre: preReading(state) })
+      w = newWorker(state, { id: wf.runId, kind: 'workflow', label: '', now, runId: wf.runId, pre: preReading(state) })
       launchedWork(state)
     }
     if (denied) return state
@@ -435,9 +528,9 @@ export function onAgentSpawned(state, { toolUseId, input, result, now }) {
     if (!w.seen[idx]) {
       const fam = familyOf(res.model || inp.model || inp.parentModel)
       w.seen[idx] = fam
-      w.agents = w.agents || { total: 0, sonnet: 0, opus: 0, fable: 0, other: 0 }
+      w.agents = w.agents || noAgents()
       w.agents.total += 1
-      w.agents[fam] += 1
+      w.agents[fam] = (w.agents[fam] || 0) + 1
     }
     if (res.agentId) {
       state.agentIds[res.agentId] = w.id
@@ -504,9 +597,10 @@ export function onWorkflowLaunch(state, { toolUseId, input, result, now }) {
   const res = result && typeof result === 'object' ? result : {}
   const denied = typeof res.deny === 'string'
   const path = typeof inp.scriptPath === 'string' ? inp.scriptPath.split(/[\\/]/).pop().replace(/\.\w+$/, '') : null
-  const label = clean(res.workflowName || scriptName(inp.script) || inp.name || path) || 'workflow'
+  const label = clean(res.workflowName || scriptName(inp.script) || inp.name || path)
   const remote = res.status === 'remote_launched' || res.taskType === 'remote_agent'
   let w = workerById(state, res.runId ? state.runs[res.runId] : null)
+  let fresh = false
   if (!w) {
     w = newWorker(state, {
       id: res.runId || 'wf:' + (toolUseId || nextSeq(state)),
@@ -520,10 +614,10 @@ export function onWorkflowLaunch(state, { toolUseId, input, result, now }) {
       now,
       pre: preReading(state),
     })
-    launchedWork(state)
+    fresh = true
   } else {
     if (!isActiveStatus(w.status) && !denied && !res.error) restartRun(state, w, now, remote)
-    w.label = fit(label, 80)
+    if (label) w.label = fit(label, 80)
     if (toolUseId) {
       w.toolUseId = toolUseId
       state.toolUses[toolUseId] = w.id
@@ -541,6 +635,8 @@ export function onWorkflowLaunch(state, { toolUseId, input, result, now }) {
   }
   if (denied) finish(w, 'denied', now)
   else if (res.error) finish(w, 'failed', now)
+  // A launch the hooks denied or the syntax check failed is no "next work launched".
+  else if (fresh) launchedWork(state)
   return state
 }
 
@@ -554,17 +650,18 @@ export function onTaskNotification(state, text, now) {
   const taskId = get('task-id')
   const status = (get('status') || '').toLowerCase()
   const toolUseId = get('tool-use-id')
+  const ok = status ? status === 'completed' || status === 'complete' || status === 'success' || status === 'done' : true
+  if (taskId && settleShell(state, taskId, ok, now)) return null
   let w =
     (taskId && (workerById(state, state.tasks[taskId]) || workerById(state, state.agentIds[taskId]) || workerById(state, state.runs[taskId]) || workerById(state, taskId))) ||
     (toolUseId && workerById(state, state.toolUses[toolUseId])) ||
     null
   if (!w) w = state.workers.find(x => x.kind === 'cloud' && isActiveStatus(x.status) && x.url && body.includes(x.url)) || null
   if (!w) return null
-  const ok = status ? status === 'completed' || status === 'complete' || status === 'success' || status === 'done' : true
   finish(w, ok ? 'done' : 'failed', now)
   const count = Number(get('agent_count'))
   if (Number.isFinite(count) && count > 0) {
-    w.agents = w.agents || { total: 0, sonnet: 0, opus: 0, fable: 0, other: 0 }
+    w.agents = w.agents || noAgents()
     if (count !== w.agents.total) w.countMismatch = true
     w.agents.total = Math.max(w.agents.total, count)
   }
@@ -589,11 +686,11 @@ export function onMeasure(state, { rateLimits, now }) {
     if (!sameWindow(w.pre.resetsAt, wk.resetsAt)) continue
     w.points = round1(Math.max(0, wk.used - w.pre.weekly))
     const wt = weight(workerAgents(w))
-    if (!w.countMismatch && wt > 0) {
-      state.runCost.samples.push({ label: w.label, points: w.points, weight: wt, agents: w.agents ? w.agents.total : 1, at: now, plan: planKey(state) })
+    if (!w.countMismatch && wt >= MIN_SAMPLE_WEIGHT) {
+      state.runCost.samples.push({ label: sampleLabel(w), points: w.points, weight: wt, agents: w.agents ? w.agents.total : 1, at: now, plan: planKey(state) })
       state.runCost.samples = state.runCost.samples.slice(-MAX_SAMPLES)
     }
-    state.runCost.last = { label: w.label, points: w.points, agents: w.agents ? w.agents.total : null }
+    state.runCost.last = { label: sampleLabel(w), points: w.points, agents: w.agents ? w.agents.total : null }
   }
   return state
 }
@@ -715,9 +812,10 @@ export function setNight(state, on, now) {
   return state
 }
 
+// The runtime clamps delaySeconds to [60, 3600], so the next wake is shown when it will happen.
 export function onWake(state, { delaySeconds, stop, now }) {
   if (stop) state.night.nextWakeAt = null
-  else if (isNum(delaySeconds) && delaySeconds > 0) state.night.nextWakeAt = now + delaySeconds * SECOND
+  else if (isNum(delaySeconds) && delaySeconds > 0) state.night.nextWakeAt = now + Math.min(3600, Math.max(60, delaySeconds)) * SECOND
   return state
 }
 
@@ -726,7 +824,8 @@ export function onWake(state, { delaySeconds, stop, now }) {
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'wsl', 'powershell', 'pwsh', 'cmd'])
 
 // Quote-aware split into commands (on && || ; | & and new lines) and words. A backslash is a path
-// character except for \" inside double quotes.
+// character except for \" inside double quotes. Outside quotes, a line continuation (bash `\` or
+// PowerShell's backtick at the end of a line) joins the next line to the same command.
 function splitCommand(command) {
   const s = String(command == null ? '' : command)
   const segs = []
@@ -754,7 +853,10 @@ function splitCommand(command) {
       } else tok += c
       continue
     }
-    if (c === '"' || c === "'") {
+    if ((c === '\\' || c === '`') && (s[i + 1] === '\n' || (s[i + 1] === '\r' && s[i + 2] === '\n'))) {
+      pushTok()
+      i += s[i + 1] === '\r' ? 2 : 1
+    } else if (c === '"' || c === "'") {
       q = c
       has = true
     } else if (c === '&' || c === '|' || c === ';' || c === '\n' || c === '\r') pushSeg()
@@ -814,28 +916,113 @@ function sessionUrl(output) {
   return m ? m[0] : null
 }
 
-export function onShellCommand(state, { command, output, isError, now, denied }) {
+// `background` is set when the command went on running in the background (run in the background, or
+// moved there on its timeout): its id (backgroundTaskId), or true when it has none. Its outcome is not
+// known yet, so a merge or a close in it waits for the task notification that settles it.
+export function onShellCommand(state, { command, output, isError, now, denied, background }) {
   const out = typeof output === 'string' ? output.slice(0, 20000) : ''
-  const ctx = { out, isError: !!isError, denied: !!denied, now }
+  const bg = typeof background === 'string' && background ? background : background ? true : null
+  const ctx = { out, isError: !!isError, denied: !!denied, now, background: bg }
   handleCommand(state, String(command == null ? '' : command), ctx, 0)
   return state
 }
 
+const MAX_PENDING_SHELL = 20
+
+// A merge or close that runs in the background: kept by task id until its notification says how it ended.
+// With no task id nothing can settle it, so it is left out.
+function deferShell(state, ctx, tokens) {
+  if (typeof ctx.background !== 'string') return
+  const list = state.pendingShell[ctx.background] || (state.pendingShell[ctx.background] = [])
+  list.push({ tokens: tokens.slice(0, 40), at: ctx.now })
+  const ids = Object.keys(state.pendingShell)
+  if (ids.length > MAX_PENDING_SHELL) delete state.pendingShell[ids[0]]
+}
+
+// The notification of a background command: a merge or close it held is recorded now, as it ended.
+function settleShell(state, taskId, ok, now) {
+  const list = state.pendingShell[taskId]
+  if (!list) return false
+  delete state.pendingShell[taskId]
+  for (const p of list) ghCommand(state, p.tokens, { out: '', isError: !ok, denied: false, now, background: null })
+  return true
+}
+
 function handleCommand(state, command, ctx, depth) {
-  for (const raw of splitCommand(command)) {
-    const tokens = stripPrefix(raw)
-    if (!tokens.length) continue
-    const exe = exeName(tokens[0])
-    const exp = tokens.findIndex(tok => /launch\.exp$/i.test(tok))
-    if (exp >= 0 && exe !== 'git' && exe !== 'gh' && exe !== 'cat' && exe !== 'less' && exe !== 'code') cloudLaunch(state, tokens, 'exp', exp, ctx)
-    else if (exe === 'claude' && hasFlag(tokens, '--cloud')) cloudLaunch(state, tokens, 'claude', 0, ctx)
-    else if (exe === 'gh') ghCommand(state, tokens.slice(1), ctx)
-    else if (exe === 'git') gitCommand(state, tokens.slice(1), ctx)
-    else if (SHELLS.has(exe) && depth < 2) {
-      const i = tokens.findIndex((tok, k) => k > 0 && /^(-c|-lc|-command|-c|\/c)$/i.test(tok))
-      if (i > 0 && tokens[i + 1]) handleCommand(state, tokens[i + 1], ctx, depth + 1)
-    }
+  for (const raw of splitCommand(command)) handleTokens(state, stripPrefix(raw), ctx, depth)
+}
+
+function handleTokens(state, tokens, ctx, depth) {
+  if (!tokens.length) return
+  const exe = exeName(tokens[0])
+  const script = launchScript(tokens, exe)
+  if (script) {
+    if (script.form !== 'ps1' || !isDryRunOrRefused(tokens, ctx)) cloudLaunch(state, tokens, script.form, script.at, ctx)
+  } else if (exe === 'claude' && hasFlag(tokens, '--cloud')) {
+    if (!isSteer(tokens)) cloudLaunch(state, tokens, 'claude', 0, ctx)
+  } else if (exe === 'gh') ghCommand(state, tokens.slice(1), ctx)
+  else if (exe === 'git') gitCommand(state, tokens.slice(1), ctx)
+  else if (exe === 'wsl' && depth < 2 && !tokens.some(tok => /^(-c|-lc|-command|\/c)$/i.test(tok))) handleTokens(state, wslInner(tokens), ctx, depth + 1)
+  else if (SHELLS.has(exe) && depth < 2) {
+    const i = tokens.findIndex((tok, k) => k > 0 && /^(-c|-lc|-command|\/c)$/i.test(tok))
+    if (i > 0 && tokens[i + 1]) handleCommand(state, innerCommand(exe, tokens, i), ctx, depth + 1)
   }
+}
+
+// The command a shell runs. `bash -c` takes one word (the rest are its $0, $1 ...); `cmd /c` and
+// `powershell -Command` run everything after the flag, so an unquoted `cmd /c gh pr merge 12` is the
+// whole `gh pr merge 12`. Words are joined back with the quotes a word with a space needs.
+function innerCommand(exe, tokens, i) {
+  if (exe !== 'cmd' && exe !== 'powershell' && exe !== 'pwsh') return tokens[i + 1]
+  return tokens
+    .slice(i + 1)
+    .map(tok => (/[\s&|;]/.test(tok) && tokens.length > i + 2 ? '"' + tok.replace(/"/g, '\\"') + '"' : tok))
+    .join(' ')
+}
+
+const EXP_RE = /launch\.exp$/i
+const PS1_RE = /launch\.ps1$/i
+
+// A launch script that runs, never one a command only names (sed, head, chmod, vim, grep ... on it):
+// `expect launch.exp ...` (the script is expect's first word that is not a flag), `./launch.exp ...`,
+// `powershell -File launch.ps1 ...`, `& launch.ps1 ...` or `.\launch.ps1 ...`. Returns { form, at } or null.
+function launchScript(tokens, exe) {
+  const first = tokens[0] === '.' ? 1 : 0
+  if (EXP_RE.test(tokens[first] || '')) return { form: 'exp', at: first }
+  if (PS1_RE.test(tokens[first] || '')) return { form: 'ps1', at: first }
+  if (exe === 'expect') {
+    const i = tokens.findIndex((tok, k) => k > 0 && !tok.startsWith('-'))
+    return i > 0 && EXP_RE.test(tokens[i]) ? { form: 'exp', at: i } : null
+  }
+  if (exe === 'powershell' || exe === 'pwsh') {
+    const i = tokens.findIndex((tok, k) => k > 0 && /^-f(ile)?$/i.test(tok))
+    return i > 0 && PS1_RE.test(tokens[i + 1] || '') ? { form: 'ps1', at: i + 1 } : null
+  }
+  return null
+}
+
+// launch.ps1 -DryRun builds the prompt and launches nothing; with no terminal it stops before claude.
+function isDryRunOrRefused(tokens, ctx) {
+  return tokens.some(tok => /^-dryrun(:\$true)?$/i.test(tok)) || /needs a real terminal/i.test(ctx.out)
+}
+
+// `claude -p "<msg>" --cloud <session_id|url>` sends a message to a session that exists (cloud-worker):
+// it starts nothing, and the session it names is left as it is.
+function isSteer(tokens) {
+  if (hasFlag(tokens, '-p', '--print')) return true
+  const target = flagValue(tokens, '--cloud') || ''
+  return /^session_[A-Za-z0-9]/.test(target) || /^https:\/\/claude\.ai\/code\//i.test(target)
+}
+
+// `wsl [-d distro] [-u user] [--cd dir] [-e|--exec|--] command ...`: the command after wsl's own flags.
+function wslInner(tokens) {
+  let i = 1
+  while (i < tokens.length && tokens[i].startsWith('-')) {
+    const flag = tokens[i].toLowerCase()
+    if (flag === '-e' || flag === '--exec' || flag === '--') return tokens.slice(i + 1)
+    i += /^(-d|--distribution|-u|--user|--cd)$/.test(flag) ? 2 : 1
+  }
+  return tokens.slice(i)
 }
 
 const CLOUD_VALUE_FLAGS = new Set(['--model', '--effort', '--permission-mode', '--name', '-n', '--settings', '--add-dir', '--max-turns', '--output-format'])
@@ -844,8 +1031,8 @@ function cloudLaunch(state, tokens, form, at, ctx) {
   let model = null
   let effort = null
   let label = ''
-  if (form === 'exp') {
-    const args = tokens.slice(at + 1)
+  if (form === 'exp' || form === 'ps1') {
+    const args = form === 'ps1' ? ps1Args(tokens.slice(at + 1)) : tokens.slice(at + 1)
     label = clean(String(args[0] || '').split(/[\\/]/).pop().replace(/\.\w+$/, ''))
     model = args[3] || 'sonnet'
     effort = args[4] || 'high'
@@ -871,7 +1058,7 @@ function cloudLaunch(state, tokens, form, at, ctx) {
   const w = newWorker(state, {
     id: url || 'cloud:' + nextSeq(state),
     kind: 'cloud',
-    label: label || 'cloud session',
+    label,
     model,
     effort,
     status,
@@ -881,6 +1068,24 @@ function cloudLaunch(state, tokens, form, at, ctx) {
   })
   if (status !== 'launched') w.endedAt = ctx.now
   else launchedWork(state)
+}
+
+// launch.ps1's arguments in launch.exp's order: task, rules, log, model, effort, by position or by name.
+const PS1_NAMED = { '-taskfile': 0, '-rulesfile': 1, '-logfile': 2, '-model': 3, '-effort': 4 }
+
+function ps1Args(tokens) {
+  const named = []
+  const pos = []
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i]
+    const low = tok.toLowerCase()
+    if (low in PS1_NAMED) named[PS1_NAMED[low]] = tokens[++i]
+    else if (/^-(ref|exe|exeargs)$/i.test(tok)) i += 1
+    else if (!tok.startsWith('-')) pos.push(tok)
+  }
+  const out = []
+  for (let k = 0; k < 5; k++) out[k] = named[k] != null ? named[k] : pos.shift()
+  return out
 }
 
 function roundSignal(state, item, signal, now) {
@@ -939,6 +1144,10 @@ function ghCommand(state, tokens, ctx) {
     const passing = /\bpass(ed|ing)?\b|successful|\bsuccess\b|✓/i.test(text)
     if (!failing && !waiting && passing) state.merge.steps.checks = true
     else if (failing || waiting) state.merge.steps.checks = false
+    return
+  }
+  if (ctx.background && !isError && ((noun === 'pr' && verb === 'merge') || (noun === 'issue' && verb === 'close'))) {
+    deferShell(state, ctx, tokens)
     return
   }
   if (noun === 'pr' && verb === 'merge') {
@@ -1097,6 +1306,8 @@ export function onPrList(state, json, now) {
   const numbers = new Set(polled.map(p => p.number))
   const kept = state.prs.filter(p => !numbers.has(p.number) && p.state !== 'open').slice(0, 5)
   state.prs = [...polled, ...kept]
+  // When the list was fetched: the views show old check colors as old.
+  if (isNum(now)) state.prsAt = now
   const mp = state.merge.pr != null ? polled.find(p => p.number === state.merge.pr) : null
   if (mp && state.merge.steps.checks !== true && mp.checks === 'green') state.merge.steps.checks = true
   else if (mp && mp.checks === 'red') state.merge.steps.checks = false
@@ -1202,13 +1413,15 @@ export function viewModel(state, budget, lang, now) {
   const workers = state.workers.map(w => ({
     id: w.id,
     kind: w.kind,
-    label: w.label,
+    label: w.label || t(l, 'label.' + w.kind),
+    // false when the label is the kind's word: the texts for the model then say it in English
+    named: !!w.label,
     model: w.model,
     effort: w.effort,
     status: w.status,
     startedAt: w.startedAt,
     endedAt: w.endedAt,
-    agents: w.agents ? { total: w.agents.total, sonnet: w.agents.sonnet, opus: w.agents.opus, fable: w.agents.fable, other: w.agents.other } : null,
+    agents: w.agents ? { total: w.agents.total, haiku: w.agents.haiku || 0, sonnet: w.agents.sonnet, opus: w.agents.opus, fable: w.agents.fable, other: w.agents.other } : null,
     url: w.url,
     points: w.points,
     lastSeenAt: w.lastSeenAt,
@@ -1221,6 +1434,7 @@ export function viewModel(state, budget, lang, now) {
     budget: b,
     workers,
     prs: state.prs.map(p => ({ ...p })),
+    prsAt: state.prsAt,
     merge: {
       pr: state.merge.pr,
       steps: MERGE_STEPS.map(key => ({ key, done: doneOf(state.merge.steps[key]) })),
@@ -1249,7 +1463,7 @@ export function viewModel(state, budget, lang, now) {
     },
     runCost: {
       unitPoints: unitOf(state.runCost.samples, planKey(state)),
-      samples: samplesFor(state.runCost.samples, planKey(state)).length,
+      samples: unitSamples(state.runCost.samples, planKey(state)).length,
       last: state.runCost.last ? { label: state.runCost.last.label, points: state.runCost.last.points, agents: state.runCost.last.agents } : null,
     },
   }
@@ -1295,10 +1509,10 @@ export function notifications(prevVm, vm) {
 export function estimateRun(state, budget, input) {
   const inp = input && typeof input === 'object' ? input : {}
   const num = x => (isNum(x) && x >= 0 ? x : 0)
-  const agents = { sonnet: num(inp.sonnet), opus: num(inp.opus), fable: num(inp.fable), other: 0 }
+  const agents = { haiku: num(inp.haiku), sonnet: num(inp.sonnet), opus: num(inp.opus), fable: num(inp.fable), other: 0 }
   const plan = planKey(state)
   const unit = unitOf(state.runCost.samples, plan)
-  const count = samplesFor(state.runCost.samples, plan).length
+  const count = unitSamples(state.runCost.samples, plan).length
   const points = estimatePoints(agents, unit)
   const wk = budget && budget.weekly
   const reserve = budget && budget.plan && isNum(budget.plan.reserve) ? budget.plan.reserve : 0
@@ -1327,11 +1541,19 @@ export function estimateRun(state, budget, input) {
     note += '; 5-hour window at 90% or more: paused until ' + at + ', no new launches'
   }
   if (color === 'red') note += '; budget red: no new launches'
+  // budget.md also says never to push the 5-hour window past 100. Run-cost samples are weekly points only,
+  // so `fits` does not project the 5-hour window: the note says so, with the window's reading.
+  const five = budget && budget.fiveHour && isNum(budget.fiveHour.used) ? budget.fiveHour.used : null
+  note += five == null
+    ? '; the 5-hour window is not readable and not projected'
+    : '; fits does not project the 5-hour window (now ' + Math.round(five) + '%): keep the run inside what is left of it'
+  if (budget && budget.plan && budget.plan.known === false) note += '; plan assumed (no Claude plan line; Pro accounts use Pro)'
   return {
     points: points == null ? null : Math.round(points * 100) / 100,
     fits,
     color,
     paused,
+    fiveHourUsed: five,
     margin: budget && isNum(budget.margin) ? Math.round(budget.margin * 10) / 10 : null,
     unitPoints: unit == null ? null : Math.round(unit * 1000) / 1000,
     samples: count,
@@ -1339,12 +1561,13 @@ export function estimateRun(state, budget, input) {
   }
 }
 
-// ---------- persistence ($.store keeps runCost and night, one key each) ----------
+// ---------- persistence ($.store keeps runCost, night and redeemed, one key each) ----------
 
 export function dump(state) {
   const n = state.night
   return {
     runCost: { samples: state.runCost.samples.slice(-MAX_SAMPLES), last: state.runCost.last },
+    redeemed: dumpRedeemed(state),
     night: {
       on: n.on,
       since: n.since,
@@ -1383,8 +1606,64 @@ export function mergeRunCost(state, stored) {
   return { samples, last: state.runCost.last || (rc.last && typeof rc.last === 'object' && isNum(rc.last.points) ? { label: fit(rc.last.label, 80), points: rc.last.points, agents: numOrNull(rc.last.agents) } : null) }
 }
 
+// Redeemed resets and the last weekly reading outlive a reload: a redeemed reset never counts again, and a
+// redemption between a reading before the reload and one after it is still seen.
+function dumpRedeemed(state) {
+  const m = state.weeklyMark
+  return { keys: state.redeemedKeys.slice(), had: hadFor(state.redeemedKeys, state.redeemedHad), mark: m && isNum(m.used) ? { resetsAt: numOrNull(m.resetsAt), used: m.used } : null }
+}
+
+const MAX_REDEEMED = 20
+
+// A key is kept until its own expiry date has passed (an undated one until the plan line drops it).
+function liveKeys(list, now) {
+  const today = isNum(now) ? new Date(now).toISOString().slice(0, 10) : ''
+  return (Array.isArray(list) ? list : [])
+    .filter(k => typeof k === 'string' && /^(weekly|5-hour):(\d{4}-\d{2}-\d{2})?$/.test(k))
+    .filter(k => {
+      const date = k.slice(k.indexOf(':') + 1)
+      return !date || !today || date >= today
+    })
+    .slice(-MAX_REDEEMED)
+}
+
+// Two lists of redeemed keys as one: each key as many times as the list that has it most (every session
+// sees the same account-wide redemption, so two sessions that saw it count it once).
+function unionKeys(a, b) {
+  const count = list => list.reduce((m, k) => m.set(k, (m.get(k) || 0) + 1), new Map())
+  const ca = count(a)
+  const out = a.slice()
+  for (const [k, n] of count(b)) for (let i = ca.get(k) || 0; i < n; i++) out.push(k)
+  return out
+}
+
+// Two `had` maps as one: the larger count of each key, the plan line as it was before any entry went.
+function maxHad(a, b) {
+  const out = { ...(a && typeof a === 'object' ? a : {}) }
+  for (const [k, n] of Object.entries(b && typeof b === 'object' ? b : {})) if (isNum(n) && !(isNum(out[k]) && out[k] >= n)) out[k] = n
+  return out
+}
+
+function markOf(x) {
+  return x && typeof x === 'object' && isNum(x.used) ? { resetsAt: numOrNull(x.resetsAt), used: x.used } : null
+}
+
+// $.store is one file shared by every session: fold in the keys other sessions stored before writing.
+// Returns what to write; this session's own weekly reading stays its mark.
+export function mergeRedeemed(state, stored, now) {
+  const st = stored && typeof stored === 'object' ? stored : {}
+  keepByPlan(state, liveKeys(unionKeys(liveKeys(state.redeemedKeys, now), liveKeys(st.keys, now)), now), maxHad(state.redeemedHad, st.had))
+  const own = dumpRedeemed(state)
+  return { keys: own.keys, had: own.had, mark: own.mark || markOf(st.mark) }
+}
+
 export function restore(state, saved, now) {
   const s = saved && typeof saved === 'object' ? saved : {}
+  const red = s.redeemed && typeof s.redeemed === 'object' ? s.redeemed : null
+  if (red) {
+    keepByPlan(state, liveKeys(unionKeys(state.redeemedKeys, liveKeys(red.keys, now)), now), maxHad(state.redeemedHad, red.had))
+    if (!state.weeklyMark) state.weeklyMark = markOf(red.mark)
+  }
   const rc = s.runCost && typeof s.runCost === 'object' ? s.runCost : null
   if (rc && Array.isArray(rc.samples)) {
     state.runCost.samples = cleanSamples(rc.samples).slice(-MAX_SAMPLES)

@@ -1,7 +1,7 @@
 {
   "name": "coordinator-lens",
   "version": "0.1.0",
-  "description": "Makes the coordinator's work visible and calm: budget color and pace, workers, merges, the round, the skill flow, night mode and decisions, in a band above the prompt, a /coord pane and card, and a few toasts. It observes only and spends nothing.",
+  "description": "Makes the coordinator's work visible and calm: budget color and pace, workers, merges, the round, the skill flow, night mode and decisions, in a band above the prompt, a /coord pane and card, and a few toasts. It adds one hidden budget line to a prompt when the budget changes (option contextLine) and gives the model a budget_estimate tool; otherwise it only observes, never blocks or changes your work or the model's, and calls no model.",
   "author": { "name": "Emanuele Denaro" },
   "userConfig": {
     "language": {
@@ -15,14 +15,14 @@
     "planLine": {
       "type": "string",
       "title": "Plan line",
-      "description": "Fallback for the 'Claude plan:' line of your CLAUDE.md, for example: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22. Leave empty to read it from CLAUDE.md.",
+      "description": "Fallback for the 'Claude plan:' line of your own CLAUDE.md (~/.claude/CLAUDE.md; a project's CLAUDE.md never sets the plan), for example: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22. Leave empty to read it from that file.",
       "required": false,
       "default": ""
     },
     "prPolling": {
       "type": "string",
       "title": "Pull request polling",
-      "description": "Run `gh pr list` every 5 minutes to show open pull requests and their checks.",
+      "description": "Run `gh pr list` every 5 minutes to show open pull requests and their checks (less often while gh keeps failing).",
       "required": false,
       "default": "on",
       "options": ["on", "off"]
