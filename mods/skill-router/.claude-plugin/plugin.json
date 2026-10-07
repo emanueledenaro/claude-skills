@@ -1,0 +1,32 @@
+{
+  "name": "skill-router",
+  "version": "0.1.0",
+  "description": "Smart skill activation by deterministic rules, no model calls: tells the model which installed skills fit the person's prompt (Italian and English patterns) and are not loaded yet, and holds a workflow, agent or cloud launch, a PR merge or a mod edit once until its prerequisite skills are loaded.",
+  "author": { "name": "Emanuele Denaro" },
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the lines you see in the transcript: it or en. What the model reads stays English.",
+      "required": false,
+      "default": "it",
+      "options": ["it", "en"]
+    },
+    "gate": {
+      "type": "string",
+      "title": "Prerequisite gates",
+      "description": "deny-once: hold a launch, merge or mod edit once until its prerequisite skills are loaded; the retry always passes. off: never hold.",
+      "required": false,
+      "default": "deny-once",
+      "options": ["deny-once", "off"]
+    },
+    "suggest": {
+      "type": "string",
+      "title": "Skill suggestions",
+      "description": "on: name the skills that fit your prompt to the model (one hidden line) and in the transcript. off: no suggestions.",
+      "required": false,
+      "default": "on",
+      "options": ["on", "off"]
+    }
+  }
+}

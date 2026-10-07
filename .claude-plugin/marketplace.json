@@ -1,0 +1,21 @@
+{
+  "name": "emanueledenaro",
+  "owner": {
+    "name": "Emanuele Denaro"
+  },
+  "metadata": {
+    "description": "Mods that enforce and route the coordinator skills of this repository."
+  },
+  "plugins": [
+    {
+      "name": "model-guard",
+      "source": "./mods/model-guard",
+      "description": "Enforces model-mix on delegated launches: Sonnet for general-purpose and Plan agents launched without a model, Haiku 5.5 at medium effort for Explore agents and the haiku alias only where it is Haiku 5.5 (Claude Code 2.1.293+ on the Anthropic API), Haiku 4.5 never run (rewritten to Sonnet on agents, refused elsewhere), Fable kept off agents, forks, workflow agents, routines and shell launches (custom agents are judged at spawn), workflow width capped by today's profile, --model on cloud and headless launches, no new launches on a red budget or a paused 5-hour window. Resumes pass while red but wait while the 5-hour window is paused; messages to workers, git, gh and merges always pass, unless the git command itself runs claude (git bisect run). With no usage reading, or a green one older than 10 minutes, launches pass with one line, unattended runs included; an older red or yellow reading keeps holding. Run cost, credits, the Fable window and the Haiku stage and context rules stay with the model."
+    },
+    {
+      "name": "skill-router",
+      "source": "./mods/skill-router",
+      "description": "Smart activation of skills with no model cost: suggests the skill a message calls for and asks once for the skills a workflow, agent, cloud launch, merge or mod edit needs; messages sent directly to workers and subagent calls are never held, and a gate that fails lets the call through."
+    }
+  ]
+}

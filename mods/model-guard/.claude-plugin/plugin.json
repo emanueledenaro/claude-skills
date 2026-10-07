@@ -1,0 +1,32 @@
+{
+  "name": "model-guard",
+  "version": "0.3.0",
+  "description": "Enforces model-mix on delegated launches: names the model on Agent calls of the built-in types and on cloud and headless shell launches (--model sonnet), keeps Fable off agents, forks, workflow agents, routines and shell launches, lets agents use the haiku alias only where it is Haiku 5.5 (Claude Code 2.1.293 or later on the Anthropic API; shell launches must use the full id claude-haiku-5-5), caps workflow width by today's budget, and stops new launches while the budget is red or the 5-hour window is paused. Spends nothing.",
+  "author": { "name": "Emanuele Denaro" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the lines you see (log and status): it or en. What the model reads stays English.",
+      "required": false,
+      "default": "it",
+      "options": ["it", "en"]
+    },
+    "redPolicy": {
+      "type": "string",
+      "title": "Red budget policy",
+      "description": "deny: refuse new launches while the weekly budget is red. warn: allow them and log a line.",
+      "required": false,
+      "default": "deny",
+      "options": ["deny", "warn"]
+    },
+    "planLine": {
+      "type": "string",
+      "title": "Plan line (fallback)",
+      "description": "Used when your ~/.claude/CLAUDE.md has no 'Claude plan:' line; without either, model-guard assumes Max 5x (set it on Pro). E.g. Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22",
+      "required": false,
+      "default": ""
+    }
+  }
+}

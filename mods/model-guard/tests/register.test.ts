@@ -1,0 +1,1379 @@
+import { describe, expect, mock, test, tier } from 'claude-code/testing'
+
+tier('user')
+
+const NOW = Date.parse('2026-10-07T12:00:00Z')
+const HOUR = 60 * 60 * 1000
+const DAY = 24 * HOUR
+// Weekly window resetting in 4 days: d = 3, pace ≈ 42.9.
+const WEEKLY_RESET = new Date(NOW + 4 * DAY).toISOString()
+const FIVE_RESET = new Date(NOW + HOUR).toISOString()
+
+const weekly = (used: number) => ({ kind: 'seven_day', percentUsed: used, resetsAt: WEEKLY_RESET })
+const fiveHour = (used: number) => ({ kind: 'five_hour', percentUsed: used, resetsAt: FIVE_RESET })
+
+const GREEN = [weekly(40), fiveHour(10)]
+const YELLOW = [weekly(60), fiveHour(10)]
+const RED = [weekly(80), fiveHour(10)]
+const PAUSED = [weekly(40), fiveHour(95)]
+
+const MAX20 = { planLine: 'Max 20x · reserve 10%' }
+const PRO = { planLine: 'Pro' }
+
+type World = {
+  rateLimits: unknown[]
+  logs: { text: string; to: string }[]
+  statuses: (string | undefined)[]
+  calls: any[]
+  spawns: any[]
+  clock: any
+}
+
+// Where the haiku alias stands: the engine's version (null: the read fails) and the process environment
+// (null: every read fails). By default Claude Code 2.1.292, where haiku is still Haiku 4.5.
+type Engine = { version?: string | null; env?: Record<string, string> | null }
+const HAIKU_55: Engine = { version: '2.1.293' }
+
+// The world beneath the plugin: clock, usage reading, engine version, environment, ui lines, and the tool
+// and spawn bottoms.
+function world(on: any, rateLimits: unknown[] = GREEN, engine: Engine = {}): World {
+  const w: World = { rateLimits, logs: [], statuses: [], calls: [], spawns: [], clock: null }
+  w.clock = mock.clock(on, { now: NOW })
+  const version = engine.version === undefined ? '2.1.292' : engine.version
+  on('session.version', async () => {
+    if (version === null) throw new Error('version unavailable')
+    return { value: { version, base: version } }
+  })
+  if (engine.env === null) on('env.get', async () => { throw new Error('env unavailable') })
+  else mock.env(on, engine.env || {})
+  on('session.usage', async () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: w.rateLimits } }))
+  on('ui.log', async ($: any, e: any) => { w.logs.push({ text: e.text, to: e.to }); return { value: undefined } })
+  on('ui.status', async ($: any, e: any) => { w.statuses.push(e.text); return { value: undefined } })
+  on('tool.call', async ($: any, e: any) => { w.calls.push(e); return { result: 'ran' } })
+  on('agent.spawn', async ($: any, e: any) => { w.spawns.push(e); return { model: 'resolved', agentId: 'agent-' + w.spawns.length } })
+  on('session.start', async ($: any, e: any) => ({ cwd: e.cwd }))
+  on('prompt.context', async ($: any, e: any) => ({ blocks: e.blocks }))
+  on('session.measure', async ($: any, e: any) => ({ changed: e.changed }))
+  return w
+}
+
+async function start($: any, isInteractive = true) {
+  await $.session.start({ cwd: 'C:/repo', surface: isInteractive ? 'terminal' : null, isInteractive })
+}
+
+const AGENT = { tool: 'Agent', description: 'Fix the ticket', prompt: 'Fix issue 12' }
+
+function spawnInput(runId: string, agentIndex: number, extra: Record<string, unknown> = {}) {
+  return {
+    tool_use_id: 'toolu_wf', prompt: 'Read the files', description: 'reader', subagentType: 'general-purpose',
+    provider: { plugin: 'engine', tier: 'core' }, model: 'sonnet', parentModel: 'claude-opus-5-5',
+    background: true, fork: false, workflow: { runId, agentIndex }, ...extra,
+  }
+}
+
+function denyText(r: any): string {
+  return String((r && (r.deny ?? r.text)) || '')
+}
+
+function isRefused(r: any): boolean {
+  return !!(r && (typeof r.deny === 'string' || r.isError === true))
+}
+
+describe('model-guard', () => {
+  describe('unrelated tools pass untouched', () => {
+    test('Read, SendMessage, TaskStop, git and gh commands reach the tool as given, even when red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const inputs: any[] = [
+        { tool: 'Read', file_path: 'C:/repo/a.txt' },
+        { tool: 'SendMessage', to: 'worker-1', message: 'Fix the failing test on your PR' },
+        { tool: 'TaskStop', task_id: 'task_1' },
+        { tool: 'Bash', command: 'git commit -m "docs: run claude --cloud for big tasks"' },
+        { tool: 'Bash', command: "gh pr create --title t --body 'launch with claude --cloud \"x\"'" },
+        { tool: 'Bash', command: 'gh pr merge 12 --squash --match-head-commit abc' },
+        { tool: 'PowerShell', command: 'Get-Content C:\\Users\\me\\.claude\\skills\\coordinator-method\\launch.exp' },
+        { tool: 'Bash', command: 'cat ~/.claude/skills/coordinator-method/launch.exp' },
+        { tool: 'RemoteTrigger', action: 'list' },
+        { tool: 'Bash', command: "gh pr create --title \"x\" --body-file - <<'EOF'\nSteps:\nclaude --cloud \"fix the bug\"\nEOF" },
+        { tool: 'Bash', command: "git commit -F - <<'EOF'\nclaude --cloud now gets --model\nEOF" },
+        { tool: 'Bash', command: "cat > brief.md <<'EOF'\nclaude --model sonnet --cloud \"task\"\nexpect launch.exp t r l fable high\nEOF" },
+        { tool: 'PowerShell', command: "@'\nDon't stop.\nclaude --cloud \"x\"\n'@ | Set-Content brief.md" },
+        // Claude Code's commit and PR idiom: an odd quote or a backtick-quote code span in the body.
+        { tool: 'Bash', command: "git commit -m \"$(cat <<'EOF'\nfeat: support 5\" displays\nclaude --cloud docs\nEOF\n)\"" },
+        { tool: 'Bash', command: "gh pr create --title t --body \"$(cat <<'EOF'\nSet `\"enabled\": false` in config.\n\n```\nclaude -p \"msg\" --cloud abc\n```\nEOF\n)\"" },
+        // Steering a cloud worker finishes open work.
+        { tool: 'Bash', command: 'claude -p "Fix the failing lint on your PR #12" --cloud session_01ABC --output-format json' },
+        { tool: 'PowerShell', command: 'claude --print "rebase on main" --cloud https://claude.ai/code/session_01ABC' },
+        // Local management commands start no session.
+        { tool: 'Bash', command: 'claude plugin validate mods/model-guard --strict' },
+        { tool: 'Bash', command: 'claude --version' },
+        { tool: 'Bash', command: 'claude mcp list' },
+        { tool: 'Bash', command: 'claude agents --json' },
+      ]
+      for (const input of inputs) {
+        const r = await $.tool.call(input)
+        expect(isRefused(r)).toBe(false)
+      }
+      expect(w.calls.length).toBe(inputs.length)
+      for (let i = 0; i < inputs.length; i++) expect(w.calls[i]).toMatchObject(inputs[i])
+      expect(w.logs).toEqual([])
+    })
+
+    test('heredoc and here-string texts are not rewritten when green', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      const commands = [
+        "gh pr create --title \"x\" --body-file - <<'EOF'\nSteps:\nclaude --cloud \"fix the bug\"\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nfeat: support 5\" displays\nclaude --cloud docs\nEOF\n)\"",
+      ]
+      for (const command of commands) await $.tool.call({ tool: 'Bash', command } as any)
+      expect(w.calls.map(c => c.command)).toEqual(commands)
+      expect(w.logs).toEqual([])
+    })
+
+    test('a follow-up to a cloud worker is never denied or rewritten: red, paused, Solo or green', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const steer = 'claude -p "Fix the failing test on your PR" --cloud session_01ABC --output-format json'
+      for (const reading of [RED, PAUSED, GREEN]) {
+        w.rateLimits = reading
+        const r = await $.tool.call({ tool: 'Bash', command: steer } as any)
+        expect(isRefused(r)).toBe(false)
+      }
+      expect(w.calls.map(c => c.command)).toEqual([steer, steer, steer])
+      expect(w.logs).toEqual([])
+    })
+
+    test('a follow-up passes on Solo (Pro yellow) too', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      const steer = 'claude -p "msg" --cloud cse_0123 --output-format json'
+      expect(isRefused(await $.tool.call({ tool: 'PowerShell', command: steer } as any))).toBe(false)
+      expect(w.calls[0].command).toBe(steer)
+    })
+  })
+
+  describe('rule 1: Agent without a model', () => {
+    test('no subagent_type, general-purpose, Explore and Plan get sonnet', async ($, on) => {
+      const w = world(on)
+      await start($)
+      for (const type of [undefined, 'general-purpose', 'Explore', 'Plan']) {
+        const input: any = type ? { ...AGENT, subagent_type: type } : { ...AGENT }
+        await $.tool.call(input)
+      }
+      expect(w.calls.map(c => c.model)).toEqual(['sonnet', 'sonnet', 'sonnet', 'sonnet'])
+      expect(w.logs.filter(l => l.to === 'transcript').length).toBe(4)
+      expect(w.logs[0].text).toContain('sonnet')
+    })
+
+    test('another type keeps its own model, logged to debug only', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ ...AGENT, subagent_type: 'security-reviewer' } as any)
+      expect(w.calls[0].model).toBeUndefined()
+      expect(w.logs).toEqual([{ text: expect.stringContaining('security-reviewer'), to: 'debug' }])
+    })
+
+    test('a named model passes as given', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'opus' } as any)
+      expect(w.calls[0].model).toBe('opus')
+      expect(w.logs).toEqual([])
+    })
+  })
+
+  describe('rule 2: haiku', () => {
+    test('the haiku alias becomes sonnet', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      expect(w.calls[0].model).toBe('sonnet')
+      expect(w.logs[0]).toEqual({ text: expect.stringContaining('haiku -> sonnet'), to: 'transcript' })
+    })
+  })
+
+  describe('rule 3: fable', () => {
+    test('fable becomes opus when the plan is not known', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false } as any)
+      expect(w.calls[0].model).toBe('opus')
+    })
+
+    test('fable becomes opus even on Max 20x, green, foreground, no isolation; the reason reaches the transcript once', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.prompt.context({ blocks: [], instructionFiles: [
+        { path: 'C:/Users/me/.claude/CLAUDE.md', kind: 'user', content: '# Me\nClaude plan: Max 20x · reserve 10%\n' },
+      ] } as any)
+      await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false } as any)
+      await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['opus', 'opus'])
+      expect(w.logs).toEqual([
+        { text: expect.stringContaining('fable -> opus'), to: 'transcript' },
+        { text: expect.stringContaining('fable -> opus'), to: 'debug' },
+      ])
+      expect(w.logs[0].text).toContain('Fable')
+    })
+
+    test('fable becomes opus in the background, with isolation, or when yellow', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.prompt.context({ blocks: [], instructionFiles: [
+        { path: 'C:/Users/me/.claude/CLAUDE.md', kind: 'user', content: 'Claude plan: Max 20x' },
+      ] } as any)
+      await $.tool.call({ ...AGENT, model: 'fable' } as any)
+      await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false, isolation: 'worktree' } as any)
+      w.rateLimits = YELLOW
+      await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['opus', 'opus', 'opus'])
+    })
+
+    test('a workflow agent pinned to Fable is denied with a reason to pin opus', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_fable', 1, { model: 'fable' }) as any)
+      expect(r.deny).toContain("model: 'opus'")
+      expect(w.spawns).toEqual([])
+      expect(w.logs[0].to).toBe('transcript')
+    })
+
+    test('an unpinned workflow agent under a Fable session is denied', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_fable2', 1, { model: undefined, parentModel: 'claude-fable-5-1' }) as any)
+      expect(r.deny).toContain('opus')
+      expect(w.spawns).toEqual([])
+    })
+
+    test('a workflow agent on the haiku alias is denied, a pinned opus id passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_h', 1, { model: 'haiku' }) as any)
+      expect(r.deny).toContain("model: 'sonnet'")
+      const ok: any = await $.agent.spawn(spawnInput('wf_h', 2, { model: 'claude-opus-5-5' }) as any)
+      expect(ok.deny).toBeUndefined()
+      expect(w.spawns.length).toBe(1)
+    })
+
+    // Changed: a spawn outside a workflow used to pass untouched whatever its model. It is still not
+    // gated on the budget (the Agent tool call is), but the model it will run on is now checked.
+    test('a spawn outside a workflow is not gated on the budget: a named model passes untouched while red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const input: any = spawnInput('x', 1, { model: 'sonnet' })
+      delete input.workflow
+      const r: any = await $.agent.spawn(input)
+      expect(r.deny).toBeUndefined()
+      expect(w.spawns[0].model).toBe('sonnet')
+      expect(w.logs).toEqual([])
+    })
+
+    const plain = (extra: Record<string, unknown>) => {
+      const input: any = spawnInput('x', 1, extra)
+      delete input.workflow
+      return input
+    }
+
+    test('a spawn outside a workflow on Fable is refused with the general-purpose opus advice', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r: any = await $.agent.spawn(plain({ model: 'fable' }))
+      expect(r.deny).toContain("subagent_type general-purpose with model: 'opus'")
+      expect(w.spawns).toEqual([])
+      expect(w.logs[0]).toEqual({ text: expect.stringContaining('agente su Fable bloccato'), to: 'transcript' })
+    })
+
+    test('a fork in a Fable session runs on Fable: refused; under an Opus session it passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const fable: any = await $.agent.spawn(plain({ fork: true, subagentType: 'fork', model: undefined, parentModel: 'claude-fable-5-1' }))
+      expect(fable.deny).toContain('A fork always runs on the session model')
+      expect(fable.deny).toContain("general-purpose with model: 'opus'")
+      // The model a fork is given is ignored: naming opus does not help.
+      const named: any = await $.agent.spawn(plain({ fork: true, subagentType: 'fork', model: 'opus', parentModel: 'claude-fable-5-1' }))
+      expect(named.deny).toContain('A fork always runs on the session model')
+      expect(w.spawns).toEqual([])
+      const opus: any = await $.agent.spawn(plain({ fork: true, subagentType: 'fork', model: undefined, parentModel: 'claude-opus-5-5' }))
+      expect(opus.deny).toBeUndefined()
+      expect(w.spawns.length).toBe(1)
+    })
+
+    test('an agent that inherits a Fable session is refused: no model, a literal inherit, or a custom type with no model', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const cases = [
+        { subagentType: 'general-purpose', model: undefined },
+        { subagentType: 'general-purpose', model: 'inherit' },
+        { subagentType: 'code-reviewer', model: undefined },
+        { subagentType: 'teammate', model: undefined, isTeammate: true },
+      ]
+      for (const c of cases) {
+        const r: any = await $.agent.spawn(plain({ ...c, parentModel: 'claude-fable-5-1' }))
+        expect(r.deny, JSON.stringify(c)).toContain("general-purpose with model: 'opus'")
+      }
+      expect(w.spawns).toEqual([])
+      // A custom type with its model named, or under an Opus session, passes.
+      expect((await $.agent.spawn(plain({ subagentType: 'code-reviewer', model: 'sonnet', parentModel: 'claude-fable-5-1' })) as any).deny).toBeUndefined()
+      expect((await $.agent.spawn(plain({ subagentType: 'code-reviewer', model: undefined, parentModel: 'claude-opus-5-5' })) as any).deny).toBeUndefined()
+      expect(w.spawns.length).toBe(2)
+    })
+
+    test('the haiku rules apply to the model a spawn inherits: a Haiku 4.5 session or the alias before 2.1.293', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const old: any = await $.agent.spawn(plain({ fork: true, subagentType: 'fork', model: undefined, parentModel: 'claude-haiku-4-5-20251001' }))
+      expect(old.deny).toContain('never pins Haiku 4.5')
+      const alias: any = await $.agent.spawn(plain({ subagentType: 'general-purpose', model: undefined, parentModel: 'haiku' }))
+      expect(alias.deny).toContain("inherit the session's haiku alias")
+      const own: any = await $.agent.spawn(plain({ model: 'haiku' }))
+      expect(own.deny).toContain('The haiku alias is not Haiku 5.5 here')
+      expect(w.spawns).toEqual([])
+    })
+
+    test('a workflow agent of a custom type with no model, or with model inherit, under a Fable session is refused', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const custom: any = await $.agent.spawn(spawnInput('wf_c', 1, { subagentType: 'code-reviewer', model: undefined, parentModel: 'claude-fable-5-1' }) as any)
+      expect(custom.deny).toContain('may inherit the session\'s Fable')
+      const inherit: any = await $.agent.spawn(spawnInput('wf_c', 2, { model: 'inherit', parentModel: 'claude-fable-5-1' }) as any)
+      expect(inherit.deny).toContain("would inherit the session's Fable")
+      expect(w.spawns).toEqual([])
+    })
+  })
+
+  describe('Haiku 5.5: the haiku alias from Claude Code 2.1.293 on the Anthropic API', () => {
+    test('2.1.293: the haiku alias is kept; Explore without a model gets haiku at effort medium; the rest sonnet', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore', effort: 'high' } as any)
+      for (const type of [undefined, 'general-purpose', 'Plan']) {
+        await $.tool.call((type ? { ...AGENT, subagent_type: type } : { ...AGENT }) as any)
+      }
+      expect(w.calls.map(c => [c.model, c.effort])).toEqual([
+        ['haiku', 'medium'], ['haiku', 'medium'], ['haiku', 'high'],
+        ['sonnet', undefined], ['sonnet', undefined], ['sonnet', undefined],
+      ])
+      expect(w.logs[0]).toEqual({ text: 'model-guard: Explore senza modello -> haiku, effort medium', to: 'transcript' })
+      expect(w.logs.filter(l => l.text.includes('haiku -> sonnet'))).toEqual([])
+    })
+
+    test('a later release keeps it too (2.2.0)', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.2.0' })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      expect(w.calls[0].model).toBe('haiku')
+    })
+
+    test('before 2.1.293: haiku and Explore get sonnet, and the line says why', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.292' })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore' } as any)
+      expect(w.calls.map(c => [c.model, c.effort])).toEqual([['sonnet', undefined], ['sonnet', undefined]])
+      expect(w.logs[0]).toEqual({ text: 'model-guard: haiku -> sonnet (prima di Claude Code 2.1.293 haiku è Haiku 4.5)', to: 'transcript' })
+    })
+
+    for (const env of [
+      { CLAUDE_CODE_USE_BEDROCK: '1' }, { CLAUDE_CODE_USE_VERTEX: 'true' }, { CLAUDE_CODE_USE_FOUNDRY: '1' },
+      { CLAUDE_CODE_USE_ANTHROPIC_AWS: '1' }, { ANTHROPIC_BASE_URL: 'https://llm-gateway.example.com/anthropic' },
+    ]) {
+      test('off the Anthropic API, haiku gets sonnet: ' + JSON.stringify(env), async ($, on) => {
+        const w = world(on, GREEN, { version: '2.1.293', env })
+        await start($)
+        await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+        expect(w.calls[0].model).toBe('sonnet')
+        expect(w.logs[0].text).toContain('fuori dall\'API Anthropic')
+      })
+    }
+
+    test('a flag set to 0 or the Anthropic API URL keeps it', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.293', env: { CLAUDE_CODE_USE_BEDROCK: '0', ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      expect(w.calls[0].model).toBe('haiku')
+    })
+
+    for (const [what, engine, said] of [
+      ['the version', { version: null }, 'versione di Claude Code non letta'],
+      ['the environment', { version: '2.1.293', env: null }, "variabili d'ambiente non lette"],
+    ] as [string, Engine, string][]) {
+      test(what + ' cannot be read: haiku gets sonnet, never a refusal, and the log names what was not read', async ($, on) => {
+        const w = world(on, GREEN, engine)
+        await start($)
+        const r = await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+        expect(isRefused(r)).toBe(false)
+        expect(w.calls[0].model).toBe('sonnet')
+        expect(w.logs[0].text).toContain(said)
+      })
+    }
+
+    test('ANTHROPIC_DEFAULT_HAIKU_MODEL on a Haiku 4.5 id: haiku gets sonnet; on a Haiku 5.5 id it is kept', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.293', env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001' } })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore' } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['sonnet', 'sonnet'])
+      expect(w.logs[0].text).toContain('ANTHROPIC_DEFAULT_HAIKU_MODEL')
+    })
+
+    test('ANTHROPIC_DEFAULT_HAIKU_MODEL on claude-haiku-5-5 keeps the alias', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.293', env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-5-5' } })
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku', effort: 'low' } as any)
+      expect(w.calls.map(c => [c.model, c.effort])).toEqual([['haiku', 'low']])
+    })
+
+    test('workflow agents with no model inherit the session model: a session on haiku before 2.1.293 is denied', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.292' })
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_inh', 1, { model: undefined, parentModel: 'haiku' }) as any)
+      expect(r.deny).toContain("inherit the session's haiku alias")
+      expect(w.spawns).toEqual([])
+    })
+
+    test('isolation remote runs in a cloud session on its own version: sonnet even on 2.1.293', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'haiku', isolation: 'remote' } as any)
+      await $.tool.call({ ...AGENT, subagent_type: 'Explore', isolation: 'remote' } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['sonnet', 'sonnet'])
+      expect(w.logs[0].text).toContain('agente in cloud')
+    })
+
+    test('workflow agents: haiku spawns on 2.1.293 and a Haiku 5.5 id anywhere; a Haiku 4.5 id never', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      const ok: any = await $.agent.spawn(spawnInput('wf_h55', 1, { model: 'haiku' }) as any)
+      expect(ok.deny).toBeUndefined()
+      const old: any = await $.agent.spawn(spawnInput('wf_h55', 2, { model: 'claude-haiku-4-5-20251001' }) as any)
+      expect(old.deny).toContain('never pins Haiku 4.5')
+      expect(w.spawns.map(s => s.model)).toEqual(['haiku'])
+      expect(w.logs.at(-1).text).toContain('Haiku 4.5')
+    })
+
+    test('workflow agents before 2.1.293: haiku denied with the reason, a Haiku 5.5 id passes', async ($, on) => {
+      const w = world(on, GREEN, { version: '2.1.292' })
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_h45', 1, { model: 'haiku' }) as any)
+      expect(r.deny).toContain('older than 2.1.293')
+      expect(r.deny).toContain("model: 'sonnet'")
+      const id: any = await $.agent.spawn(spawnInput('wf_h45', 2, { model: 'claude-haiku-5-5' }) as any)
+      expect(id.deny).toBeUndefined()
+      expect(w.spawns.map(s => s.model)).toEqual(['claude-haiku-5-5'])
+      expect(w.logs[0].text).toContain('prima di Claude Code 2.1.293')
+    })
+
+    test('shell launches: the bare haiku alias is refused even on 2.1.293 and says to pin claude-haiku-5-5', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      const launches = [
+        { tool: 'Bash', command: 'claude --model haiku --cloud "fix the typo"' },
+        { tool: 'PowerShell', command: 'claude -p "x" --model haiku' },
+        { tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 'claude --cloud --model=haiku "x"' },
+        { tool: 'Bash', command: 'expect launch.exp t r l haiku medium' },
+      ]
+      for (const input of launches) {
+        const r = await $.tool.call(input as any)
+        expect(isRefused(r), input.command).toBe(true)
+        expect(denyText(r)).toContain('claude-haiku-5-5')
+      }
+      expect(w.calls).toEqual([])
+    })
+
+    test('shell launches: a Haiku 5.5 id passes, a Haiku 4.5 id is refused', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      const good = 'claude --model claude-haiku-5-5 --effort medium --cloud "fix the typo"'
+      expect(isRefused(await $.tool.call({ tool: 'Bash', command: good } as any))).toBe(false)
+      for (const command of [
+        'claude --model claude-haiku-4-5-20251001 --cloud "x"',
+        'claude -p "x" --model claude-haiku-4-5',
+        'expect launch.exp t r l claude-haiku-4-5 medium',
+      ]) {
+        const r = await $.tool.call({ tool: 'Bash', command } as any)
+        expect(isRefused(r), command).toBe(true)
+        expect(denyText(r)).toContain('never pins Haiku 4.5')
+      }
+      expect(w.calls.map(c => c.command)).toEqual([good])
+    })
+  })
+
+  describe('Fable full ids (any case) on every path', () => {
+    test('Agent: claude-fable-5-1, claude-fable-5 and an upper-case id become opus', async ($, on) => {
+      const w = world(on)
+      await start($)
+      for (const model of ['claude-fable-5-1', 'claude-fable-5', 'Claude-Fable-5-1']) await $.tool.call({ ...AGENT, model } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['opus', 'opus', 'opus'])
+      expect(w.logs[0].text).toContain('fable -> opus')
+    })
+
+    test('workflow agents and shell launches: a full Fable id is refused', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_ff', 1, { model: 'CLAUDE-FABLE-5-1' }) as any)
+      expect(r.deny).toContain("model: 'opus'")
+      const sh = await $.tool.call({ tool: 'Bash', command: 'claude --model claude-fable-5-1 --cloud "x"' } as any)
+      expect(denyText(sh)).toContain('never run Fable')
+      expect(w.spawns).toEqual([])
+      expect(w.calls).toEqual([])
+    })
+  })
+
+  describe('rule 4: red budget', () => {
+    test('denies Agent, Workflow, RemoteTrigger run, cloud and launch.exp launches with the numbers', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const launches: any[] = [
+        { ...AGENT, model: 'sonnet' },
+        { tool: 'Workflow', script: 'export const meta = { name: "x", description: "x", phases: [] }' },
+        { tool: 'RemoteTrigger', action: 'run', trigger_id: 'trig_1' },
+        { tool: 'Bash', command: 'claude --model sonnet --cloud "fix ci"' },
+        { tool: 'PowerShell', command: 'expect ~/.claude/skills/coordinator-method/launch.exp task.txt rules.txt w.log sonnet high' },
+      ]
+      for (const input of launches) {
+        const r = await $.tool.call(input)
+        expect(isRefused(r)).toBe(true)
+        const text = denyText(r)
+        expect(text).toContain('Budget red')
+        expect(text).toContain('margin +37')
+        expect(text).toContain('weekly 80% used')
+        expect(text).toContain('2026-10-11 12:00 UTC')
+        expect(text).toContain('finish open work only')
+        // Red by pace with no banked reset: no redeem advice.
+        expect(text).not.toContain('redeem')
+      }
+      expect(w.calls).toEqual([])
+      expect(w.logs.length).toBe(5)
+      expect(w.logs[0].text).toContain('budget rosso')
+    })
+
+    test('the redeem advice only with a counted weekly reset and weekly use at or past 100 - reserve',
+      { options: { planLine: 'Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-30' } }, async ($, on) => {
+        // 84% is red by pace (the banked reset lifts the pace to about 56) but under 100 - reserve.
+        const w = world(on, [weekly(84), fiveHour(10)])
+        await start($)
+        const pace = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+        expect(denyText(pace)).toContain('Budget red')
+        expect(denyText(pace)).not.toContain('redeem')
+        w.rateLimits = [weekly(90), fiveHour(10)]
+        const over = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+        expect(denyText(over)).toContain('A weekly reset is banked and at least 2 days are left before the weekly reset: ask the person to redeem it (Settings > Usage).')
+      })
+
+    test('local headless sessions (-p, --bg) are new launches: denied while red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      for (const command of ['claude -p "refactor the parser" --max-turns 30', 'claude --bg "run the nightly sweep"']) {
+        const r = await $.tool.call({ tool: 'Bash', command } as any)
+        expect(isRefused(r)).toBe(true)
+        expect(denyText(r)).toContain('Budget red')
+      }
+      expect(w.calls).toEqual([])
+    })
+
+    test('status pinned while red, cleared when the budget is green again', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(w.statuses[w.statuses.length - 1]).toContain('model-guard: budget rosso')
+      w.rateLimits = GREEN
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(w.statuses[w.statuses.length - 1]).toBeUndefined()
+      expect(w.calls.length).toBe(1)
+    })
+
+    test('redPolicy warn allows, still applies the model rules, and logs', { options: { redPolicy: 'warn' } }, async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      await $.tool.call({ ...AGENT } as any)
+      await $.tool.call({ tool: 'Bash', command: 'claude --cloud "fix ci"' } as any)
+      expect(w.calls[0].model).toBe('sonnet')
+      expect(w.calls[1].command).toBe('claude --model sonnet --cloud "fix ci"')
+      expect(w.logs[0].text).toContain('solo segnalato')
+      expect(w.statuses[w.statuses.length - 1]).toContain('lanci solo segnalati')
+    })
+
+    test('a Workflow resume finishes open work: allowed and logged once', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const r = await $.tool.call({ tool: 'Workflow', resumeFromRunId: 'wf_open' } as any)
+      expect(isRefused(r)).toBe(false)
+      expect(w.calls).toEqual([expect.objectContaining({ tool: 'Workflow', resumeFromRunId: 'wf_open' })])
+      expect(w.logs).toEqual([{ text: expect.stringContaining('ripresa del workflow consentita'), to: 'transcript' }])
+    })
+
+    test('a local session resume (--resume, -c with -p or --bg) finishes open work: allowed untouched and logged', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const commands = ['claude --resume abc -p "x"', 'claude -c -p "x"', 'claude --bg --resume abc']
+      for (const command of commands) expect(isRefused(await $.tool.call({ tool: 'Bash', command } as any))).toBe(false)
+      expect(w.calls.map(c => c.command)).toEqual(commands)
+      expect(w.logs.length).toBe(3)
+      for (const l of w.logs) expect(l).toEqual({ text: expect.stringContaining('ripresa della sessione consentita'), to: 'transcript' })
+      // --fork-session starts a new session: denied while red.
+      const fork = await $.tool.call({ tool: 'Bash', command: 'claude --resume abc -p "x" --fork-session' } as any)
+      expect(denyText(fork)).toContain('Budget red')
+      expect(w.calls.length).toBe(3)
+    })
+
+    test('a RemoteTrigger update that disables a routine passes, one that enables it does not', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const off = await $.tool.call({ tool: 'RemoteTrigger', action: 'update', trigger_id: 'trig_1', body: { enabled: false } } as any)
+      const on2 = await $.tool.call({ tool: 'RemoteTrigger', action: 'update', trigger_id: 'trig_1', body: { enabled: true } } as any)
+      expect(isRefused(off)).toBe(false)
+      expect(isRefused(on2)).toBe(true)
+      expect(w.calls).toEqual([expect.objectContaining({ action: 'update', body: { enabled: false } })])
+    })
+
+    test('a session.measure reading counts when usage() has none', async ($, on) => {
+      const w = world(on, [])
+      await start($)
+      await $.session.measure({ context: { window: 200000 }, rateLimits: RED, changed: ['rateLimits'] } as any)
+      const r = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(w.statuses[0]).toContain('budget rosso')
+    })
+  })
+
+  describe('rule 5: 5-hour window paused', () => {
+    test('denies launches with the reset time', async ($, on) => {
+      const w = world(on, PAUSED)
+      await start($)
+      const r1 = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      const r2 = await $.tool.call({ tool: 'Bash', command: 'claude --model sonnet --cloud "x"' } as any)
+      for (const r of [r1, r2]) {
+        expect(isRefused(r)).toBe(true)
+        expect(denyText(r)).toContain('Wait until 13:00 UTC')
+      }
+      expect(w.calls).toEqual([])
+      expect(w.logs[0].text).toContain('13:00 UTC')
+    })
+
+    test('denies even with redPolicy warn', { options: { redPolicy: 'warn' } }, async ($, on) => {
+      world(on, PAUSED)
+      await start($)
+      const r = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(isRefused(r)).toBe(true)
+    })
+
+    test('denies a Workflow resume too', async ($, on) => {
+      const w = world(on, PAUSED)
+      await start($)
+      const r = await $.tool.call({ tool: 'Workflow', resumeFromRunId: 'wf_open' } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(denyText(r)).toContain('Wait until 13:00 UTC')
+      expect(w.calls).toEqual([])
+    })
+
+    test('denies a local headless session too', async ($, on) => {
+      const w = world(on, PAUSED)
+      await start($)
+      const r = await $.tool.call({ tool: 'PowerShell', command: 'claude -p "x" --model sonnet' } as any)
+      expect(denyText(r)).toContain('Wait until 13:00 UTC')
+      expect(w.calls).toEqual([])
+    })
+
+    test('denies a local session resume too', async ($, on) => {
+      const w = world(on, PAUSED)
+      await start($)
+      for (const command of ['claude --resume abc -p "x"', 'claude -c -p "x"', 'claude --bg --resume abc']) {
+        const r = await $.tool.call({ tool: 'Bash', command } as any)
+        expect(isRefused(r)).toBe(true)
+        expect(denyText(r)).toContain('Wait until 13:00 UTC')
+      }
+      expect(w.calls).toEqual([])
+    })
+
+    test('with a banked 5-hour reset and a green week, asks to offer the redemption',
+      { options: { planLine: 'Max 5x · banked: 5-hour reset, no expiry' } }, async ($, on) => {
+        world(on, PAUSED)
+        await start($)
+        const r = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+        expect(denyText(r)).toContain('A 5-hour reset is banked')
+      })
+  })
+
+  describe('rule 6: workflow width', () => {
+    test('Max 5x green: 8 agents per run, the 9th denied, a re-raised index passes, runs count apart', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      for (let i = 1; i <= 8; i++) {
+        const r: any = await $.agent.spawn(spawnInput('wf_w1', i) as any)
+        expect(r.deny).toBeUndefined()
+      }
+      const ninth: any = await $.agent.spawn(spawnInput('wf_w1', 9) as any)
+      expect(ninth.deny).toContain('allows 8 per run')
+      const again: any = await $.agent.spawn(spawnInput('wf_w1', 3) as any)
+      expect(again.deny).toBeUndefined()
+      const other: any = await $.agent.spawn(spawnInput('wf_w2', 1) as any)
+      expect(other.deny).toBeUndefined()
+      expect(w.spawns.length).toBe(10)
+    })
+
+    test('Max 20x yellow steps down to 8', { options: MAX20 }, async ($, on) => {
+      world(on, YELLOW)
+      await start($)
+      for (let i = 1; i <= 8; i++) await $.agent.spawn(spawnInput('wf_y', i) as any)
+      const r: any = await $.agent.spawn(spawnInput('wf_y', 9) as any)
+      expect(r.deny).toContain('Max 5x, which applied when the run started, allows 8')
+    })
+
+    test('red: the first agent of a new run is denied (width 0)', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_r', 1) as any)
+      expect(r.deny).toContain('allows no new workflow runs')
+      expect(w.spawns).toEqual([])
+    })
+
+    test('a run started before red keeps going up to the width it started with', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      for (let i = 1; i <= 3; i++) await $.agent.spawn(spawnInput('wf_open', i) as any)
+      w.rateLimits = RED
+      for (let i = 4; i <= 8; i++) {
+        const r: any = await $.agent.spawn(spawnInput('wf_open', i) as any)
+        expect(r.deny).toBeUndefined()
+      }
+      const ninth: any = await $.agent.spawn(spawnInput('wf_open', 9) as any)
+      expect(ninth.deny).toContain('allows 8 per run')
+      const fresh: any = await $.agent.spawn(spawnInput('wf_fresh', 1) as any)
+      expect(fresh.deny).toContain('allows no new workflow runs')
+      expect(w.spawns.length).toBe(8)
+    })
+
+    test('a run past its width logs one transcript line, the repeats go to debug', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      for (let i = 1; i <= 12; i++) await $.agent.spawn(spawnInput('wf_wide', i) as any)
+      const transcript = w.logs.filter(l => l.to === 'transcript')
+      expect(transcript).toEqual([{ text: 'model-guard: workflow oltre la larghezza 8 (Max 5x), altri agenti bloccati', to: 'transcript' }])
+      expect(w.logs.filter(l => l.to === 'debug').length).toBe(3)
+      for (let i = 1; i <= 3; i++) await $.agent.spawn(spawnInput('wf_fab', i, { model: 'fable' }) as any)
+      expect(w.logs.filter(l => l.to === 'transcript').length).toBe(2)
+    })
+
+    test('red with redPolicy warn: allowed and logged', { options: { redPolicy: 'warn' } }, async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_rw', 1) as any)
+      expect(r.deny).toBeUndefined()
+      expect(w.logs[0].text).toContain('solo segnalato')
+    })
+
+    test('a run admitted under redPolicy warn keeps the plan width when the budget leaves red', { options: { redPolicy: 'warn' } }, async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      expect((await $.agent.spawn(spawnInput('wf_warn', 1) as any) as any).deny).toBeUndefined()
+      w.rateLimits = GREEN
+      for (let i = 2; i <= 8; i++) {
+        const r: any = await $.agent.spawn(spawnInput('wf_warn', i) as any)
+        expect(r.deny).toBeUndefined()
+      }
+      const ninth: any = await $.agent.spawn(spawnInput('wf_warn', 9) as any)
+      expect(ninth.deny).toContain('Max 5x, which applied when the run started, allows 8')
+      expect(w.spawns.length).toBe(8)
+    })
+
+    test('Pro yellow is Solo: an Agent with isolation remote (a cloud session) is denied, a local one passes', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      const remote = await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'remote' } as any)
+      expect(isRefused(remote)).toBe(true)
+      expect(denyText(remote)).toContain("isolation 'remote'")
+      const local = await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'worktree' } as any)
+      expect(isRefused(local)).toBe(false)
+      expect(w.calls).toEqual([expect.objectContaining({ isolation: 'worktree' })])
+    })
+
+    test('an Agent with isolation remote passes the cloud column on Max 5x and is denied while red', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      expect(isRefused(await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'remote' } as any))).toBe(false)
+      w.rateLimits = RED
+      expect(denyText(await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'remote' } as any))).toContain('Budget red')
+      expect(w.calls.length).toBe(1)
+    })
+
+    test('Pro yellow is Solo: the Workflow call itself is denied', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      const r = await $.tool.call({ tool: 'Workflow', name: 'review' } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(denyText(r)).toContain('Solo')
+      expect(w.calls).toEqual([])
+    })
+
+    test('Pro yellow is Solo: no new cloud session either', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      const r = await $.tool.call({ tool: 'Bash', command: 'claude --model sonnet --cloud "x"' } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(denyText(r)).toContain('no new cloud sessions')
+      expect(w.calls).toEqual([])
+      expect(w.logs[0].text).toContain('sessione cloud bloccata')
+    })
+  })
+
+  describe('rule 7: cloud launches', () => {
+    test('claude --cloud without --model gets --model sonnet after the executable', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ tool: 'Bash', command: 'cd repo && claude --cloud "fix the build"' } as any)
+      await $.tool.call({ tool: 'PowerShell', command: '& "C:\\Tools\\claude.exe" --effort high --cloud "task"' } as any)
+      await $.tool.call({ tool: 'Bash', command: 'claude --model opus --cloud "audit auth"' } as any)
+      expect(w.calls.map(c => c.command)).toEqual([
+        'cd repo && claude --model sonnet --cloud "fix the build"',
+        '& "C:\\Tools\\claude.exe" --model sonnet --effort high --cloud "task"',
+        'claude --model opus --cloud "audit auth"',
+      ])
+      expect(w.logs.length).toBe(2)
+      expect(w.logs[0].text).toContain('--model sonnet')
+    })
+
+    test('claude --cloud on fable or the haiku alias is denied', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r1 = await $.tool.call({ tool: 'Bash', command: 'claude --cloud --model fable "x"' } as any)
+      const r2 = await $.tool.call({ tool: 'PowerShell', command: 'claude --model=haiku --cloud "x"' } as any)
+      expect(isRefused(r1)).toBe(true)
+      expect(isRefused(r2)).toBe(true)
+      expect(w.calls).toEqual([])
+    })
+
+    test('launch.exp with fable or haiku as 4th argument is denied, sonnet passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const base = 'expect ~/.claude/skills/coordinator-method/launch.exp task.txt rules.txt worker.log'
+      const r1 = await $.tool.call({ tool: 'Bash', command: base + ' fable high' } as any)
+      const r2 = await $.tool.call({ tool: 'PowerShell', command: base + ' haiku medium' } as any)
+      const r3 = await $.tool.call({ tool: 'Bash', command: base + ' sonnet high' } as any)
+      expect(isRefused(r1)).toBe(true)
+      expect(denyText(r1)).toContain('4th')
+      expect(isRefused(r2)).toBe(true)
+      expect(isRefused(r3)).toBe(false)
+      expect(w.calls.map(c => c.command)).toEqual([base + ' sonnet high'])
+    })
+
+    test('a quoted cmd /c or pwsh -Command script followed by a redirection is still read', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ tool: 'PowerShell', command: 'cmd /c "claude --cloud x" 2>&1' } as any)
+      const r = await $.tool.call({ tool: 'PowerShell', command: 'pwsh -Command "claude --cloud --model fable x" > o.txt' } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(w.calls.map(c => c.command)).toEqual(['cmd /c "claude --model sonnet --cloud x" 2>&1'])
+    })
+  })
+
+  describe('local headless sessions (claude -p, --bg)', () => {
+    test('without --model they get --model sonnet; a named model passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ tool: 'Bash', command: 'claude -p "refactor the parser" --max-turns 30' } as any)
+      await $.tool.call({ tool: 'PowerShell', command: 'claude --bg "run the nightly sweep"' } as any)
+      await $.tool.call({ tool: 'Bash', command: 'claude --print --model opus "audit auth"' } as any)
+      expect(w.calls.map(c => c.command)).toEqual([
+        'claude --model sonnet -p "refactor the parser" --max-turns 30',
+        'claude --model sonnet --bg "run the nightly sweep"',
+        'claude --print --model opus "audit auth"',
+      ])
+      expect(w.logs.length).toBe(2)
+      expect(w.logs[0].text).toContain('claude -p/--bg')
+    })
+
+    test('on fable or the bare haiku alias they are denied; a pinned Haiku id passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r1 = await $.tool.call({ tool: 'Bash', command: 'claude -p "x" --model fable' } as any)
+      const r2 = await $.tool.call({ tool: 'Bash', command: 'claude --bg --model haiku "x"' } as any)
+      const r3 = await $.tool.call({ tool: 'Bash', command: 'claude -p "x" --model claude-haiku-5-5' } as any)
+      expect(denyText(r1)).toContain('Headless and background sessions')
+      expect(isRefused(r2)).toBe(true)
+      expect(isRefused(r3)).toBe(false)
+      expect(w.calls.length).toBe(1)
+    })
+
+    test('Solo (Pro yellow) has no cloud slot but still runs a local one', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      const r = await $.tool.call({ tool: 'Bash', command: 'claude -p "x"' } as any)
+      expect(isRefused(r)).toBe(false)
+      expect(w.calls[0].command).toBe('claude --model sonnet -p "x"')
+    })
+
+    test('a resume gets no --model in green; --fork-session does; Fable on a resume is denied', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      const commands = ['claude --resume abc -p "x"', 'claude -c -p "x"', 'claude --bg --resume abc']
+      for (const command of commands) await $.tool.call({ tool: 'Bash', command } as any)
+      await $.tool.call({ tool: 'Bash', command: 'claude --resume abc -p "x" --fork-session' } as any)
+      const fable = await $.tool.call({ tool: 'Bash', command: 'claude --resume abc -p x --model fable' } as any)
+      expect(denyText(fable)).toContain('never run Fable')
+      expect(w.calls.map(c => c.command)).toEqual([...commands, 'claude --model sonnet --resume abc -p "x" --fork-session'])
+      expect(w.logs.map(l => l.text)).toEqual([expect.stringContaining('claude -p/--bg'), expect.stringContaining('fable')])
+    })
+  })
+
+  describe('indirect launches: claude run by Start-Process or cmd start', () => {
+    const INDIRECT = [
+      // The reviewer's inputs.
+      `Start-Process claude -ArgumentList "Fix the user's login","--cloud","--model","fable"`,
+      "Start-Process claude -ArgumentList '\\\"fix `parseArgs`\\\"','--cloud','--model','fable'",
+      `Start-Process claude -ArgumentList '--add-dir "C:\\My Proj\\\\"','--cloud','--model','fable'`,
+      "Start-Process claude -ArgumentList @('--cloud','x')",
+      // A cloud launch with a model, a follow-up to a worker, cmd's start.
+      "Start-Process -FilePath claude -ArgumentList '--model','opus','--cloud','\"fix the -p flag parsing\"'",
+      "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
+      'cmd /c start "" claude --cloud x',
+      // claude's own -p after the program word (the Bash tool's start is cmd's), a colon form before a space.
+      'start claude -p x --model fable',
+      'start "" claude -p "m" --cloud s',
+      "Start-Process -FilePath: claude -ArgumentList '-p','x','--model','fable'",
+    ]
+    for (const [color, limits] of [['green', GREEN], ['red', RED], ['paused', PAUSED]] as [string, unknown[]][]) {
+      test('every one is denied with the run-it-directly reason, ' + color, async ($, on) => {
+        const w = world(on, limits)
+        await start($)
+        for (const command of INDIRECT) {
+          for (const tool of ['PowerShell', 'Bash']) {
+            const r = await $.tool.call({ tool, command } as any)
+            expect(isRefused(r), command).toBe(true)
+            expect(denyText(r)).toContain('Run the same launch directly as a claude command; start a new cloud session from a real terminal tab (cloud-worker).')
+          }
+        }
+        const monitor = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: INDIRECT[0] } as any)
+        expect(denyText(monitor)).toContain('Run the same launch directly')
+        expect(w.calls).toEqual([])
+        expect(w.logs.length).toBe(INDIRECT.length * 2 + 1)
+        for (const l of w.logs) expect(l).toEqual({ text: 'model-guard: lancio di claude tramite Start-Process o start bloccato, va lanciato direttamente', to: 'transcript' })
+      })
+    }
+
+    test('mentions in heredocs or quoted text and Start-Process of other programs pass untouched, even when red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const commands = [
+        "git commit -F - <<'EOF'\nStart-Process claude -ArgumentList '--cloud','x'\nEOF",
+        "@'\nStart-Process claude -ArgumentList '--cloud','x'\n'@ | Set-Content notes.md",
+        'git commit -m "docs: never Start-Process claude --cloud"',
+        "Write-Output 'Start-Process claude --cloud x'",
+        'Start-Process notepad',
+        'Start-Process notepad claude',
+        'Start-Process code D:\\Progetti\\claude',
+        'Start-Process https://www.anthropic.com/claude',
+        'start chrome https://claude.ai',
+      ]
+      for (const command of commands) expect(isRefused(await $.tool.call({ tool: 'PowerShell', command } as any)), command).toBe(false)
+      expect(w.calls.map(c => c.command)).toEqual(commands)
+      expect(w.logs).toEqual([])
+    })
+  })
+
+  describe('Monitor runs shell commands too', () => {
+    test('a Monitor launch is checked like Bash: launch.exp on fable denied, claude --cloud rewritten', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const bad = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 'expect launch.exp t r l fable high' } as any)
+      expect(isRefused(bad)).toBe(true)
+      await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 'claude --cloud "x"' } as any)
+      expect(w.calls.map(c => c.command)).toEqual(['claude --model sonnet --cloud "x"'])
+    })
+
+    test('a cloud launch through Monitor is gated like Bash: denied while red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const r = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 'claude --model sonnet --cloud "x"' } as any)
+      expect(denyText(r)).toContain('Budget red')
+      expect(w.calls).toEqual([])
+    })
+
+    test('a Monitor watch without a command (a WebSocket) passes untouched, even when red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const input = { tool: 'Monitor', description: 'ws', timeout_ms: 1000, ws: { url: 'wss://example.test/feed' } }
+      expect(isRefused(await $.tool.call(input as any))).toBe(false)
+      expect(w.calls).toEqual([expect.objectContaining(input)])
+      expect(w.logs).toEqual([])
+    })
+  })
+
+  describe('rule 8: no reading yet', () => {
+    test('interactive: allowed, logged once', async ($, on) => {
+      const w = world(on, [])
+      await start($, true)
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      await $.tool.call({ ...AGENT, model: 'opus' } as any)
+      expect(w.calls.length).toBe(2)
+      expect(w.logs.length).toBe(1)
+      expect(w.logs[0].text).toContain('nessuna lettura')
+    })
+
+    test('non-interactive (a Desktop session starts as SDK, an API-key session never has a reading): allowed, logged once', async ($, on) => {
+      const w = world(on, [])
+      await start($, false)
+      await $.tool.call({ tool: 'Workflow', name: 'review' } as any)
+      await $.tool.call({ ...AGENT } as any)
+      await $.tool.call({ tool: 'Bash', command: 'claude --cloud "x"' } as any)
+      expect(w.calls.length).toBe(3)
+      expect(w.calls[1].model).toBe('sonnet')
+      expect(w.calls[2].command).toBe('claude --model sonnet --cloud "x"')
+      expect(w.logs[0].text).toContain('nessuna lettura del budget ancora')
+      expect(w.logs.filter(l => l.text.includes('nessuna lettura')).length).toBe(1)
+    })
+
+    test('no further line once a reading has come', async ($, on) => {
+      const w = world(on, [])
+      await start($)
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      w.rateLimits = GREEN
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(w.logs.length).toBe(1)
+    })
+  })
+
+  describe('language', () => {
+    test('English lines with language en; the model text stays English', { options: { language: 'en' } }, async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const r = await $.tool.call({ ...AGENT } as any)
+      expect(w.logs[0].text).toContain('launch blocked, budget red')
+      expect(denyText(r)).toContain('Budget red')
+    })
+  })
+
+  describe('guard failure paths refuse', () => {
+    test('Agent guard fails closed', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r = await $.tool.call({ ...AGENT, model: 42 } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(denyText(r)).toContain('model-guard could not check this launch')
+      expect(w.calls).toEqual([])
+      expect(w.logs[0].text).toContain('controllo fallito')
+    })
+
+    test('Agent guard fails closed on an effort that is not text, also where haiku is Haiku 5.5', async ($, on) => {
+      const w = world(on, GREEN, HAIKU_55)
+      await start($)
+      const r = await $.tool.call({ ...AGENT, subagent_type: 'Explore', effort: 42 } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(denyText(r)).toContain('model-guard could not check this launch')
+      expect(w.calls).toEqual([])
+    })
+
+    test('Workflow guard fails closed', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r = await $.tool.call({ tool: 'Workflow', script: 42 } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(denyText(r)).toContain('model-guard could not check this launch')
+      expect(w.calls).toEqual([])
+    })
+
+    test('RemoteTrigger guard fails closed', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r = await $.tool.call({ tool: 'RemoteTrigger', action: 42 } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(denyText(r)).toContain('model-guard could not check this launch')
+      expect(w.calls).toEqual([])
+    })
+
+    test('Bash and PowerShell guard fails closed', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r1 = await $.tool.call({ tool: 'Bash', command: 42 } as any)
+      const r2 = await $.tool.call({ tool: 'PowerShell', command: { claude: '--cloud' } } as any)
+      const r3 = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 42 } as any)
+      expect(isRefused(r1)).toBe(true)
+      expect(isRefused(r2)).toBe(true)
+      expect(isRefused(r3)).toBe(true)
+      expect(denyText(r1)).toContain('model-guard could not check this launch')
+      expect(w.calls).toEqual([])
+    })
+
+    test('agent.spawn guard fails closed', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r: any = await $.agent.spawn(spawnInput('wf_bad', 'one' as any) as any)
+      expect(r.deny).toContain('model-guard could not check this launch')
+      expect(w.spawns).toEqual([])
+    })
+  })
+
+  describe('re-entry: a launch raised beneath a guard\'s own frame is checked from memory', () => {
+    // A plugin beneath model-guard that, inside the guard's own usage reading, raises launches again:
+    // they rise beneath the guard's own frame, so the host does not run the hook and its .catch answers
+    // with kind 're-entry'. Changed: that .catch used to pass them on unchecked. It now runs the same
+    // rules from the last reading, with no $ call, and refuses where it would rewrite (next runs on the
+    // call as raised there) or where it has no reading. (The host refuses a plugin's $.tool.call of Agent
+    // or Workflow, so those two guards' re-entry cannot be raised here; they share the same .catch.)
+    // Inline plugins load from their source text, so each nester spells its commands out.
+    const NESTER_RED: any = {
+      name: 'nester',
+      tier: 'append',
+      register(on: any) {
+        let n = 0
+        on('session.usage', async ($: any, e: any, next: any) => {
+          n++
+          if (n === 1) {
+            await $.tool.call({ tool: 'Bash', command: 'claude --model opus --cloud "nested"' })
+            await $.tool.call({ tool: 'Bash', command: 'git status' })
+          }
+          if (n === 2) {
+            await $.agent.spawn({
+              tool_use_id: 'toolu_n', prompt: 'p', description: 'd', subagentType: 'general-purpose',
+              model: 'fable', background: true, workflow: { runId: 'wf_nested', agentIndex: 1 },
+            })
+          }
+          if (n === 3) await $.tool.call({ tool: 'RemoteTrigger', action: 'run', trigger_id: 'trig_n' })
+          return next(e)
+        })
+      },
+    }
+    const NESTER_GREEN: any = {
+      name: 'nester',
+      tier: 'append',
+      register(on: any) {
+        let n = 0
+        on('session.usage', async ($: any, e: any, next: any) => {
+          n++
+          if (n === 1) {
+            await $.tool.call({ tool: 'Bash', command: 'claude --model opus --cloud "named"' })
+            await $.tool.call({ tool: 'Bash', command: 'claude --cloud "unnamed"' })
+          }
+          return next(e)
+        })
+      },
+    }
+    const NESTER_ONE: any = {
+      name: 'nester',
+      tier: 'append',
+      register(on: any) {
+        let n = 0
+        on('session.usage', async ($: any, e: any, next: any) => {
+          n++
+          if (n === 1) await $.tool.call({ tool: 'Bash', command: 'claude --model opus --cloud "nested"' })
+          return next(e)
+        })
+      },
+    }
+
+    test('with a red reading: the nested cloud launch, Fable spawn and routine run are all refused',
+      { plugins: [NESTER_RED] }, async ($, on) => {
+        const w = world(on, RED)
+        await start($)
+        await $.session.measure({ context: { window: 200000 }, rateLimits: RED, changed: ['rateLimits'] } as any)
+        const outer = [
+          await $.tool.call({ tool: 'Bash', command: 'claude --model opus --cloud "outer"' } as any),
+          await $.agent.spawn(spawnInput('wf_outer', 1) as any),
+          await $.tool.call({ tool: 'RemoteTrigger', action: 'run', trigger_id: 'trig_o' } as any),
+        ]
+        for (const r of outer) expect(isRefused(r)).toBe(true)
+        // Only the command that starts nothing reached the tool.
+        expect(w.calls).toEqual([expect.objectContaining({ tool: 'Bash', command: 'git status' })])
+        expect(w.spawns).toEqual([])
+      })
+
+    test('with a green reading: a launch that passes as it is goes through; one that needs a change is refused with it',
+      { plugins: [NESTER_GREEN] }, async ($, on) => {
+        const w = world(on, GREEN)
+        await start($)
+        await $.session.measure({ context: { window: 200000 }, rateLimits: GREEN, changed: ['rateLimits'] } as any)
+        await $.tool.call({ tool: 'Bash', command: 'claude --model opus --cloud "outer"' } as any)
+        // The outer launch and the named nested one ran; the unnamed one needed --model sonnet.
+        expect(w.calls.map(c => c.command)).toEqual(['claude --model opus --cloud "named"', 'claude --model opus --cloud "outer"'])
+      })
+
+    test('with no reading yet: a nested launch is refused, not passed with a note',
+      { plugins: [NESTER_ONE] }, async ($, on) => {
+        const w = world(on, [])
+        await start($)
+        await $.tool.call({ tool: 'Bash', command: 'claude --model opus --cloud "outer"' } as any)
+        expect(w.calls.map(c => c.command)).toEqual(['claude --model opus --cloud "outer"'])
+      })
+  })
+
+  describe('state across reloads ($.state)', () => {
+    test('a Workflow resume while red lets the run\'s agents spawn up to the plan\'s own width, even unseen before', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const r = await $.tool.call({ tool: 'Workflow', resumeFromRunId: 'wf_lost' } as any)
+      expect(isRefused(r)).toBe(false)
+      for (let i = 1; i <= 8; i++) {
+        const a: any = await $.agent.spawn(spawnInput('wf_lost', i) as any)
+        expect(a.deny, 'agent ' + i).toBeUndefined()
+      }
+      const ninth: any = await $.agent.spawn(spawnInput('wf_lost', 9) as any)
+      expect(ninth.deny).toContain('Max 5x, which applied when the run started, allows 8')
+      // A fresh run while red is still new work.
+      expect(((await $.agent.spawn(spawnInput('wf_fresh', 1) as any)) as any).deny).toContain('allows no new workflow runs')
+      expect(w.spawns.length).toBe(8)
+    })
+
+    test('a resume on Pro yellow (Solo, width 0) uses Pro\'s own width', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      expect(isRefused(await $.tool.call({ tool: 'Workflow', resumeFromRunId: 'wf_solo' } as any))).toBe(false)
+      for (let i = 1; i <= 5; i++) await $.agent.spawn(spawnInput('wf_solo', i) as any)
+      expect(w.spawns.length).toBe(4)
+    })
+
+    test('a run\'s width record is written to $.state and read back after a reload', async ($, on) => {
+      const sets: any[] = []
+      on('state.set', async ($: any, e: any, next: any) => { sets.push(e); return next(e) })
+      // What a previous load of the module left: run wf_old started at width 8 with three agents.
+      on('state.get', async ($: any, e: any, next: any) => (e.key === 'runs' && e.id === 'wf_old'
+        ? { value: { value: { admitted: [1, 2, 3], width: 8, name: 'Max 5x' }, version: 3 } }
+        : next(e)))
+      const w = world(on, RED)
+      await start($)
+      for (let i = 4; i <= 8; i++) {
+        const a: any = await $.agent.spawn(spawnInput('wf_old', i) as any)
+        expect(a.deny, 'agent ' + i).toBeUndefined()
+      }
+      expect(((await $.agent.spawn(spawnInput('wf_old', 9) as any)) as any).deny).toContain('allows 8 per run')
+      expect(w.spawns.length).toBe(5)
+      const last = sets.filter(e => e.key === 'runs' && e.id === 'wf_old').pop()
+      expect(last.value).toEqual({ admitted: [1, 2, 3, 4, 5, 6, 7, 8], width: 8, name: 'Max 5x' })
+    })
+
+    test('the plan line is kept in $.state and read back when prompt.context does not run again', async ($, on) => {
+      const sets: any[] = []
+      on('state.set', async ($: any, e: any, next: any) => { sets.push(e); return next(e) })
+      world(on, YELLOW)
+      await $.prompt.context({ blocks: [], instructionFiles: [{ path: 'u', kind: 'user', content: 'Claude plan: Pro' }] } as any)
+      expect(sets.filter(e => e.key === 'plan').map(e => e.value.name)).toEqual(['Pro'])
+    })
+
+    test('after a reload the plan comes from $.state: Pro yellow is Solo, no workflows', async ($, on) => {
+      on('state.get', async ($: any, e: any, next: any) => (e.key === 'plan'
+        ? { value: { value: { name: 'Pro', reserve: null, banked: [], usageFile: null, raw: 'Pro' }, version: 1 } }
+        : next(e)))
+      const w = world(on, YELLOW)
+      await start($)
+      const r = await $.tool.call({ tool: 'Workflow', name: 'review' } as any)
+      expect(denyText(r)).toContain('Solo')
+      expect(w.calls).toEqual([])
+    })
+
+    test('parallel spawns of one run never pass the width', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      const all: any[] = await Promise.all(Array.from({ length: 12 }, (_, i) => $.agent.spawn(spawnInput('wf_par', i + 1) as any)))
+      expect(all.filter(r => r.deny === undefined).length).toBe(8)
+      expect(w.spawns.length).toBe(8)
+    })
+  })
+
+  describe('reading age (budget.md: 10 minutes)', () => {
+    test('an unchanged red reading keeps holding past 10 minutes: no cloud launch, workflow or new run slips through', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      expect(isRefused(await $.tool.call({ ...AGENT, model: 'sonnet' } as any))).toBe(true)
+      const status = w.statuses.length
+      await w.clock.advance(11 * 60 * 1000)
+      expect(isRefused(await $.tool.call({ ...AGENT, model: 'sonnet' } as any))).toBe(true)
+      expect(isRefused(await $.tool.call({ tool: 'Bash', command: 'claude --model sonnet --cloud "fix it"' } as any))).toBe(true)
+      expect(isRefused(await $.tool.call({ tool: 'Workflow', name: 'review' } as any))).toBe(true)
+      expect((await $.agent.spawn(spawnInput('wf_new', 1) as any) as any).deny).toBeDefined()
+      expect(w.calls).toEqual([])
+      expect(w.spawns).toEqual([])
+      // The red status line stays: nothing cleared it.
+      expect(w.statuses.slice(status).includes(undefined)).toBe(false)
+      expect(w.logs.map(l => l.text)).not.toContain('model-guard: lettura del budget scaduta, lancio consentito')
+    })
+
+    test('an unchanged green reading ages: past 10 minutes the color is unknown with one line; a measure or a change makes it fresh', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      const STALE = 'model-guard: lettura del budget scaduta, lancio consentito'
+      const notes = () => w.logs.filter(l => l.text === STALE).length
+      expect(isRefused(await $.tool.call({ ...AGENT, model: 'sonnet' } as any))).toBe(false)
+      expect(notes()).toBe(0)
+      await w.clock.advance(11 * 60 * 1000)
+      expect(isRefused(await $.tool.call({ ...AGENT, model: 'sonnet' } as any))).toBe(false)
+      expect(notes()).toBe(1)
+      // A session.measure vouches for the reading again: green, then it ages once more.
+      await $.session.measure({ context: { window: 200000 }, rateLimits: GREEN, changed: ['context'] } as any)
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(notes()).toBe(1)
+      await w.clock.advance(11 * 60 * 1000)
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(notes()).toBe(2)
+      // A reading that changed is new.
+      w.rateLimits = [weekly(41), fiveHour(10)]
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      await w.clock.advance(9 * 60 * 1000)
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(notes()).toBe(2)
+      await w.clock.advance(2 * 60 * 1000)
+      await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+      expect(notes()).toBe(3)
+    })
+  })
+
+  describe('RemoteTrigger: a routine is a cloud session', () => {
+    test('a model named anywhere in the body is checked: Fable and the bare haiku alias refused, sonnet passes', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      const fable = await $.tool.call({ tool: 'RemoteTrigger', action: 'create', body: { session: { config: { model: 'claude-fable-5-1' } } } } as any)
+      expect(denyText(fable)).toContain('Routines run as cloud sessions, which never run Fable')
+      const haiku = await $.tool.call({ tool: 'RemoteTrigger', action: 'update', trigger_id: 't', body: { default_model: 'haiku' } } as any)
+      expect(denyText(haiku)).toContain('the bare haiku alias')
+      const ok = await $.tool.call({ tool: 'RemoteTrigger', action: 'create', body: { model: 'sonnet' } } as any)
+      expect(isRefused(ok)).toBe(false)
+      expect(w.calls.length).toBe(1)
+      expect(w.logs[0]).toEqual({ text: 'model-guard: routine con modello fable bloccata', to: 'transcript' })
+    })
+
+    test('Pro yellow is Solo: no routine create or run; a disable passes', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      expect(denyText(await $.tool.call({ tool: 'RemoteTrigger', action: 'run', trigger_id: 't' } as any))).toContain('no new cloud sessions')
+      expect(denyText(await $.tool.call({ tool: 'RemoteTrigger', action: 'create', body: {} } as any))).toContain('no new cloud sessions')
+      expect(isRefused(await $.tool.call({ tool: 'RemoteTrigger', action: 'update', trigger_id: 't', body: { enabled: false } } as any))).toBe(false)
+      expect(w.calls.length).toBe(1)
+    })
+  })
+
+  describe('a guard that fails after it called next', () => {
+    test('keeps what next settled to: the tool ran once, with the rewrite', async ($, on) => {
+      // The Agent tool beneath throws after model-guard rewrote fable to opus and called next.
+      const ran: any[] = []
+      on('tool.call', { tool: 'Agent' }, async ($: any, e: any) => {
+        ran.push(e)
+        throw new Error('tool failed')
+      })
+      world(on, GREEN)
+      await start($)
+      let failed = false
+      try {
+        await $.tool.call({ ...AGENT, model: 'fable' } as any)
+      } catch {
+        failed = true
+      }
+      // Without the next.called branch the .catch would refuse or run the call again on the original input.
+      expect(ran).toEqual([expect.objectContaining({ model: 'opus' })])
+      expect(failed).toBe(true)
+    })
+  })
+
+  describe('observers pass on unchanged', () => {
+    test('session.start, prompt.context and session.measure return what lies beneath', async ($, on) => {
+      world(on)
+      const s = await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true } as any)
+      expect(s).toEqual({ cwd: 'C:/repo' })
+      const blocks = [{ name: 'currentDate', text: '2026-10-07' }]
+      const c = await $.prompt.context({ blocks, instructionFiles: [{ path: 'C:/u/.claude/CLAUDE.md', kind: 'user', content: 'Claude plan: Max 20x' }] } as any)
+      expect(c).toMatchObject({ blocks })
+      const m = await $.session.measure({ context: { window: 200000 }, rateLimits: GREEN, changed: ['rateLimits'] } as any)
+      expect(m).toEqual({ changed: ['rateLimits'] })
+    })
+  })
+})

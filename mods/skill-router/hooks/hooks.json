@@ -1,0 +1,1 @@
+{ "description": "skill-router: suggests the skills that fit the person's prompt and holds a launch, merge or mod edit once until its prerequisite skills are loaded", "modules": ["./register.js"] }
