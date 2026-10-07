@@ -928,8 +928,11 @@ function cloudLaunch(values) {
 // words of a prompt never read as flags. Every segment is kept: a `(` or `;` in an element's text must
 // not drop the flags after it.
 // Keep this function identical to model-guard's (rules.js).
+// Start-Process hands claude a Windows command line: only double quotes group words there; a single quote
+// is a plain character and \" a literal quote, so both are masked before tokenize reads the text.
 function startedWords(values) {
-  return tokenize(values.join(' ').replace(/,/g, ' ')).flat().map(t => t.value)
+  const text = values.join(' ').replace(/,/g, ' ').replace(/\\"/g, '\u0001').replace(/'/g, '\u0000')
+  return tokenize(text).flat().map(t => t.value.replace(/\u0000/g, "'").replace(/\u0001/g, '"'))
 }
 
 // The first argument that is not a flag (`expect -f launch.exp`, `powershell -NoProfile -File x.ps1`).

@@ -526,3 +526,18 @@ describe('workflow runs admitted under redPolicy warn', () => {
     expect(pro.startRun).toEqual({ width: 4, name: 'Pro' })
   })
 })
+
+describe('Start-Process hands claude a Windows command line', () => {
+  test('a single quote or an escaped quote inside a value never swallows the flags after it', () => {
+    for (const c of [
+      `Start-Process claude -ArgumentList "Fix the user's login","--cloud","--model","fable"`,
+      `Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--model','fable','--cloud','task'`,
+      `Start-Process claude -ArgumentList '\\"fix the bug\\" --model fable --cloud'`,
+      `Start-Process claude -ArgumentList '--model','fable','\\"fix the bug\\"','--cloud'`,
+    ]) expect(scanShell(c), c).toEqual([{ kind: 'cloud', hasModel: true, model: 'fable', insertAt: null }])
+  })
+  test('an apostrophe in the working directory still shows the launch, and a follow-up stays steering', () => {
+    expect(scanShell(`Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--cloud','task'`)[0].kind).toBe('cloud')
+    expect(scanShell(`Start-Process claude -ArgumentList "-p","what's","--cloud","cse_1"`)).toEqual([])
+  })
+})

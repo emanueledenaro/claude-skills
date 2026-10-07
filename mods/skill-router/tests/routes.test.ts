@@ -428,3 +428,16 @@ describe('mod files', () => {
     expect(isUnder('C:\\repo\\demo\\hooksy\\a.js', 'C:/repo/demo/hooks')).toBe(false)
   })
 })
+
+describe('Start-Process hands claude a Windows command line', () => {
+  test('a single quote or an escaped quote inside a value never swallows the flags after it', () => {
+    for (const c of [
+      `Start-Process claude -ArgumentList "Fix the user's login","--cloud","--model","fable"`,
+      `Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--model','fable','--cloud','task'`,
+      `Start-Process claude -ArgumentList '\\"fix the bug\\" --model fable --cloud'`,
+      `Start-Process claude -ArgumentList '--model','fable','\\"fix the bug\\"','--cloud'`,
+      `Start-Process claude -WorkingDirectory "C:\\Users\\O'Neil\\proj" -ArgumentList '--cloud','task'`,
+    ]) expect(shellGates(c), c).toEqual(['cloud'])
+    expect(shellGates(`Start-Process claude -ArgumentList "-p","what's","--cloud","cse_1"`)).toEqual([])
+  })
+})

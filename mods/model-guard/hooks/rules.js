@@ -570,8 +570,11 @@ const STARTER_PARAMS = /^-(argumentlist|args|filepath|wait|nonewwindow|passthru|
 // words of a prompt never read as flags. Every segment is kept: a `(` or `;` in an element's text must
 // not drop the flags after it.
 // skill-router's routes.js holds a copy of this function: keep the two identical.
+// Start-Process hands claude a Windows command line: only double quotes group words there; a single quote
+// is a plain character and \" a literal quote, so both are masked before tokenize reads the text.
 function startedWords(values) {
-  return tokenize(values.join(' ').replace(/,/g, ' ')).flat().map(t => t.value)
+  const text = values.join(' ').replace(/,/g, ' ').replace(/\\"/g, '\u0001').replace(/'/g, '\u0000')
+  return tokenize(text).flat().map(t => t.value.replace(/\u0000/g, "'").replace(/\u0001/g, '"'))
 }
 
 // `Start-Process claude -ArgumentList '--cloud','task'` (or cmd's `start claude -p x`): a launch whose
