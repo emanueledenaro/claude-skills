@@ -23,7 +23,7 @@ Run the budget check in `model-mix` first. Size by the diff, not by the worker's
 
 ## 3. Run the review
 
-- The reviewer gets the repo at the PR head sha in a short-path worktree, the diff, the ticket's acceptance criteria and the project rules. The PR body and the worker's report are claims to test. Brief, lenses and finding format: `review.md`.
+- The reviewer gets the repo at the PR head sha in a short-path worktree, the diff, the ticket's acceptance criteria, the project rules and the `clean-code` rules. The PR body and the worker's report are claims to test. Brief, lenses and finding format: `review.md`.
 - A finding counts only after a verifier, who sees the claim and the cited lines but not the author's reasoning, failed to refute it with evidence (file and line, command and output), small path included (`review.md`).
 - Leave one PR comment: reviewed head sha, findings verified, applied or dropped, checks read. It is the record the next steps and a later reader cite.
 - Builds and full suites run in CI, not in the review (`coordinator-method`).

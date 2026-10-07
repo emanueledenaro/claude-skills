@@ -24,7 +24,7 @@ Rules for the code Claude writes and the code it reviews, after Robert C. Martin
 | `yagni` | advise | No feature or abstraction before it is needed |
 | `solid` | advise | SOLID, object-oriented code only |
 
-- **block**: when writing, fix it before the work is reported done or the PR is opened (a work-in-progress commit may still hold it). In a review it is a `serious` finding, fixed before the merge (`merge-gate`).
+- **block**: when writing, fix it, or state the exception and its reason in the report or PR (Done when), before the work is reported done or the PR is opened (a work-in-progress commit may still hold it). In a review it is a `serious` finding, fixed before the merge (`merge-gate`).
 - **advise**: when writing, apply it if it is cheap within the same change. In a review it is a `minor` finding; it never blocks a merge.
 - A project changes the levels with one line in its `.claude/CLAUDE.md` or AGENTS.md, for example `clean-code: smallFunctions=block, solid=off`. Levels: `block`, `advise`, `off`.
 - Conflicts: project conventions, then block rules, then advise rules. Between `dry` and `kiss`/`yagni`, see `dry`.
@@ -49,7 +49,7 @@ Rules for the code Claude writes and the code it reviews, after Robert C. Martin
 **`noHiddenSideEffects`**
 - A function changes state outside its own locals only when its name or signature says so: module or global variables, singletons, caches others read, arguments passed in, environment, files, databases, network, timers, listeners and processes it starts. `getUser` that also marks the user as seen, or sorts the list it was given, breaks the rule; `saveUser`, `markSeen(user)` and `updateCache(cache, entry)` do not.
 - Queries return data and change nothing; commands change state and say so.
-- Do not mutate inputs: return a new value, name the mutation (`sortInPlace`) or take an out-parameter the language marks (`&mut`, a pointer). Not hidden: logging, metrics, tracing, and memoization or lazy initialization a caller cannot observe. Importing a module only defines it: no I/O, global patching or registration at import unless the module exists for that and says so.
+- Do not mutate inputs: return a new value, name the mutation (`sortInPlace`) or take an out-parameter the language marks (`&mut`, a pointer). Not hidden: logging, metrics, tracing, and memoization or lazy initialization a caller cannot observe. Importing a module only defines it: no I/O, global patching or registration at import unless the module exists for that and says so, or the framework expects it there (route, command or task decorators).
 
 **`kiss`**
 - The simplest design that meets today's need: plain functions and data before classes, patterns, generics, metaprogramming, config layers or clever one-liners. A reader new to the file follows it on the first pass.
@@ -70,14 +70,14 @@ Rules for the code Claude writes and the code it reviews, after Robert C. Martin
 
 ## 4. Writing
 
-- Read the surrounding code first and match its names and idiom.
+- Read the surrounding code first and match its conventions and idiom (not its habits, see the intro).
 - Before reporting done, walk the changed lines once against the block rules and fix what fails. In the report, name any advise item deliberately left and any follow-up found in existing code.
 
 ## 5. Reviewing
 
-- Findings use `merge-gate`'s format (`review.md`, Finding format), with the rule id and level after the severity: a block rule is `serious`, an advise rule `minor`. Block findings first.
+- Findings use `merge-gate`'s format (`review.md`, Finding format), with the rule id and level after the severity (`[severity: serious] dry block src/a.ts:12`): a block rule is `serious`, an advise rule `minor`. Block findings first.
 - A finding needs the cited lines in hand. Taste is not a finding.
-- Findings the person reads are in their language (Italian by default); findings sent to a worker or written in a PR follow `merge-gate`. Rule ids stay as they are.
+- Findings the person reads are in their language (Italian by default); findings sent to a worker or written in a PR are in English, like `merge-gate`'s templates. Rule ids stay as they are.
 
 ## Done when
 

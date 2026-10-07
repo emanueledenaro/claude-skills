@@ -18,7 +18,7 @@ Then verify: each serious finding gets one fresh Opus high verifier (Pro: medium
 ## Large path: lenses, verify, critic
 
 1. **Lenses** (one agent each, same model, effort, tools and schema, so the prompt prefix caches):
-   - code PRs: correctness and edge cases; security and trust boundaries; tests and checks (anything removed or weakened); fit with the ticket and the project rules; overlap or duplication with what main has now; UI and text the person sees, including model-facing wording that leaks.
+   - code PRs: correctness and edge cases; security and trust boundaries; tests and checks (anything removed or weakened); fit with the ticket, the project rules and the `clean-code` rules (levels after the project's `clean-code:` line); overlap or duplication with what main has now; UI and text the person sees, including model-facing wording that leaks.
    - skills, docs and prompt PRs: facts (every claim checked against a source); use (how a model would misread or misuse it); safety (what a literal copy would let through); consistency with sibling skills.
 2. **Verify**: one fresh Opus high agent per serious finding (batched per area below Max 20x, but a security finding always has its own verifier, `smart-ultracode`). It gets the claim and the cited lines, never the author's reasoning, and tries to refute with evidence. It returns confirmed, refuted or unverified with the file and line or the command and output.
 3. **Critic**: one agent gets the PR goal, the diff's file list, the lenses and the verified results, and names what was skipped, assumed or left unread. Its gaps go into one more round or into the PR comment.
