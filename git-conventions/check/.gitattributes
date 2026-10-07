@@ -1,0 +1,4 @@
+# Keep scripts LF when this folder is copied into a project on Windows (core.autocrlf).
+*.mjs text eol=lf
+*.sh text eol=lf
+hooks/commit-msg text eol=lf

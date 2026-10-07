@@ -3,13 +3,13 @@ name: merge-gate
 description: "The pre-merge gate for a pull request: how big a review the diff gets, how verified findings are applied, how the branch is realigned with main, how the merge is run, what is closed or synced afterwards, and what to do when an auto-mode classifier refuses the merge as unreviewed. Use when a PR is ready to merge, a worker reports a PR done, CI turns green on an approved PR, the person says to merge, review or ship a PR, or a merge was refused, in any project."
 ---
 
-What happens between "the worker says the PR is done" and "main has it". The coordinator runs the gate and presses merge itself (`coordinator-method` holds the merge rule and the git safety rules: not repeated here). Model, effort and width come from `model-mix`, the workflow shape from `smart-ultracode`, ticket and roadmap commands from `roadmap-tracker`. The project's AGENTS.md, CONTRIBUTING.md and branch protection win over this skill. Commands are in `commands.md`; review briefs and lenses are in `review.md`.
+What happens between "the worker says the PR is done" and "main has it". The coordinator runs the gate and presses merge itself (`coordinator-method` holds the merge rule; `git-conventions` holds the commit, branch, merge subject, history and tag rules: not repeated here). Model, effort and width come from `model-mix`, the workflow shape from `smart-ultracode`, ticket and roadmap commands from `roadmap-tracker`. The project's AGENTS.md, CONTRIBUTING.md and branch protection win over this skill. Commands are in `commands.md`; review briefs and lenses are in `review.md`.
 
 ## 1. Ready?
 
 - Read the PR yourself (`commands.md`, "Read the PR"). A worker's "all green" is a claim: read `gh pr checks N --required`.
 - Draft, failing, unfinished or conflicting: send it back to its worker. Ask the person before merging anything unfinished or failing.
-- Branch protection or a project rule that needs a human approval: stop and say so. Never `--admin`, `--auto`, `--squash` or `--rebase`.
+- Branch protection or a project rule that needs a human approval: stop and say so. Never `--admin` or `--auto`; no `--squash` or `--rebase` unless the project asks (`git-conventions`).
 - Dependabot minor or patch: read the diff and the version change yourself and merge on green, as `coordinator-method` says. A major goes to a dedicated thread, then through this gate.
 
 ## 2. Size the review
