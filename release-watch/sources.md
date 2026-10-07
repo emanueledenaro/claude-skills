@@ -109,7 +109,7 @@ Which skill holds the line a change probably touches. Find the line with `grep -
 | New or retiring model, Haiku 5.x | `model-mix/SKILL.md` Models table and the Haiku bullet; model ids anywhere else |
 | 5-hour, weekly or reset rules, plan ratios | `model-mix/SKILL.md` Plan profiles; `model-mix/budget.md` Overrides |
 | Routine or scheduled-task limits | `overnight`, `cloud-worker`, and `model-mix` routine bullet |
-| Version floors, mods API | `smart-mods/SKILL.md` sections 2 and 3, `smart-mods/writing.md`, `smart-mods/testing.md`; `mod-ui` |
+| Version floors, mods API | `smart-mods/SKILL.md` sections 2, 3 and 6, `smart-mods/writing.md`, `smart-mods/testing.md`, `smart-mods/vetting.md`; `mod-ui` |
 | Windows fixes now in the bundle | `windows-ops`; `overnight` (runtime choice) |
 | `--cloud`, `--ref`, `--on-branch`, `/model` in cloud sessions | `cloud-worker`; `model-mix` Cloud session bullet; `coordinator-method` launch recipe |
 | Skill listing, frontmatter fields, audit commands | `skill-audit`; `context-hygiene` |
