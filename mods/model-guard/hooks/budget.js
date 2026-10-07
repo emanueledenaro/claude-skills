@@ -1,6 +1,6 @@
 // Budget color from a usage reading, as model-mix/budget.md computes it.
 // Pure functions only: no `$`, so each mod imports its own copy. mods/model-guard/hooks/budget.js and
-// coordinator-lens's hooks/budget.js (branch feature/coordinator-lens) are the same file: keep the two identical.
+// mods/coordinator-lens/hooks/budget.js in this repository are the same file: keep the two identical.
 // A mod cannot import outside its folder, so each mod's tests pin the same fingerprint of this module.
 
 const DAY = 24 * 60 * 60 * 1000
