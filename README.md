@@ -19,6 +19,7 @@ Personal skills for running Claude Code as a coordinator that delegates work to 
 | [context-hygiene](context-hygiene/SKILL.md) | Keeping sessions cheap: what every turn pays, how to measure it, when to compact, clear or hand off. |
 | [windows-ops](windows-ops/SKILL.md) | What an agent must know on Windows 11: shells, Git Bash path conversion, long paths, line endings, missing tools, where Claude Code keeps its files. |
 | [mod-ui](mod-ui/SKILL.md) | The visual language of the mods: band, pane, chat card, toasts, theme colors, Desktop and terminal differences. |
+| [clean-code](clean-code/SKILL.md) | Eight code-quality rules for code Claude writes or reviews (names, small functions, few arguments, no hidden side effects, KISS, DRY, YAGNI, SOLID), each blocking or advisory, with per-project overrides. |
 
 The skills point to each other instead of repeating themselves. A project's own `AGENTS.md`, `CONTRIBUTING.md` and branch protection always win over them; project facts stay in the project.
 
