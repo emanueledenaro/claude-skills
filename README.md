@@ -19,6 +19,7 @@ Personal skills for running Claude Code as a coordinator that delegates work to 
 | [context-hygiene](context-hygiene/SKILL.md) | Keeping sessions cheap: what every turn pays, how to measure it, when to compact, clear or hand off. |
 | [windows-ops](windows-ops/SKILL.md) | What an agent must know on Windows 11: shells, Git Bash path conversion, long paths, line endings, missing tools, where Claude Code keeps its files. |
 | [mod-ui](mod-ui/SKILL.md) | The visual language of the mods: band, pane, chat card, toasts, theme colors, Desktop and terminal differences. |
+| [git-conventions](git-conventions/SKILL.md) | Default naming for commits, branches, PR titles and merge subjects (Conventional Commits, Conventional Branch), the history and tag rules, and a Node validator with a commit-msg hook for projects with no CI of its own. |
 
 The skills point to each other instead of repeating themselves. A project's own `AGENTS.md`, `CONTRIBUTING.md` and branch protection always win over them; project facts stay in the project.
 
@@ -27,7 +28,7 @@ The skills point to each other instead of repeating themselves. A project's own 
 ```bash
 git clone https://github.com/emanueledenaro/claude-skills.git
 cd claude-skills
-cp -R model-mix smart-ultracode coordinator-method smart-mods cloud-worker merge-gate overnight roadmap-tracker matt-bridge verified-research release-watch skill-audit context-hygiene windows-ops mod-ui ~/.claude/skills/
+cp -R model-mix smart-ultracode coordinator-method smart-mods cloud-worker merge-gate overnight roadmap-tracker matt-bridge verified-research release-watch skill-audit context-hygiene windows-ops mod-ui git-conventions ~/.claude/skills/
 ```
 
 Then add a routing block to your global `~/.claude/CLAUDE.md`, so every project reaches them at the right moment:
