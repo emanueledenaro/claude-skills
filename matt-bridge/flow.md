@@ -1,33 +1,29 @@
 # Matt Pocock flow: names, artifacts, preface lines
 
-Reference for `matt-bridge`. Two sources, marked per row:
-
-- **installed**: read from `~/.claude/skills` on this machine (older copies; `to-prd`, `to-issues`, `diagnose`, `CONTEXT.md`).
-- **upstream**: from notes taken earlier from the `mattpocock/skills` repo, plugin `mattpocock-skills` 1.3.1, read through `gh api`. Not re-read for this file: unverified. Before relying on an upstream detail, read the text of the copy that will actually run.
+Reference for `matt-bridge`. Source: the installed plugin `mattpocock-skills` 1.3.1 (`mattpocock/skills`, read 2026-10-07). Before relying on a detail, read the text of the copy that will actually run: the plugin updates on its own.
 
 ## Names
 
-| Step | Installed | Upstream | Started by (upstream) |
+| Step | Name in plugin 1.3.1 | Older name | Started by |
 | --- | --- | --- | --- |
-| Setup | `setup-matt-pocock-skills` | same | the person (user-only in both) |
-| Grill, no repo docs | `grill-me` | `grill-me`, `grilling` | the person (`grill-me`); the agent (`grilling`) |
-| Grill against domain docs | `grill-with-docs` | `grill-with-docs`, `domain-modeling` | the person (`grill-with-docs`); the agent (`domain-modeling`) |
-| Spec | `to-prd` | `to-spec` | the person (upstream) |
-| Tickets | `to-issues` | `to-tickets` | the person (upstream) |
-| Build one ticket | `tdd` | `implement` (calls `tdd`, then `code-review`) | the person (`implement`); the agent (`tdd`) |
-| Build a spec | none | `implement-spec` | the person |
-| Review | none | `code-review` | the agent |
-| PR body | none | `pr` | the agent |
-| Triage | `triage` | `triage` | the person |
-| Hard bug | `diagnose` | `diagnosing-bugs` | the agent |
-| Throwaway design | `prototype` | `prototype` | the agent |
-| Fog | none | `wayfinder` | the person |
-| Hand over | `handoff` | `handoff` | the person |
+| Setup | `setup-matt-pocock-skills` | same | the person |
+| Grill, no repo docs | `grill-me`, `grilling` | `grill-me` | the person (`grill-me`); the agent (`grilling`) |
+| Grill against domain docs | `grill-with-docs`, `domain-modeling` | `grill-with-docs` | the person (`grill-with-docs`); the agent (`domain-modeling`) |
+| Spec | `to-spec` | `to-prd` | the person |
+| Tickets | `to-tickets` | `to-issues` | the person |
+| Build one ticket | `implement` (calls `tdd`, then `code-review`) | `tdd` | the person (`implement`); the agent (`tdd`) |
+| Build a spec | `implement-spec` | none | the person |
+| Review | `code-review` | none | the agent |
+| PR body | `pr` | none | the agent |
+| Triage | `triage` | same | the person |
+| Hard bug | `diagnosing-bugs` | `diagnose` | the agent |
+| Throwaway design | `prototype` | same | the agent |
+| Fog | `wayfinder` | none | the person |
+| Hand over | `handoff` | same | the person |
 | Architecture | `improve-codebase-architecture` | same | the person |
-| Zoom out | `zoom-out` | same | the person (user-only in both) |
-| Router | none | `ask-matt` | the person |
+| Router | `ask-matt` | none | the person |
 
-The last column comes from upstream's `disable-model-invocation` flags (unverified here). Of the installed copies only `setup-matt-pocock-skills` and `zoom-out` carry the flag (confirmed); the others the agent may load itself. Other upstream names with no row above: `retro`, `research`, `wizard`, `teach`, `to-questionnaire`, `wait-what`, `codebase-design`, `writing-for-agents`.
+"The person" means the skill carries `disable-model-invocation: true` and starts only when typed (checked in 1.3.1). `zoom-out` is no longer in the plugin. Other plugin skills with no row above: `retro`, `teach`, `to-questionnaire`, `wait-what` (typed by the person); `research`, `wizard`, `codebase-design`, `writing-for-agents` (the agent may load them). Not in the plugin: the repo's `misc/` and `in-progress/` folders.
 
 ## Stages against the coordinator's method
 
@@ -38,7 +34,7 @@ The last column comes from upstream's `disable-model-invocation` flags (unverifi
 | Tickets | `to-issues` / `to-tickets` | child issues with `## Parent`, `## What to build`, `## Acceptance criteria`, `## Blocked by` | milestone on each; queue = `ready-for-agent`; blockers as real links |
 | Build | `implement` / `tdd` | commits on a feature branch | one cloud worker per ticket |
 | Build, many | `implement-spec` | integration branch, one worktree per implementer, a merger subagent | width per `coordinator-method` parallel-thread rule (cloud-session column of `model-mix`); model per `model-mix`; one PR to main |
-| Review | `code-review` | findings (upstream: two parallel reviewers, Standards and Spec) | pre-PR check, Opus high per `model-mix`; the gate review is `merge-gate` |
+| Review | `code-review` | findings (two parallel reviewers, Standards and Spec) | pre-PR check, Opus high per `model-mix`; the gate review is `merge-gate` |
 | PR | `pr` | PR body | Conventional title, `Closes #N`, screenshots for UI |
 | Merge | none | none | coordinator, `coordinator-method` merge rule |
 | Incoming issues | `triage` | labels, comments starting `> *This was generated by AI during triage.*`, `.out-of-scope/*.md` | queue and waiting lists |
@@ -74,6 +70,5 @@ git grep "\[DEBUG-"
 
 ## Unverified
 
-- Everything marked upstream above, including which skills the person must type.
 - That `claude --cloud` workers cannot see `~/.claude/skills` (cloud-worker research, from the docs; check in the first session).
-- That `implement-spec` honours a width given in its invocation: read its text on first use and say so if it does not.
+- That `implement-spec` honours a width given in its invocation. Its 1.3.1 text sets no width and asks for maximum concurrency, so the fan-out preface line is a local addition: watch the first run and stop it if it starts more implementers than the line allows.

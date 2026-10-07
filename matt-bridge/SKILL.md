@@ -7,9 +7,10 @@ Matt Pocock's skills give the flow from idea to shipped PR. `coordinator-method`
 
 ## 1. Adapt around his text, never inside it
 
-- Load his skill as installed or upstream and follow it. Never edit, trim or paraphrase his skill files, and never paste a changed copy. A rule below goes before the step (one preface line when invoking) or after it (a fix such as `gh issue edit`).
+- Load his skill from the `mattpocock-skills` plugin and follow it. Never edit, trim or paraphrase his skill files, and never paste a changed copy. A rule below goes before the step (one preface line when invoking) or after it (a fix such as `gh issue edit`).
 - Anything here that his text does not say is a local addition: say so in one line when it changes what he asked for.
-- Recognise both name sets. The installed copies are older than upstream: `to-prd`, `to-issues`, `diagnose`, `CONTEXT.md`. Upstream (plugin `mattpocock-skills` 1.3.1, unverified here, from earlier notes) has `to-spec`, `to-tickets`, `diagnosing-bugs`, `GLOSSARY.md`, plus `implement`, `implement-spec`, `grilling`, `code-review`, `pr`, `wayfinder`, `ask-matt`. Read `flow.md` for the full map.
+- His skills come from the plugin `mattpocock-skills` (marketplace `mattpocock`, version 1.3.1 checked 2026-10-07): `claude plugin marketplace add mattpocock/skills`, then `claude plugin install mattpocock-skills@mattpocock`. It ships skills only, no hooks or MCP servers. Remove older loose copies from `~/.claude/skills` (`to-prd`, `to-issues`, `diagnose`, `zoom-out` and same-named ones), or a `/name` may open the old text.
+- Recognise the old names in repos set up earlier: `to-prd` is now `to-spec`, `to-issues` is `to-tickets`, `diagnose` is `diagnosing-bugs`, and the glossary `CONTEXT.md` is `GLOSSARY.md` (rename it and replace `docs/agents/domain.md` with the plugin's template, by PR). Read `flow.md` for the full map.
 - Skills marked `disable-model-invocation` start only when the person types `/name`. Suggest the command once; do not rebuild the skill from memory.
 
 ## 2. Start in a repo
