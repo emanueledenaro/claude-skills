@@ -8,7 +8,7 @@ One read-only Agent call, `model: "opus"`, high effort. Give it:
 
 - the worktree path at the head sha and the command `gh pr diff N`
 - the ticket text and its acceptance criteria
-- the project's rules files (AGENTS.md, CONTRIBUTING.md, `.claude/CLAUDE.md`) and the Worker brief rules
+- the project's rules files (AGENTS.md, CONTRIBUTING.md, `.claude/CLAUDE.md`, with any `clean-code:` level line), the `clean-code` rules and the Worker brief rules
 - the PR body, labelled as the author's claims to test
 
 Ask for findings only, in the format below, ranked, with a line saying which lenses it covered. It runs no builds and no full suites.
@@ -18,7 +18,7 @@ Then verify: each serious finding gets one fresh Opus high verifier (Pro: medium
 ## Large path: lenses, verify, critic
 
 1. **Lenses** (one agent each, same model, effort, tools and schema, so the prompt prefix caches):
-   - code PRs: correctness and edge cases; security and trust boundaries; tests and checks (anything removed or weakened); fit with the ticket and the project rules; overlap or duplication with what main has now; UI and text the person sees, including model-facing wording that leaks.
+   - code PRs: correctness and edge cases; security and trust boundaries; tests and checks (anything removed or weakened); fit with the ticket, the project rules and the `clean-code` rules (levels after the project's `clean-code:` line); overlap or duplication with what main has now; UI and text the person sees, including model-facing wording that leaks.
    - skills, docs and prompt PRs: facts (every claim checked against a source); use (how a model would misread or misuse it); safety (what a literal copy would let through); consistency with sibling skills.
 2. **Verify**: one fresh Opus high agent per serious finding (batched per area below Max 20x, but a security finding always has its own verifier, `smart-ultracode`). It gets the claim and the cited lines, never the author's reasoning, and tries to refute with evidence. It returns confirmed, refuted or unverified with the file and line or the command and output.
 3. **Critic**: one agent gets the PR goal, the diff's file list, the lenses and the verified results, and names what was skipped, assumed or left unread. Its gaps go into one more round or into the PR comment.
@@ -34,7 +34,7 @@ Evidence: file and line, or command and output
 Fix: the smallest change that removes it
 ```
 
-Serious means wrong behavior, a security problem, data loss, removed or weakened tests, or a broken project rule. Everything else is minor. Style preferences are not findings.
+Serious means wrong behavior, a security problem, data loss, removed or weakened tests, a broken project rule, or a `clean-code` rule at level block (after the project's overrides). Everything else is minor, `clean-code` advise rules included. Style preferences outside `clean-code` are not findings.
 
 ## Delta review
 

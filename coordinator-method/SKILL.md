@@ -65,6 +65,7 @@ Rules for every worker. The project's rules that follow win on conflict.
 - Commits, merge commits and PR titles follow Conventional Commits; branches follow Conventional Branch with long types, lowercase, hyphens and the issue number, never an agent prefix. Each commit ends with the Co-Authored-By line your session's attribution gives for your model.
 - Open or update the PR, then stop: the coordinator merges. Start no other ticket.
 - Conflicts keep both sides' behavior. Existing tests and checks stay as strong as they are; list each resolved conflict in the PR.
+- Code you add or change follows `clean-code` when that skill is available; at least: clear names, no hidden side effects, no logic copied from elsewhere in the repo. Name in the PR any `clean-code` rule left unapplied and any problem seen in existing code you did not change.
 - Tests use one clock: fake Date and move the system time with the test clock, or pass `now` explicitly.
 - Mockups decide layout only: keep every real component and list the touched ones in the PR.
 - Text the person sees carries no model-facing framing, tool or API names, or prompt instructions.
