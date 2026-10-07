@@ -3,7 +3,7 @@ name: merge-gate
 description: "The pre-merge gate for a pull request: how big a review the diff gets, how verified findings are applied, how the branch is realigned with main, how the merge is run, what is closed or synced afterwards, and what to do when an auto-mode classifier refuses the merge as unreviewed. Use when a PR is ready to merge, a worker reports a PR done, CI turns green on an approved PR, the person says to merge, review or ship a PR, or a merge was refused, in any project."
 ---
 
-What happens between "the worker says the PR is done" and "main has it". The coordinator runs the gate and presses merge itself (`coordinator-method` holds the merge rule and the git safety rules: not repeated here). Model, effort and width come from `model-mix`, the workflow shape from `smart-ultracode`, ticket and roadmap commands from `roadmap-tracker`. The project's AGENTS.md, CONTRIBUTING.md and branch protection win over this skill. Commands are in `commands.md`; review briefs and lenses are in `review.md`.
+What happens between "the worker says the PR is done" and "main has it". The coordinator runs the gate and presses merge itself (`coordinator-method` holds the merge rule; `git-conventions` holds the commit, branch, merge subject, history and tag rules: not repeated here). Model, effort and width come from `model-mix`, the workflow shape from `smart-ultracode`, ticket and roadmap commands from `roadmap-tracker`. The project's AGENTS.md, CONTRIBUTING.md and branch protection win over this skill. Commands are in `commands.md`; review briefs and lenses are in `review.md`.
 
 ## 1. Ready?
 

@@ -36,7 +36,7 @@ Matt Pocock's skills give the flow from idea to shipped PR. `coordinator-method`
 ## 5. Build
 
 - One implementation thread at a time (`coordinator-method`). A cloud worker takes one ticket; its prompt is the task, the Worker brief and the project rules. Cloud sessions load the skills enabled on the claude.ai account, not `~/.claude/skills` (research claim, check it in the first session): put the steps the worker needs in its prompt verbatim.
-- `implement` commits on the current branch, so create the feature branch first: Conventional Branch, lowercase, with the issue number (`feature/42-short-slug`). Check `git branch --show-current` before the first commit. Never main.
+- `implement` commits on the current branch, so create the feature branch first, named per `git-conventions` with the issue number (`feature/issue-42-short-slug`). Check `git branch --show-current` before the first commit. Never main.
 - Targeted tests while building; the full suite runs in CI and cloud, not on this machine. A fix is a new commit, never `--amend` or `--force`.
 - `implement-spec` and any fan-out of implementers: run the budget check first; width: one implementer unless the budget is green and the slices touch disjoint areas; then at most the Parallel cloud sessions column of today's `model-mix` profile (Max 20x: 3, otherwise 1), or more only when the person asks (`coordinator-method`). Never the Agents per workflow run column. The rest of the frontier waits. Say the width and model in the invocation: implementers per `model-mix` (Sonnet high, explicit `model`). Unpinned subagents inherit the session's Opus.
 - Its merger subagent may merge implementer branches into the integration branch only. The integration branch is one feature branch and goes to main as one PR.
@@ -44,7 +44,7 @@ Matt Pocock's skills give the flow from idea to shipped PR. `coordinator-method`
 ## 6. Review, PR, merge
 
 - `code-review` (upstream, inside `implement`) is the implementer's pre-PR check: its reviewers run on Opus high per `model-mix`. It does not replace `merge-gate`: the gate still reviews the PR head sha, sized by the diff.
-- `pr` writes the body. Title in Conventional Commits form; `Closes #N` in the body for tickets the PR completes; UI PRs carry before/after screenshots and wait for the person's ok.
+- `pr` writes the body. Title in the `git-conventions` commit format; `Closes #N` in the body for tickets the PR completes; UI PRs carry before/after screenshots and wait for the person's ok.
 - The coordinator merges, with `coordinator-method`'s rule (`gh pr merge N --merge --match-head-commit <sha> --subject ...`), after `merge-gate`. No merger subagent merges into main, and no auto-merge. After the merge: close the tickets, update the roadmap.
 
 ## 7. On the side

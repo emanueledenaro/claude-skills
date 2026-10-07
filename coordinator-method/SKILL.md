@@ -25,8 +25,7 @@ How the person wants delegated work run, in every project. The project's own AGE
 - For an approved PR, arm a monitor on its CI and run `gh pr merge N --merge --match-head-commit <sha> --subject "<type>(scope): ... (#N)"` when it turns green.
 - After a merge: close the tickets it completes with a comment naming the PR, update the roadmap, launch what it unblocks, close obsolete or superseded PRs, rebuild and restart the local test build on the new main (local threads driving it reconnect).
 - Ask before merging anything unfinished or failing. Dependabot minor and patch merge on green CI; majors wait for a dedicated thread.
-- Unless the project says otherwise: Conventional Commits for every commit and merge subject, `chore: merge origin/main into <branch>` when syncing a branch, Conventional Branch names with long types (feature/, bugfix/, hotfix/, release/, chore/), lowercase, hyphens and the issue number.
-- Pushed history is append-only: a fix after a push is a new commit, even on your own branch (no amend plus push, no `--force`, no `--force-with-lease`). Main changes only through PRs. Release tags stay put; a wrong release gets a new version.
+- Naming of commits, branches, PR titles and merge subjects, and the history and tag rules (append-only pushed history, no force push, main only through PRs, immutable `v*` tags): `git-conventions`. The sync subject here is `chore: merge origin/main into <branch>`, a valid Conventional Commit.
 
 ## Every round
 
