@@ -65,12 +65,13 @@ The prompt is the task file, then the worker brief from `coordinator-method`, th
 
 ## Mods
 
-Two Claude Code mods in [mods/](mods) enforce and route the skills. They need Claude Code 2.1.287 or later in the terminal and 2.1.286 or later in the Desktop app (check with `/status`), and were tested with 2.1.293. They run unsandboxed with your permissions, like every mod: read them first (`claude plugin validate mods/<name>` lists what each one hooks and calls). Neither calls a model.
+Three Claude Code mods in [mods/](mods) enforce, route and show the skills. They need Claude Code 2.1.287 or later in the terminal and 2.1.286 or later in the Desktop app (check with `/status`), and were tested with 2.1.293. They run unsandboxed with your permissions, like every mod: read them first (`claude plugin validate mods/<name>` lists what each one hooks and calls). None calls a model.
 
 | Mod | What it does |
 | --- | --- |
 | [model-guard](mods/model-guard) | Applies `model-mix` to every launch: Sonnet for a general-purpose or Plan agent launched without a model (an agent with a custom type and no model is left as is, to its own definition), the `haiku` alias allowed on agents and workflow agents only where it is Haiku 5.5 (Claude Code 2.1.293 or later on the Anthropic API, with `ANTHROPIC_DEFAULT_HAIKU_MODEL` unset or on a Haiku 5.5 id; elsewhere an agent gets Sonnet and a workflow agent is refused), medium effort added to a Haiku agent that names none, an Explore agent without a model on Haiku at medium effort there (Sonnet elsewhere), the full id `claude-haiku-5-5` required on `claude --cloud`, `-p`, `--bg` and `launch.exp`, Haiku 4.5 never pinned, Fable kept off every agent, workflow agent, cloud and headless session (a mod cannot read the Fable window), workflow width capped by today's profile, `--model sonnet` added to `claude --cloud`, `claude -p` and `claude --bg` started from a shell, an agent with `isolation: 'remote'` counted as a cloud session, and no new launches while the budget is red or the 5-hour window is paused. Launches through `Start-Process` or cmd `start` are refused; run `claude` directly. Finishing open work (messages to workers sent directly with `claude`, `claude -p "<msg>" --cloud <session>` included, git, gh, merges) is never blocked; a workflow resume passes while the budget is red but waits while the 5-hour window is paused. It cannot see run cost, the cost of work already in flight, the Fable window or usage credits, and it cannot tell what a Haiku agent is for or how much it will read: keeping Haiku off verify, judge and security work, sending work above about 100K tokens to Sonnet and the Opus review of the first Haiku ticket stay with the model, like the other `model-mix` checks. Without a usage reading the color is unknown and launches pass with one line, also in an unattended session, which a mod cannot tell apart from the Desktop app. |
 | [skill-router](mods/skill-router) | Smart activation of skills: when your message calls for a skill that is not loaded (for example "vado a dormire" for `overnight`, "controlla le pr" for `merge-gate`), it adds one line telling Claude to load it and shows a dim line in the transcript; before the first workflow, agent, cloud launch, merge or mod edit of a session it asks once for the skills that step needs. Messages sent directly to cloud workers and subagents' own calls are never held; a `claude` launch through `Start-Process` or cmd `start` is held once like a cloud launch. |
+| [coordinator-lens](mods/coordinator-lens) | Makes the coordinator's work visible: budget color and pace, workers, merges, the round, the skill flow, night mode and decisions, in a band above the prompt, a `/coord` pane and card, and a few toasts. It observes only and spends nothing; with `prPolling` on it runs `gh pr list` every 5 minutes. |
 
 `model-guard` computes the budget color with `budget.js`, which follows `model-mix/budget.md`, from the `Claude plan:` line of your CLAUDE.md. Without that line (or the mod's `planLine` option) it cannot tell Pro from Max and assumes Max 5x, so on Pro add the line.
 
@@ -80,9 +81,10 @@ Install from this repository as a marketplace:
 claude plugin marketplace add emanueledenaro/claude-skills
 claude plugin install model-guard@emanueledenaro
 claude plugin install skill-router@emanueledenaro
+claude plugin install coordinator-lens@emanueledenaro
 ```
 
-To try them first, run `claude --plugin-dir mods/model-guard --plugin-dir mods/skill-router` from a clone. Turn one off in `/plugin` (Desktop: + → Plugins → Manage plugins).
+To try them first, run `claude --plugin-dir mods/model-guard --plugin-dir mods/skill-router --plugin-dir mods/coordinator-lens` from a clone. Turn one off in `/plugin` (Desktop: + → Plugins → Manage plugins).
 
 ## License
 
