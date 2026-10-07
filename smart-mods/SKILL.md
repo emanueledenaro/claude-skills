@@ -40,9 +40,9 @@ on('tool.call', { tool: ['Bash', 'PowerShell', 'Monitor'] }, guard).catch(async 
 })
 ```
 
-- A hook has 10 s of its own execution per event (50 ms for `prompt.edit`) and all mods share one worker: never loop without awaiting.
+- A hook has 10 s of its own execution per event (50 ms for `prompt.edit`), a `.catch` 1 s, and all mods share one worker: never loop without awaiting.
 - Plan for where nothing is drawn (the VS Code panel, `claude -p`, the Agent SDK, cloud sessions; Desktop WSL sessions run no mods) and fall back to a transcript line or command text. `Svg` draws only in Desktop; `Raster` and `Image` only in the terminal.
-- A mod spends the plan only through `$.model.*` and `$.agent.spawn`: always pass `model` per `model-mix`, never the `haiku` alias, never Fable, and never call a model from a hook that fires on every event. Hooks that change `model` or `effort` follow `model-mix` too.
+- `$.model.complete`, `$.model.classify`, `$.model.fork` and `$.agent.spawn` spend the plan: pass `model` per `model-mix` to all but `$.model.fork` (it runs on the session's model, so call it only from a command the person runs), never the `haiku` alias, never Fable. Call a model only from a command, a button or a timer with a capped count, never from a hook that fires on every event. A hook that sets `model` or `effort` may move work down to the `model-mix` row, never above it or to Fable, unless the person asked.
 - Read `writing.md` for the rest: budgets and crashes, `$.process.run` on Windows, registering commands, state lifetimes and redraw, every rule on model calls, and keeping prompt text stable for the cache.
 
 ## 4. Develop and test
@@ -61,7 +61,7 @@ on('tool.call', { tool: ['Bash', 'PowerShell', 'Monitor'] }, guard).catch(async 
 ## 6. Vet someone else's mod
 
 - Read the source and run `claude plugin validate <dir>` without installing. Every entry on its `hooks:` and `calls:` lines needs a reason in the mod's purpose.
-- Deny rules never limit a mod's own `$.fs` and `$.process` calls, and a `tool.check` that answers allow can approve what an `ask` rule, a non-managed `PreToolUse` hook or, without managed settings, a `deny` rule would stop.
+- Deny rules never limit a mod's own `$.fs` and `$.process` calls, and processes it starts run outside the sandbox. A `tool.check` that answers allow approves what an `ask` rule or a non-managed `PreToolUse` hook would stop, skips the auto-mode classifier, and, without managed settings or a Team or Enterprise sign-in, can approve what a `deny` rule refuses.
 - `--plugin-dir` already runs the mod's code with the person's permissions: run it only after every entry has a reason, and before installing.
 - Read `vetting.md` for the entries to look at hardest, what a mod can get past, and the off switches (including what they stop besides mods).
 
