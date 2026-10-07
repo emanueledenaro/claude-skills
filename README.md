@@ -61,7 +61,28 @@ From a repository root:
 expect ~/.claude/skills/coordinator-method/launch.exp task.txt rules.txt worker.log sonnet high
 ```
 
-The prompt is the task file, then the worker brief from `coordinator-method`, then the project's rules file (`-` for none). It prints the cloud session URL. It needs `expect` (macOS, Linux, or WSL on Windows; Git Bash does not ship it). On Windows without WSL, start the cloud session from Claude Desktop instead.
+The prompt is the task file, then the worker brief from `coordinator-method`, then the project's rules file (`-` for none). It prints the cloud session URL. It needs `expect` (macOS, Linux, or WSL on Windows; Git Bash does not ship it). On Windows without WSL, start the cloud session from Claude Desktop instead, or use `cloud-worker`'s `launch.ps1` in a terminal.
+
+## Mods
+
+Two Claude Code mods in [mods/](mods) enforce and route the skills. They need Claude Code 2.1.287 or later in the terminal and 2.1.286 or later in the Desktop app (check with `/status`), and were tested with 2.1.292. They run unsandboxed with your permissions, like every mod: read them first (`claude plugin validate mods/<name>` lists what each one hooks and calls). Neither calls a model.
+
+| Mod | What it does |
+| --- | --- |
+| [model-guard](mods/model-guard) | Applies `model-mix` to every launch: Sonnet for an agent launched without a model, never the `haiku` alias, Fable kept off background and workflow agents, workflow width capped by today's profile, `--model` added to `claude --cloud`, and no new launches while the budget is red or the 5-hour window is paused. Finishing open work (messages to workers, git, gh, merges, workflow resumes) is never blocked. |
+| [skill-router](mods/skill-router) | Smart activation of skills: when your message calls for a skill that is not loaded (for example "vado a dormire" for `overnight`, "controlla le pr" for `merge-gate`), it adds one line telling Claude to load it and shows a dim line in the transcript; before the first workflow, agent, cloud launch, merge or mod edit of a session it asks once for the skills that step needs. |
+
+`model-guard` computes the budget color with `budget.js`, which follows `model-mix/budget.md`, from the `Claude plan:` line of your CLAUDE.md.
+
+Install from this repository as a marketplace:
+
+```bash
+claude plugin marketplace add emanueledenaro/claude-skills
+claude plugin install model-guard@emanueledenaro
+claude plugin install skill-router@emanueledenaro
+```
+
+To try them first, run `claude --plugin-dir mods/model-guard --plugin-dir mods/skill-router` from a clone. Turn one off in `/plugin` (Desktop: + → Plugins → Manage plugins).
 
 ## License
 

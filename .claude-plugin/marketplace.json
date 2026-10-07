@@ -1,0 +1,17 @@
+{
+  "name": "emanueledenaro",
+  "owner": { "name": "Emanuele Denaro" },
+  "metadata": { "description": "Mods that enforce and route the coordinator skills of this repository." },
+  "plugins": [
+    {
+      "name": "model-guard",
+      "source": "./mods/model-guard",
+      "description": "Enforces model-mix on delegated launches: Sonnet for unpinned agents, no haiku alias, Fable kept off background work, workflow width capped by today's profile, no new launches on a red budget or a paused 5-hour window."
+    },
+    {
+      "name": "skill-router",
+      "source": "./mods/skill-router",
+      "description": "Smart activation of skills with no model cost: suggests the skill a message calls for and asks for model-mix and smart-ultracode before the first workflow."
+    }
+  ]
+}
