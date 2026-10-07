@@ -1,1 +1,1 @@
-{ "description": "model-guard: enforces model-mix on delegated launches (Agent, Workflow, RemoteTrigger, cloud sessions, workflow agents)", "modules": ["./register.js"] }
+{ "description": "model-guard: enforces model-mix on delegated launches (Agent, Workflow, RemoteTrigger, cloud and headless sessions from a shell, workflow agents)", "modules": ["./register.js"] }

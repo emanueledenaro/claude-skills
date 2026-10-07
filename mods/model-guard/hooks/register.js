@@ -1,5 +1,5 @@
 // model-guard: enforces model-mix on delegated launches (Agent, Workflow, RemoteTrigger,
-// cloud sessions started from Bash or PowerShell, workflow agents).
+// cloud and local headless sessions started from Bash, PowerShell or Monitor, workflow agents).
 // The only module that touches `$`. Decisions live in rules.js, the budget maths in budget.js.
 // It never calls a model and never reads credentials: the plan comes from the person's
 // CLAUDE.md (prompt.context) or the planLine option, the usage from session.measure and
@@ -8,7 +8,7 @@
 import { computeBudget } from './budget.js'
 import {
   decideAgent, decideRemoteTrigger, decideShell, decideWorkflow, decideWorkflowAgent,
-  failureReason, planFromFiles, planFromOption, scanShell, statusText, texts,
+  failureReason, fiveHourBanked, planFromFiles, planFromOption, scanShell, statusText, texts,
 } from './rules.js'
 
 const config = { lang: 'it', redPolicy: 'deny', planLine: '' }
@@ -17,6 +17,7 @@ const memo = {
   rateLimits: null,      // last session.measure reading
   readingAt: null,
   unknownLogged: false,
+  fableLogged: false,    // the Agent fable -> opus line already reached the transcript
   status: null,          // last status text sent; null = never sent
 }
 const runs = new Map()   // runId -> { admitted: Set of agentIndex, width, name } (width fixed at the run's first agent)
@@ -31,6 +32,7 @@ async function nowOf($) {
 }
 
 // The budget at decision time: a fresh $.session.usage() reading (free), else the last session.measure one.
+// Returns { budget, fiveHourBanked }.
 async function readBudget($) {
   const now = await nowOf($)
   let rateLimits = memo.rateLimits
@@ -45,7 +47,8 @@ async function readBudget($) {
     }
   } catch {}
   const plan = memo.plan || planFromOption(config.planLine)
-  return computeBudget({ rateLimits: Array.isArray(rateLimits) ? rateLimits : [], now, plan, inFlight: 0, readingAt })
+  const budget = computeBudget({ rateLimits: Array.isArray(rateLimits) ? rateLimits : [], now, plan, inFlight: 0, readingAt })
+  return { budget, fiveHourBanked: fiveHourBanked(plan, now) }
 }
 
 function syncStatus($, budget) {
@@ -58,7 +61,7 @@ function syncStatus($, budget) {
 }
 
 async function contextOf($) {
-  const budget = await readBudget($)
+  const { budget, fiveHourBanked: banked } = await readBudget($)
   syncStatus($, budget)
   if (budget.color !== 'unknown') memo.unknownLogged = false
   return {
@@ -66,11 +69,14 @@ async function contextOf($) {
     redPolicy: config.redPolicy,
     lang: config.lang,
     unknownLogged: memo.unknownLogged,
+    fableLogged: memo.fableLogged,
+    fiveHourBanked: banked,
   }
 }
 
 function report($, decision) {
   if (decision.unknownNoted) memo.unknownLogged = true
+  if (decision.fableNoted) memo.fableLogged = true
   if (!decision.log) return
   try {
     $.ui.log(decision.log, { to: decision.to === 'debug' ? 'debug' : 'transcript' })
@@ -145,7 +151,9 @@ export function register(on, options) {
     return applyToolDecision($, e, next, decideRemoteTrigger(e, ctx))
   }).catch(guardFailed)
 
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+  // Every tool that runs a shell command; a Monitor watch without a command (a WebSocket) passes.
+  on('tool.call', { tool: ['Bash', 'PowerShell', 'Monitor'] }, async ($, e, next) => {
+    if (e.tool === 'Monitor' && (e.command === undefined || e.command === null)) return next(e)
     const launches = scanShell(e.command)
     if (!launches.length) return next(e)
     const ctx = await contextOf($)

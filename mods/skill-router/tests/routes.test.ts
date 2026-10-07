@@ -115,6 +115,9 @@ const ORDINARY = [
   'il componente si aggiorna due volte', 'controlla che i tipi siano corretti', 'scrivi un commento per questa funzione',
   'dividi il file in due moduli', 'usa una mappa invece di un array', 'formatta il codice con prettier',
   'apri il file ticket.js', 'ship this feature by friday',
+  // bare merge, routine, cron, "stanotte" and a search through files
+  'Fai il merge dei due file CSV', 'Scrivi una routine di pulizia del database', 'Il cron della pipeline fallisce',
+  'I bambini vanno a letto presto stanotte', 'Fai una ricerca nel file per TODO',
 ]
 
 const NEW_SKILLS = [
@@ -248,7 +251,7 @@ describe('suggestions', () => {
     expect(logLine([route('overnight'), route('zoom-out')], 'en')).toBe('suggested skills: overnight, /zoom-out')
   })
 
-  test('person origins: composer, bridge, sdk; nothing else', () => {
+  test('person origins: composer, bridge, sdk (the Desktop Code tab); nothing else', () => {
     for (const kind of ['composer', 'bridge', 'sdk']) expect(isPersonOrigin({ kind })).toBe(true)
     for (const kind of ['task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'plugin', 'coordinator', 'auto-continuation', 'unclassified']) {
       expect(isPersonOrigin({ kind })).toBe(false)
@@ -315,7 +318,10 @@ describe('shell commands', () => {
       'claude --cloud "fix the build"',
       'cd repo && claude --model sonnet --cloud "task"',
       '& "C:\\Tools\\claude.exe" --cloud "task"',
-      'claude -p "keep going" --cloud session_01abc --output-format json',
+      'claude -p "task" --environment ccpool_1 --cloud',
+      'cmd /c "claude --cloud x" 2>&1',
+      "powershell -Command \"claude --cloud 'task'\" -ErrorAction Stop",
+      'cmd /c "claude" --cloud x',
       'expect ~/.claude/skills/coordinator-method/launch.exp task.txt rules.txt w.log sonnet high',
       './launch.exp t r l sonnet high',
       'powershell.exe -NoProfile -File "$HOME\\.claude\\skills\\cloud-worker\\launch.ps1" task.txt none w.log sonnet high',
@@ -331,6 +337,38 @@ describe('shell commands', () => {
     expect(shellGates('gh.exe pr merge 12 --auto')).toEqual(['merge'])
     expect(shellGates('gh api repos/o/r/pulls/12/merge -X PUT')).toEqual(['merge'])
     expect(shellGates('claude --cloud x; gh pr merge 3')).toEqual(['cloud', 'merge'])
+    expect(shellGates('pwsh -NoProfile -Command "gh pr merge 3" 2>&1')).toEqual(['merge'])
+    expect(shellGates("git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\" && gh pr merge 3")).toEqual(['merge'])
+  })
+
+  test('a follow-up to a cloud worker (claude -p ... --cloud <session>) is open work: never held', () => {
+    for (const c of [
+      'claude -p "keep going" --cloud session_01abc --output-format json',
+      'claude --print "x" --cloud https://claude.ai/code/session_01abc',
+      'claude -p "x" --cloud cse_0123',
+      'claude --cloud session_01abc -p "rebase on main"',
+      "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
+      'bash -lc "claude -p \\"x\\" --cloud session_1"',
+    ]) expect(shellGates(c), c).toEqual([])
+  })
+
+  test('local headless runs (claude -p, --bg) are not gated here', () => {
+    for (const c of ['claude -p "refactor the parser"', 'claude --bg "nightly sweep"', 'claude --print --model fable "x"']) {
+      expect(shellGates(c), c).toEqual([])
+    }
+  })
+
+  test('a heredoc inside "$(...)" is data: odd quotes in a commit or PR body hold nothing', () => {
+    for (const c of [
+      "git commit -m \"$(cat <<'EOF'\nfeat: add guard\n\nThe 5\" screen case.\ngh pr merge 5 runs after review\nEOF\n)\"",
+      "gh pr create --title \"x\" --body \"$(cat <<'EOF'\nIt's the user's \"fix\nclaude --cloud brief\nEOF\n)\"",
+      "git commit -m \"$(cat <<'EOF'\nfeat: support 5\" displays\nclaude --cloud docs\nEOF\n)\"",
+      "gh pr create --title t --body \"$(cat <<'EOF'\nSet `\"enabled\": false` in config.\n\n```\nclaude -p \"msg\" --cloud abc\n```\nEOF\n)\"",
+      "git commit -m \"$(cat <<-EOF\n\tclaude --cloud \"x\n\tEOF\n)\"",
+    ]) expect(shellGates(c), c).toEqual([])
+    expect(tokenize("git commit -m \"$(cat <<'EOF'\na \" b\nEOF\n)\" && echo ok").map((s: any) => s.map((t: any) => t.value)))
+      .toEqual([['git', 'commit', '-m', "$(cat <<'EOF'\na \" b\nEOF\n)"], ['echo', 'ok']])
+    expect(tokenize('echo "a <<EOF b"').map((s: any) => s.map((t: any) => t.value))).toEqual([['echo', 'a <<EOF b']])
   })
 
   test('mentions, reads and heredoc bodies hold nothing', () => {

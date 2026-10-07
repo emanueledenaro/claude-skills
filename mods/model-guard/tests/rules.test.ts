@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
-  decideAgent, decideRemoteTrigger, decideShell, decideWorkflow, decideWorkflowAgent, forbiddenModel,
-  launchGate, planFromFiles, planFromOption, scanShell, statusText, tokenize,
+  claudeLaunch, decideAgent, decideRemoteTrigger, decideShell, decideWorkflow, decideWorkflowAgent, fiveHourBanked,
+  forbiddenModel, launchGate, planFromFiles, planFromOption, scanShell, statusText, tokenize,
 } from '../hooks/rules.js'
 import { computeBudget } from '../hooks/budget.js'
 
@@ -277,5 +277,173 @@ describe('cloud-session column of the stepped-down profile', () => {
     expect(decideShell({ tool: 'Bash', command: 'claude --model sonnet --cloud "x"' }, ctx(budget(60, planFromOption('Max 20x')))).action).toBe('allow')
     // Red is the gate's: with redPolicy warn it only flags.
     expect(decideShell({ tool: 'Bash', command: 'claude --model sonnet --cloud "x"' }, ctx(budget(80), { redPolicy: 'warn' })).action).toBe('allow')
+  })
+})
+
+describe('cloud follow-ups steer open work (D1)', () => {
+  const STEERS = [
+    'claude -p "Fix the failing lint on your PR #12" --cloud session_01ABC --output-format json',
+    'claude --print "x" --cloud https://claude.ai/code/session_01ABC',
+    'claude -p "x" --cloud cse_0123',
+    'claude --cloud session_01ABC -p "rebase on main"',
+    'claude -p "x" --cloud=session_01ABC',
+    "Start-Process claude -ArgumentList '-p','x','--cloud','session_1'",
+    'bash -lc "claude -p \\"x\\" --cloud session_1"',
+  ]
+
+  test('scanShell finds no launch in a follow-up', () => {
+    for (const c of STEERS) expect(scanShell(c), c).toEqual([])
+  })
+
+  test('decideShell allows it untouched in red, paused, Solo and green', () => {
+    for (const b of [budget(80), budget(40, null, 95), budget(60, planFromOption('Pro')), budget(40)]) {
+      for (const command of STEERS) {
+        const d: any = decideShell({ tool: 'Bash', command }, ctx(b))
+        expect(d.action).toBe('allow')
+        expect(d.input).toBeUndefined()
+      }
+    }
+  })
+
+  test('a new cloud session stays a launch: no -p, or -p with --environment', () => {
+    expect(scanShell('claude --cloud "fix"')).toEqual([expect.objectContaining({ kind: 'cloud' })])
+    expect(scanShell('claude -p "task" --environment ccpool_x --cloud')).toEqual([expect.objectContaining({ kind: 'cloud', hasModel: false })])
+    expect(decideShell({ tool: 'Bash', command: 'claude -p "t" --environment ccpool_x --cloud' }, ctx(budget(80))).action).toBe('deny')
+  })
+})
+
+describe('local headless sessions are launches (D5)', () => {
+  test('claude -p, --print, --bg and --background are local launches; --model is read', () => {
+    expect(scanShell('claude -p "refactor the parser" --max-turns 30')).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: 6 }])
+    expect(scanShell('claude --bg "run the nightly sweep"')).toEqual([expect.objectContaining({ kind: 'local' })])
+    expect(scanShell('claude --background --resume abc')).toEqual([expect.objectContaining({ kind: 'local' })])
+    expect(scanShell('claude --print --model opus "x"')).toEqual([expect.objectContaining({ kind: 'local', hasModel: true, model: 'opus' })])
+    expect(scanShell("Start-Process claude -ArgumentList '-p','do it'")).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: null }])
+  })
+
+  test('management commands and plain sessions are not launches', () => {
+    for (const c of [
+      'claude --version', 'claude -v', 'claude --help', 'claude plugin validate mods/x --strict', 'claude plugin test mods/x',
+      'claude mcp list', 'claude auth status --text', 'claude update', 'claude agents --json', 'claude doctor',
+      'claude config list', 'claude', 'claude "explain this repo"', 'claude --resume abc',
+    ]) expect(scanShell(c), c).toEqual([])
+    expect(claudeLaunch(['plugin', 'test', '-p', 'x'])).toBeNull()
+  })
+
+  test('decideShell: --model sonnet in green, denied while red or paused, fable and haiku denied, Solo allowed', () => {
+    const c = 'claude -p "x" --max-turns 3'
+    const green: any = decideShell({ tool: 'Bash', command: c }, ctx(budget(40)))
+    expect(green.input.command).toBe('claude --model sonnet -p "x" --max-turns 3')
+    expect(green.log).toContain('claude -p/--bg')
+    expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(80))).reason).toContain('Budget red')
+    expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(40, null, 95))).reason).toContain('Wait until')
+    expect(decideShell({ tool: 'Bash', command: 'claude -p "x" --model fable' }, ctx(budget(40))).reason).toContain('Headless and background sessions (claude -p, --bg) never run Fable')
+    expect(decideShell({ tool: 'Bash', command: 'claude --bg --model haiku' }, ctx(budget(40))).reason).toContain('the haiku alias')
+    expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(60, planFromOption('Pro')))).action).toBe('rewrite')
+    expect(decideShell({ tool: 'Bash', command: "Start-Process claude -ArgumentList '-p','x'" }, ctx(budget(40))).reason).toContain('nested shell script (or Start-Process)')
+  })
+})
+
+describe('heredoc inside "$(...)" is data (D2)', () => {
+  const BODIES = [
+    "git commit -m \"$(cat <<'EOF'\nfeat: support 5\" displays\nclaude --cloud docs\nEOF\n)\"",
+    "gh pr create --title t --body \"$(cat <<'EOF'\nSet `\"enabled\": false` in config.\n\n```\nclaude -p \"msg\" --cloud abc\n```\nEOF\n)\"",
+    "git commit -m \"$(cat <<'EOF'\nfeat: add guard\n\nThe 5\" screen case.\ngh pr merge 5 runs after review\nEOF\n)\"",
+    "gh pr create --title \"x\" --body \"$(cat <<'EOF'\nIt's the user's \"fix\nclaude --cloud brief\nEOF\n)\"",
+    "git commit -m \"$(cat <<-EOF\n\tclaude --cloud \"x\n\tEOF\n)\"",
+  ]
+
+  test('an odd quote or a backtick-quote code span in the body holds no launch', () => {
+    for (const command of BODIES) expect(scanShell(command), command).toEqual([])
+  })
+
+  test('decideShell allows them in every color', () => {
+    for (const b of [budget(40), budget(80), budget(40, null, 95), budget(60, planFromOption('Pro'))]) {
+      for (const command of BODIES) expect(decideShell({ tool: 'Bash', command }, ctx(b)).action).toBe('allow')
+    }
+  })
+
+  test('the body stays in the quoted token; a launch after the string is still found and rewritten in place', () => {
+    const segs = tokenize("git commit -m \"$(cat <<'EOF'\na \" b\nEOF\n)\" && echo ok")
+    expect(segs.map(s => s.map(t => t.value))).toEqual([['git', 'commit', '-m', "$(cat <<'EOF'\na \" b\nEOF\n)"], ['echo', 'ok']])
+    const command = "git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\" && claude --cloud t"
+    const d: any = decideShell({ tool: 'Bash', command }, ctx(budget(40)))
+    expect(d.input.command).toBe("git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\" && claude --model sonnet --cloud t")
+    // `<<` in plain double quotes, outside a `$(...)`, is text.
+    expect(tokenize('echo "a <<EOF b"').map(s => s.map(t => t.value))).toEqual([['echo', 'a <<EOF b']])
+  })
+})
+
+describe('cmd /c and pwsh -Command with more words after a quoted script (D11)', () => {
+  test('the quoted script is read, and rewritten in place', () => {
+    const b = budget(40)
+    for (const [cmd, out] of [
+      ['cmd /c "claude --cloud x" 2>&1', 'cmd /c "claude --model sonnet --cloud x" 2>&1'],
+      ['pwsh -NoProfile -Command "claude --cloud x" 2>&1', 'pwsh -NoProfile -Command "claude --model sonnet --cloud x" 2>&1'],
+      ["powershell -Command \"claude --cloud 'task'\" -ErrorAction Stop", "powershell -Command \"claude --model sonnet --cloud 'task'\" -ErrorAction Stop"],
+      ['cmd /c "claude" --cloud x', 'cmd /c "claude" --model sonnet --cloud x'],
+    ]) {
+      const d: any = decideShell({ tool: 'PowerShell', command: cmd }, ctx(b))
+      expect(d.action).toBe('rewrite')
+      expect(d.input.command).toBe(out)
+    }
+  })
+
+  test('a forbidden model there is denied, red denies them all', () => {
+    expect(decideShell({ tool: 'PowerShell', command: 'cmd /c "claude --cloud --model fable x" > out.txt' }, ctx(budget(40))).action).toBe('deny')
+    expect(decideShell({ tool: 'PowerShell', command: 'pwsh -Command "claude --cloud --model fable x" > o' }, ctx(budget(40))).action).toBe('deny')
+    expect(decideShell({ tool: 'PowerShell', command: 'cmd /c "claude --cloud x" 2>&1' }, ctx(budget(80))).action).toBe('deny')
+  })
+})
+
+describe('Agent: Fable, remote isolation (D3, D6)', () => {
+  test('fable becomes opus on Max 20x, green, foreground; the line once, then to debug', () => {
+    const b = budget(30, planFromOption('Max 20x'))
+    const first: any = decideAgent({ tool: 'Agent', model: 'fable', run_in_background: false }, ctx(b))
+    expect(first).toMatchObject({ action: 'rewrite', input: { model: 'opus' }, to: 'transcript', fableNoted: true })
+    const later: any = decideAgent({ tool: 'Agent', model: 'fable', run_in_background: false }, ctx(b, { fableLogged: true }))
+    expect(later).toMatchObject({ action: 'rewrite', input: { model: 'opus' }, to: 'debug' })
+    expect(later.fableNoted).toBeUndefined()
+  })
+
+  test('isolation remote needs a cloud slot: denied on Solo, allowed on Max 20x yellow (Max 5x)', () => {
+    const remote = { tool: 'Agent', description: 'd', prompt: 'p', model: 'sonnet', isolation: 'remote' }
+    const solo: any = decideAgent(remote, ctx(budget(60, planFromOption('Pro'))))
+    expect(solo.action).toBe('deny')
+    expect(solo.reason).toContain('no new cloud sessions')
+    expect(decideAgent({ ...remote, isolation: 'worktree' }, ctx(budget(60, planFromOption('Pro')))).action).toBe('allow')
+    expect(decideAgent(remote, ctx(budget(60, planFromOption('Max 20x')))).action).toBe('allow')
+    expect(decideAgent(remote, ctx(budget(80))).reason).toContain('Budget red')
+  })
+})
+
+describe('budget texts (D10, 5-hour banked)', () => {
+  test('the red reason names a redemption only with a counted weekly reset and use at or past 100 - reserve', () => {
+    const banked = planFromOption('Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-30')
+    expect((launchGate(ctx(budget(80))) as any).deny).not.toContain('redeem')
+    // Red by pace (84% used, the banked reset lifts the pace to about 56) but under 100 - reserve.
+    expect((launchGate(ctx(budget(84, banked))) as any).deny).not.toContain('redeem')
+    expect((launchGate(ctx(budget(90, banked))) as any).deny).toContain('A banked weekly reset is counted')
+    const expired = planFromOption('Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-01')
+    expect((launchGate(ctx(budget(90, expired))) as any).deny).not.toContain('redeem')
+  })
+
+  test('a paused window offers a banked 5-hour reset only while the week is green', () => {
+    expect((launchGate(ctx(budget(40, null, 95), { fiveHourBanked: true })) as any).deny).toContain('A 5-hour reset is banked')
+    expect((launchGate(ctx(budget(40, null, 95))) as any).deny).not.toContain('5-hour reset is banked')
+    expect((launchGate(ctx(budget(60, null, 95), { fiveHourBanked: true })) as any).deny).not.toContain('5-hour reset is banked')
+    expect(fiveHourBanked(planFromOption('Max 20x · banked: 5-hour reset, no expiry'), NOW)).toBe(true)
+    expect(fiveHourBanked(planFromOption('Max 20x · banked: 5-hour reset, expires 2026-10-01'), NOW)).toBe(false)
+    expect(fiveHourBanked(planFromOption('Max 20x · banked: weekly reset, expires 2026-10-30'), NOW)).toBe(false)
+    expect(fiveHourBanked(null, NOW)).toBe(false)
+  })
+})
+
+describe('workflow runs admitted under redPolicy warn', () => {
+  test('record the plan width, not Red\'s 0', () => {
+    const d: any = decideWorkflowAgent({ model: 'sonnet', workflow: { runId: 'wf', agentIndex: 1 } }, ctx(budget(80), { redPolicy: 'warn' }), undefined)
+    expect(d).toMatchObject({ action: 'allow', admit: true, startRun: { width: 8, name: 'Max 5x' } })
+    const pro: any = decideWorkflowAgent({ model: 'sonnet', workflow: { runId: 'wf', agentIndex: 1 } }, ctx(budget(80, planFromOption('Pro')), { redPolicy: 'warn' }), undefined)
+    expect(pro.startRun).toEqual({ width: 4, name: 'Pro' })
   })
 })

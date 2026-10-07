@@ -44,6 +44,12 @@ const DOCS = [
 ]
 // /code-review is left out: Claude Code has a built-in of that name, which matt-bridge does not cover.
 const MATT_COMMANDS = /\/(grill-me|grill-with-docs|grilling|to-prd|to-spec|to-issues|to-tickets|tdd|implement|implement-spec|pr|triage|diagnose|diagnosing-bugs|prototype|handoff|wayfinder|improve-codebase-architecture|setup-matt-pocock-skills|ask-matt|zoom-out)/
+// "tonight" counts only next to work ("lascia girare tutto stanotte", "lancia un worker stanotte"),
+// not in any sentence that mentions the night.
+const TONIGHT_WORK = [
+  /(lavora|lancia|lascia|fai|fallo|falla|gira|continua|procedi|mergia|esegui|avvia|controlla|finisci|sistema|implementa)\w*( \S+){0,5} (stanotte|questa notte)/,
+  /(stanotte|questa notte)( \S+){0,3} (lavora|continua|procedi|gira|lancia|mergia|controlla|finisci)\w*/,
+]
 
 // ---------------------------------------------------------------- the route table
 
@@ -105,13 +111,13 @@ export const ROUTES = [
       w(/coordin(a|are|ati|atore|atrice|amento|ando)/, /coordinator/, /coordinate (the )?(workers|agents|work|sessions)/),
       // worker, but not the web/service/queue kinds
       w(/(?<!(web|service|shared|celery|cloudflare|sidekiq|queue|background|thread|gunicorn|uvicorn|pool|node) )workers?/),
-      w(/merg\w*( \S+){0,4} (pr|prs|pull requests?)/, /(pr|prs|pull requests?)( \S+){0,4} merg\w*/,
-        /(fai|fare|facciamo) (il|un) merge/, /mergia\w*/),
+      // "merge" only together with PR words (or the Italian verb, which means a PR merge here)
+      w(/merg\w*( \S+){0,4} (pr|prs|pull requests?)/, /(pr|prs|pull requests?)( \S+){0,4} merg\w*/, /mergia\w*/),
       w(/(nuovo|prossimo|altro) (giro|round)/, /giro di (controllo|controlli|check|merge|review)/,
         /(inizia|iniziamo|comincia|cominciamo) (un |il |un altro |il prossimo |un nuovo )?(giro|round)/,
         /(start|next|new|another) round/, /round (di|of) (check|checks|controllo|controlli|review|merge)/),
       w(/roadmap/),
-      w(/vado a (dormire|letto)/, /stanotte/, /questa notte/, /tutta la notte/, /durante la notte/, /overnight/, /buona ?notte/),
+      w(/vado a (dormire|letto)/, ...TONIGHT_WORK, /tutta la notte/, /durante la notte/, /overnight/, /buona ?notte/),
       w(/deleg(a|are|ato|ata|ando|hiamo)/, /delegate (this|it|the work|to)/),
     ],
   },
@@ -122,7 +128,7 @@ export const ROUTES = [
     why: 'going to sleep or away for hours',
     priority: 80,
     prompt: [
-      w(/vado a (dormire|letto|nanna)/, /me ne vado a (dormire|letto)/, /buona ?notte/, /stanotte/, /questa notte/,
+      w(/vado a (dormire|letto|nanna)/, /me ne vado a (dormire|letto)/, /buona ?notte/, ...TONIGHT_WORK,
         /tutta la notte/, /durante la notte/,
         /(lascia|lasciala|lascialo|fallo|falla|tienilo|tienila) (girare|lavorare|andare|in esecuzione)/,
         /lavora (mentre|finche') (dormo|non ci sono|sono via)/, /mentre (dormo|sono via|non ci sono)/,
@@ -155,7 +161,7 @@ export const ROUTES = [
     prompt: [
       // "merge" only together with PR words
       w(/merg\w*( \S+){0,4} (pr|prs|pull requests?)/, /(pr|prs|pull requests?)( \S+){0,4} merg\w*/,
-        /mergia(re|mo|la|le|lo)?/, /merg\w* (la |the )?#\d+/, /(fai|fare|facciamo) (il|un) merge/,
+        /mergia(re|mo|la|le|lo)?/, /merg\w* (la |the )?#\d+/,
         /(unisci|integra) (la |questa |le )?(pr|pull request)/),
       w(/(pr|pull request)( #?\d+)? (e'? )?(pronta|verde|approvata)/, /(pr|pull request)( #?\d+)? (is )?(ready|green|approved)/,
         /ready to merge/, /(ok|good) to merge/, /e'? verde,? (puoi )?(fare il )?merge/,
@@ -283,7 +289,9 @@ export const ROUTES = [
     why: 'research with checked sources',
     priority: 72,
     prompt: [
-      w(/(fai|fare|fammi|serve|facciamo) (una )?ricerca/, /ricerca (approfondita|verificata|con fonti|sul web|online)/,
+      // not a search through files or code ("fai una ricerca nel file per TODO")
+      w(/(fai|fare|fammi|serve|facciamo) (una )?ricerca(?! (nel|nei|nella|nelle|in|del|dei|della|sul|sui) (file|codice|repo|repository|progetto|cartella|directory|log|sorgenti))/,
+        /ricerca (approfondita|verificata|con fonti|sul web|online)/,
         /deep research/, /(do|run) (some |a )?research/, /research (on|into|about|what|whether|how)/),
       w(/verifica (queste|questa|le|la) (affermazioni|affermazione|fonti|fonte|claim|info|informazioni)/,
         /controlla le fonti/, /check (the )?sources/, /fact-?check/, /is (this|that|it) still true/, /e'? ancora vero/,
@@ -466,7 +474,11 @@ export const ROUTES = [
     prompt: [
       w(/(programma|programmare|pianifica|schedula) (un |una |il |la |l')?(task|agente|routine|controllo|job|esecuzione|run|sessione)/,
         /programmalo/, /ogni giorno alle/, /ogni (lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica|mattina|sera)/,
-        /routines?/, /cron( job)?/, /every (day|morning|evening|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at/,
+        // a routine or cron only when set up as one, not a function or a failing job
+        /(crea|creare|imposta|impostare|programma|set up|create|add|schedule) (una |un |a |the )?(nuova |new )?routines?/,
+        /(cloud|scheduled|programmat[ae]) routines?/, /routines? (cloud|programmat[ae]|schedulat[ae])/, /(le mie|my) routines/,
+        /cron ?jobs?/, /crontab/, /(imposta|crea|aggiungi|set up|add|create) (un |a )?cron/,
+        /every (day|morning|evening|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at/,
         /schedule (a|an|the) (agent|task|routine|run|job|check)/, /(una volta|once) (domani|tomorrow) (alle|at)/),
     ],
   },
@@ -542,8 +554,10 @@ export function leadingCommand(text) {
   return m ? skillTail(m[1]) : null
 }
 
-// Where a prompt comes from the person. Composer and bridge are typed by the person; the Desktop
-// app's Code tab and `claude -p` deliver the person's prompt as 'sdk'. Never task notifications,
+// Where a prompt comes from the person. Composer and bridge are typed by the person. 'sdk' is kept on
+// purpose although the types call it the SDK host's own turn: the Desktop app's Code tab delivers
+// what the person types that way, so dropping it would silence the router there. A `claude -p`
+// script gets the hidden line too; that costs one line, never a hold. Never task notifications,
 // plugins, scheduled triggers, peers or relays.
 export const PERSON_ORIGINS = ['composer', 'bridge', 'sdk']
 
@@ -743,7 +757,10 @@ function hereString(command, i) {
 }
 
 // Splits a Bash or PowerShell line into segments of tokens { value, start, end }. Never throws on
-// odd input; heredoc bodies add no tokens; a here-string is one token holding its body.
+// odd input; heredoc bodies add no tokens; a here-string is one token holding its body. A heredoc
+// inside a `$(...)` inside double quotes (the commit and PR idiom `"$(cat <<'EOF' ... EOF\n)"`) is
+// data too: its body stays in the quoted token, and its quotes never close the string.
+// Keep this tokenizer identical to model-guard's (rules.js).
 export function tokenize(command) {
   const segments = [[]]
   let tok = null
@@ -796,13 +813,48 @@ export function tokenize(command) {
       tok.value += command.slice(i + 1, stop)
       i = close < 0 ? command.length : close + 1
     } else if (c === '"') {
+      let subs = 0 // open `$(` inside this string
+      let inner = [] // heredocs opened inside them, waiting for the end of their line
       i++
       while (i < command.length && command[i] !== '"') {
-        if ((command[i] === '\\' || command[i] === '`') && (command[i + 1] === '"' || command[i + 1] === '\\' || command[i + 1] === '`')) {
+        const d = command[i]
+        if (d === '$' && command[i + 1] === '(') {
+          subs++
+          tok.value += '$('
+          i += 2
+          continue
+        }
+        if (d === ')' && subs > 0) subs--
+        if (subs > 0 && d === '<' && command[i + 1] === '<' && command[i + 2] !== '<' && command[i - 1] !== '<') {
+          let j = i + 2
+          const stripTabs = command[j] === '-'
+          if (stripTabs) j++
+          while (command[j] === ' ' || command[j] === '\t') j++
+          const { word, next } = heredocWord(command, j)
+          if (word) inner.push({ word, stripTabs })
+          tok.value += command.slice(i, next)
+          i = next
+          continue
+        }
+        if (d === '\n' && inner.length) {
+          let p = i + 1
+          for (const h of inner) {
+            const end = heredocEnd(command, p, h)
+            if (end < 0) { p = -1; break }
+            p = end
+          }
+          inner = []
+          if (p > 0) {
+            tok.value += command.slice(i, p)
+            i = p
+            continue
+          }
+        }
+        if ((d === '\\' || d === '`') && (command[i + 1] === '"' || command[i + 1] === '\\' || command[i + 1] === '`')) {
           tok.value += command[i + 1]
           i += 2
         } else {
-          tok.value += command[i]
+          tok.value += d
           i++
         }
       }
@@ -842,18 +894,32 @@ const SCRIPT_FLAG = /^(-[a-z]*c|-command|\/c|\/k)$/i
 const REST_SHELLS = /^(pwsh|powershell|cmd)(\.exe)?$/
 const STARTERS = ['start-process', 'start', 'saps']
 
-// The script a nested shell runs (`bash -lc "..."`, `pwsh -Command "..."`, `cmd /c ...`), else null.
-function nestedScript(command, seg, ci) {
+// The scripts a nested shell may run (`bash -lc "..."`, `pwsh -Command "..."`, `cmd /c ...`), in the
+// order to try, else null. For cmd and PowerShell the script flag takes the rest of the segment; a
+// quoted script with more words after it is tried as the quoted text first (`cmd /c "gh pr merge 3"
+// 2>&1`), then as the rest of the segment (`cmd /c "claude" --cloud x`), as model-guard does.
+function nestedScripts(command, seg, ci) {
   const shell = baseName(seg[ci].value)
   if (!SHELLS.test(shell)) return null
   for (let j = ci + 1; j < seg.length - 1; j++) {
     if (!SCRIPT_FLAG.test(seg[j].value)) continue
-    if (REST_SHELLS.test(shell) && j + 2 < seg.length) {
-      return { value: command.slice(seg[j + 1].start, seg[seg.length - 1].end) }
-    }
-    return seg[j + 1]
+    if (!REST_SHELLS.test(shell) || j + 2 >= seg.length) return [seg[j + 1]]
+    const rest = { value: command.slice(seg[j + 1].start, seg[seg.length - 1].end) }
+    const q = command[seg[j + 1].start]
+    return q === '"' || q === "'" || q === '@' ? [seg[j + 1], rest] : [rest]
   }
   return null
+}
+
+function hasFlag(values, ...names) {
+  return values.some(v => names.includes(v) || names.some(n => v.startsWith(n + '=')))
+}
+
+// Whether claude's arguments start a cloud session: `--cloud`, except with `-p`/`--print` and no
+// `--environment`, which only queues a message to an existing session (`claude -p "<msg>" --cloud
+// <session_id|cse_id|url>`): steering open work, never held. Local `-p`/`--bg` runs are not gated here.
+function cloudLaunch(values) {
+  return hasFlag(values, '--cloud') && !(hasFlag(values, '-p', '--print') && !hasFlag(values, '--environment'))
 }
 
 // The first argument that is not a flag (`expect -f launch.exp`, `powershell -NoProfile -File x.ps1`).
@@ -871,15 +937,15 @@ function segmentGate(seg, ci) {
   const word = seg[ci].value
   const name = baseName(word)
   const args = seg.slice(ci + 1).map(t => t.value)
-  if (isClaude(word) && args.some(a => a === '--cloud' || a.startsWith('--cloud='))) return 'cloud'
+  if (isClaude(word) && cloudLaunch(args)) return 'cloud'
   if (isLaunchScript(word)) return 'cloud'
   if (/^expect(\.exe)?$/.test(name) || REST_SHELLS.test(name)) {
     const op = firstOperand(args)
     if (op && isLaunchScript(op)) return 'cloud'
   }
   if (STARTERS.includes(name)) {
-    const text = args.join(' ')
-    if (args.some(a => isClaude(a)) && /(^|[\s,'"])--cloud(?![\w-])/.test(text)) return 'cloud'
+    const at = args.findIndex(a => isClaude(a))
+    if (at >= 0 && cloudLaunch(args.slice(at + 1).join(' ').split(/[\s,'"]+/).filter(Boolean))) return 'cloud'
     if (args.some(a => isLaunchScript(a) || /launch\.(exp|ps1)(['",]|$)/i.test(a))) return 'cloud'
   }
   if (/^gh(\.exe)?$/.test(name)) {
@@ -901,9 +967,14 @@ export function shellGates(command, depth = 0) {
   for (const seg of tokenize(command)) {
     const ci = commandIndex(seg)
     if (ci < 0) continue
-    const script = depth < 3 ? nestedScript(command, seg, ci) : null
-    if (script) {
-      for (const k of shellGates(script.value, depth + 1)) add(k)
+    const scripts = depth < 3 ? nestedScripts(command, seg, ci) : null
+    if (scripts) {
+      for (const script of scripts) {
+        const found = shellGates(script.value, depth + 1)
+        if (!found.length) continue
+        for (const k of found) add(k)
+        break
+      }
       continue
     }
     add(segmentGate(seg, ci))

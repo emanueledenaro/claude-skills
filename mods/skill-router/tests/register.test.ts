@@ -19,21 +19,30 @@ type World = {
   existing: Set<string>
   fsCalls: string[]
   failSkills: Set<string>
+  denySkills: Set<string>
+  messages: any[]
+  reads: number
 }
 
 const canon = (p: string) => p.replace(/\\/g, '/').toLowerCase()
 
-// The world beneath the plugin: the command list, transcript lines, tools, prompts, the file system.
+// The world beneath the plugin: the command list, transcript lines, tools, prompts, the file system,
+// and the main conversation's transcript ($.session.messages()).
 function world(on: any, commands: string[] | 'fail' = ALL): World {
-  const w: World = { logs: [], calls: [], submits: [], existing: new Set(), fsCalls: [], failSkills: new Set() }
+  const w: World = {
+    logs: [], calls: [], submits: [], existing: new Set(), fsCalls: [], failSkills: new Set(), denySkills: new Set(),
+    messages: [], reads: 0,
+  }
   on('command.list', async () => {
     if (commands === 'fail') throw new Error('command list unavailable')
     return { value: commands.map(name => ({ name, description: '', source: 'user' })) }
   })
+  on('session.messages', async () => { w.reads++; return { value: w.messages } })
   on('ui.log', async ($: any, e: any) => { w.logs.push({ text: e.text, to: e.to }); return { value: undefined } })
   on('tool.call', async ($: any, e: any) => {
     w.calls.push(e)
     if (e.tool === 'Skill' && w.failSkills.has(e.skill)) return { result: 'Unknown skill', isError: true }
+    if (e.tool === 'Skill' && w.denySkills.has(e.skill)) return { deny: 'refused by a hook beneath' }
     return { result: 'ran' }
   })
   on('prompt.submit', async ($: any, e: any) => {
@@ -70,9 +79,14 @@ function denyText(r: any): string {
   return String((r && (r.deny ?? r.text)) || '')
 }
 
-async function load($: any, name: string) {
-  await $.tool.call({ tool: 'Skill', skill: name })
+async function load($: any, name: string, agentId?: string) {
+  await $.tool.call({ tool: 'Skill', skill: name, ...(agentId ? { agentId } : {}) })
 }
+
+// A transcript row of the main conversation that loaded a skill with the Skill tool.
+const skillUse = (skill: string, isError = false) => ({
+  role: 'assistant', text: '', toolUses: [{ tool_use_id: 'toolu_' + skill, tool: 'Skill', input: { skill }, ...(isError ? { isError: true } : {}) }],
+})
 
 // A mod folder on disk: its manifest and hooks/.
 function mod(w: World, root: string) {
@@ -156,11 +170,11 @@ describe('skill-router', () => {
       expect(lineOf(w)).toContain('merge-gate')
     })
 
-    test('nothing when every matching skill is loaded (Skill tool, skill.prompt, slash command)', async ($, on) => {
+    test('nothing when every matching skill is loaded (Skill tool, slash command)', async ($, on) => {
       const w = world(on)
       await start($)
       await load($, 'skills:coordinator-method')
-      await $.skill.prompt({ skill: 'overnight', text: 'the overnight skill' })
+      await load($, 'overnight')
       await $.classic.UserPromptExpansion({ expansion_type: 'slash_command', command_name: 'skills:merge-gate', command_args: '', prompt: '/merge-gate' })
       await say($, 'vado a dormire, mergia la PR 12')
       expect(last(w).context).toBeUndefined()
@@ -174,6 +188,26 @@ describe('skill-router', () => {
       await load($, 'overnight')
       await say($, 'buonanotte')
       expect(lineOf(w)).toContain('overnight')
+    })
+
+    test('a Skill call a hook beneath denied does not count as loaded', async ($, on) => {
+      const w = world(on)
+      await start($)
+      w.denySkills.add('overnight')
+      await load($, 'overnight')
+      await say($, 'buonanotte')
+      expect(lineOf(w)).toContain('overnight')
+    })
+
+    test('skills a subagent loads (Skill tool, slash command, preload) do not count for the main conversation', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await load($, 'overnight', 'agent-1')
+      await $.classic.UserPromptExpansion({ expansion_type: 'slash_command', command_name: 'coordinator-method', command_args: '', prompt: '/coordinator-method', agent_id: 'agent-1' })
+      await $.skill.prompt({ skill: 'overnight', text: 'preloaded into a subagent' })
+      await say($, 'buonanotte')
+      expect(lineOf(w)).toContain('coordinator-method (')
+      expect(lineOf(w)).toContain('overnight (')
     })
 
     test('a typed slash command is not suggested for itself', async ($, on) => {
@@ -228,6 +262,49 @@ describe('skill-router', () => {
       expect(lineOf(w)).toContain('overnight')
     })
 
+    test('/resume and a fork rebuild the loaded skills from the transcript (failed loads left out)', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await say($, 'ciao') // the process start's read finds an empty transcript
+      w.messages = [
+        { role: 'user', text: 'vado a dormire', toolUses: [] },
+        skillUse('skills:coordinator-method'),
+        skillUse('overnight', true),
+      ]
+      await $.classic.SessionStart({ source: 'resume' })
+      await say($, 'buonanotte')
+      expect(lineOf(w)).not.toContain('coordinator-method')
+      expect(lineOf(w)).toContain('overnight (')
+      w.messages = [skillUse('coordinator-method'), skillUse('overnight')]
+      await $.classic.SessionStart({ source: 'fork' })
+      await say($, 'buonanotte')
+      expect(last(w).context).toBeUndefined()
+    })
+
+    test('a process started with --resume reads its transcript once, slash commands included', async ($, on) => {
+      const w = world(on)
+      w.messages = [
+        skillUse('model-mix'),
+        { role: 'user', text: '<command-name>/overnight</command-name>\n<command-message>overnight</command-message>', toolUses: [] },
+      ]
+      await start($)
+      expect(isRefused(await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', model: 'sonnet' } as any))).toBe(false)
+      await say($, 'buonanotte')
+      expect(lineOf(w)).not.toContain('overnight (')
+      expect(w.reads).toBe(1)
+      expect(w.logs.filter(l => l.text.includes('fermato')).length).toBe(0)
+    })
+
+    test('/clear reads nothing back: a skill loaded before it does not count', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await say($, 'ciao')
+      w.messages = [skillUse('model-mix')]
+      await $.classic.SessionStart({ source: 'clear' })
+      expect(isRefused(await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', model: 'sonnet' } as any))).toBe(true)
+      expect(w.reads).toBe(1)
+    })
+
     test('failure path: a hook that throws passes the prompt on unchanged', async ($, on) => {
       const w = world(on)
       await start($)
@@ -267,7 +344,7 @@ describe('skill-router', () => {
       const w = world(on)
       await start($)
       await load($, 'model-mix')
-      await $.skill.prompt({ skill: 'smart-ultracode', text: 't' })
+      await load($, 'smart-ultracode')
       expect(isRefused(await $.tool.call({ tool: 'Workflow', name: 'review' } as any))).toBe(false)
       expect(isRefused(await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p' } as any))).toBe(false)
       expect(w.logs).toEqual([])
@@ -282,6 +359,50 @@ describe('skill-router', () => {
       expect(isRefused(await $.tool.call({ tool: 'Bash', command: 'claude --cloud "x"' } as any))).toBe(false)
       expect(isRefused(await $.tool.call({ tool: 'PowerShell', command: 'gh pr merge 12 --squash' } as any))).toBe(false)
       expect(w.logs).toEqual([])
+    })
+
+    test('a subagent\'s Agent, Workflow, merge, cloud launch or mod write passes and leaves the gates armed', async ($, on) => {
+      const w = world(on)
+      await start($)
+      mod(w, MOD)
+      const sub = [
+        { tool: 'Agent', description: 'd', prompt: 'p', model: 'sonnet' },
+        { tool: 'Workflow', name: 'review' },
+        { tool: 'Bash', command: 'gh pr merge 12 --squash' },
+        { tool: 'PowerShell', command: 'claude --cloud "x"' },
+        { tool: 'Write', file_path: MOD + '\\hooks\\register.js', content: 'x' },
+      ]
+      for (const input of sub) expect(isRefused(await $.tool.call({ ...input, agentId: 'agent-7' } as any))).toBe(false)
+      expect(w.logs).toEqual([])
+      for (const input of sub) expect(isRefused(await $.tool.call(input as any))).toBe(true)
+    })
+
+    test('a follow-up to a cloud worker is not held', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const steer = { tool: 'Bash', command: 'claude -p "Fix the failing test on your PR" --cloud session_01ABC --output-format json' }
+      expect(isRefused(await $.tool.call(steer as any))).toBe(false)
+      expect(isRefused(await $.tool.call({ tool: 'Bash', command: 'claude -p "refactor the parser"' } as any))).toBe(false)
+      expect(w.logs).toEqual([])
+      expect(isRefused(await $.tool.call({ tool: 'Bash', command: 'claude --cloud "new task"' } as any))).toBe(true)
+    })
+
+    test('Monitor commands are gated like Bash; a Monitor watch without a command passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const ws = { tool: 'Monitor', description: 'ws', timeout_ms: 1000, ws: { url: 'wss://example.test/feed' } }
+      expect(isRefused(await $.tool.call(ws as any))).toBe(false)
+      const merge = { tool: 'Monitor', description: 'm', timeout_ms: 1000, command: 'gh pr merge 12 --squash' }
+      expect(denyText(await $.tool.call(merge as any))).toContain('before merging a PR, load merge-gate')
+      expect(isRefused(await $.tool.call(merge as any))).toBe(false)
+      expect(w.calls.map(c => c.tool)).toEqual(['Monitor', 'Monitor'])
+    })
+
+    test('a quoted pwsh -Command or cmd /c script followed by a redirection is still read', async ($, on) => {
+      world(on)
+      await start($)
+      expect(denyText(await $.tool.call({ tool: 'PowerShell', command: 'pwsh -NoProfile -Command "gh pr merge 3" 2>&1' } as any))).toContain('merge-gate')
+      expect(denyText(await $.tool.call({ tool: 'PowerShell', command: 'cmd /c "claude --cloud x" 2>&1' } as any))).toContain('cloud session')
     })
 
     test('a Workflow resume finishes open work: not held, the gate stays armed', async ($, on) => {
@@ -357,6 +478,8 @@ describe('skill-router', () => {
         { tool: 'PowerShell', command: "@'\ngh pr merge 12\nclaude --cloud \"x\"\n'@ | Set-Content notes.md" },
         { tool: 'Bash', command: 'git commit -m "docs: run claude --cloud, then gh pr merge"' },
         { tool: 'Bash', command: 'cat ~/.claude/skills/cloud-worker/launch.ps1' },
+        { tool: 'Bash', command: "git commit -m \"$(cat <<'EOF'\nfeat: add guard\n\nThe 5\" screen case.\ngh pr merge 5 runs after review\nEOF\n)\"" },
+        { tool: 'Bash', command: "gh pr create --title \"x\" --body \"$(cat <<'EOF'\nIt's the user's \"fix\nclaude --cloud brief\nEOF\n)\"" },
       ]
       for (const input of inputs) expect(isRefused(await $.tool.call(input as any))).toBe(false)
       expect(w.calls.length).toBe(inputs.length)
@@ -431,6 +554,7 @@ describe('skill-router', () => {
       const inputs = [
         { tool: 'Bash', command: 42 },
         { tool: 'PowerShell', command: { claude: '--cloud' } },
+        { tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 42 },
         { tool: 'Write', file_path: 42, content: 'x' },
         { tool: 'Workflow', resumeFromRunId: 42 },
         { tool: 'Skill', skill: 42 },

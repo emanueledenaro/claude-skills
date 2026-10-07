@@ -84,6 +84,17 @@ describe('model-guard', () => {
         { tool: 'Bash', command: "git commit -F - <<'EOF'\nclaude --cloud now gets --model\nEOF" },
         { tool: 'Bash', command: "cat > brief.md <<'EOF'\nclaude --model sonnet --cloud \"task\"\nexpect launch.exp t r l fable high\nEOF" },
         { tool: 'PowerShell', command: "@'\nDon't stop.\nclaude --cloud \"x\"\n'@ | Set-Content brief.md" },
+        // Claude Code's commit and PR idiom: an odd quote or a backtick-quote code span in the body.
+        { tool: 'Bash', command: "git commit -m \"$(cat <<'EOF'\nfeat: support 5\" displays\nclaude --cloud docs\nEOF\n)\"" },
+        { tool: 'Bash', command: "gh pr create --title t --body \"$(cat <<'EOF'\nSet `\"enabled\": false` in config.\n\n```\nclaude -p \"msg\" --cloud abc\n```\nEOF\n)\"" },
+        // Steering a cloud worker finishes open work.
+        { tool: 'Bash', command: 'claude -p "Fix the failing lint on your PR #12" --cloud session_01ABC --output-format json' },
+        { tool: 'PowerShell', command: 'claude --print "rebase on main" --cloud https://claude.ai/code/session_01ABC' },
+        // Local management commands start no session.
+        { tool: 'Bash', command: 'claude plugin validate mods/model-guard --strict' },
+        { tool: 'Bash', command: 'claude --version' },
+        { tool: 'Bash', command: 'claude mcp list' },
+        { tool: 'Bash', command: 'claude agents --json' },
       ]
       for (const input of inputs) {
         const r = await $.tool.call(input)
@@ -97,10 +108,34 @@ describe('model-guard', () => {
     test('heredoc and here-string texts are not rewritten when green', async ($, on) => {
       const w = world(on, GREEN)
       await start($)
-      const command = "gh pr create --title \"x\" --body-file - <<'EOF'\nSteps:\nclaude --cloud \"fix the bug\"\nEOF"
-      await $.tool.call({ tool: 'Bash', command } as any)
-      expect(w.calls[0].command).toBe(command)
+      const commands = [
+        "gh pr create --title \"x\" --body-file - <<'EOF'\nSteps:\nclaude --cloud \"fix the bug\"\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nfeat: support 5\" displays\nclaude --cloud docs\nEOF\n)\"",
+      ]
+      for (const command of commands) await $.tool.call({ tool: 'Bash', command } as any)
+      expect(w.calls.map(c => c.command)).toEqual(commands)
       expect(w.logs).toEqual([])
+    })
+
+    test('a follow-up to a cloud worker is never denied or rewritten: red, paused, Solo or green', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const steer = 'claude -p "Fix the failing test on your PR" --cloud session_01ABC --output-format json'
+      for (const reading of [RED, PAUSED, GREEN]) {
+        w.rateLimits = reading
+        const r = await $.tool.call({ tool: 'Bash', command: steer } as any)
+        expect(isRefused(r)).toBe(false)
+      }
+      expect(w.calls.map(c => c.command)).toEqual([steer, steer, steer])
+      expect(w.logs).toEqual([])
+    })
+
+    test('a follow-up passes on Solo (Pro yellow) too', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      const steer = 'claude -p "msg" --cloud cse_0123 --output-format json'
+      expect(isRefused(await $.tool.call({ tool: 'PowerShell', command: steer } as any))).toBe(false)
+      expect(w.calls[0].command).toBe(steer)
     })
   })
 
@@ -152,15 +187,20 @@ describe('model-guard', () => {
       expect(w.calls[0].model).toBe('opus')
     })
 
-    test('fable stays on Max 20x, green, foreground, no isolation (plan from CLAUDE.md)', async ($, on) => {
+    test('fable becomes opus even on Max 20x, green, foreground, no isolation; the reason reaches the transcript once', async ($, on) => {
       const w = world(on)
       await start($)
       await $.prompt.context({ blocks: [], instructionFiles: [
         { path: 'C:/Users/me/.claude/CLAUDE.md', kind: 'user', content: '# Me\nClaude plan: Max 20x · reserve 10%\n' },
       ] } as any)
       await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false } as any)
-      expect(w.calls[0].model).toBe('fable')
-      expect(w.logs).toEqual([])
+      await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false } as any)
+      expect(w.calls.map(c => c.model)).toEqual(['opus', 'opus'])
+      expect(w.logs).toEqual([
+        { text: expect.stringContaining('fable -> opus'), to: 'transcript' },
+        { text: expect.stringContaining('fable -> opus'), to: 'debug' },
+      ])
+      expect(w.logs[0].text).toContain('Fable')
     })
 
     test('fable becomes opus in the background, with isolation, or when yellow', async ($, on) => {
@@ -235,11 +275,36 @@ describe('model-guard', () => {
         expect(text).toContain('weekly 80% used')
         expect(text).toContain('2026-10-11 12:00 UTC')
         expect(text).toContain('finish open work only')
-        expect(text).toContain('banked weekly reset')
+        // Red by pace with no banked reset: no redeem advice.
+        expect(text).not.toContain('redeem')
       }
       expect(w.calls).toEqual([])
       expect(w.logs.length).toBe(5)
       expect(w.logs[0].text).toContain('budget rosso')
+    })
+
+    test('the redeem advice only with a counted weekly reset and weekly use at or past 100 - reserve',
+      { options: { planLine: 'Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-30' } }, async ($, on) => {
+        // 84% is red by pace (the banked reset lifts the pace to about 56) but under 100 - reserve.
+        const w = world(on, [weekly(84), fiveHour(10)])
+        await start($)
+        const pace = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+        expect(denyText(pace)).toContain('Budget red')
+        expect(denyText(pace)).not.toContain('redeem')
+        w.rateLimits = [weekly(90), fiveHour(10)]
+        const over = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+        expect(denyText(over)).toContain('A banked weekly reset is counted: ask the person to redeem it (Settings > Usage).')
+      })
+
+    test('local headless sessions (-p, --bg) are new launches: denied while red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      for (const command of ['claude -p "refactor the parser" --max-turns 30', 'claude --bg "run the nightly sweep"']) {
+        const r = await $.tool.call({ tool: 'Bash', command } as any)
+        expect(isRefused(r)).toBe(true)
+        expect(denyText(r)).toContain('Budget red')
+      }
+      expect(w.calls).toEqual([])
     })
 
     test('status pinned while red, cleared when the budget is green again', async ($, on) => {
@@ -322,6 +387,22 @@ describe('model-guard', () => {
       expect(denyText(r)).toContain('Wait until 13:00 UTC')
       expect(w.calls).toEqual([])
     })
+
+    test('denies a local headless session too', async ($, on) => {
+      const w = world(on, PAUSED)
+      await start($)
+      const r = await $.tool.call({ tool: 'PowerShell', command: 'claude -p "x" --model sonnet' } as any)
+      expect(denyText(r)).toContain('Wait until 13:00 UTC')
+      expect(w.calls).toEqual([])
+    })
+
+    test('with a banked 5-hour reset and a green week, asks to offer the redemption',
+      { options: { planLine: 'Max 5x · banked: 5-hour reset, no expiry' } }, async ($, on) => {
+        world(on, PAUSED)
+        await start($)
+        const r = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
+        expect(denyText(r)).toContain('A 5-hour reset is banked')
+      })
   })
 
   describe('rule 6: workflow width', () => {
@@ -392,6 +473,40 @@ describe('model-guard', () => {
       expect(w.logs[0].text).toContain('redPolicy warn')
     })
 
+    test('a run admitted under redPolicy warn keeps the plan width when the budget leaves red', { options: { redPolicy: 'warn' } }, async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      expect((await $.agent.spawn(spawnInput('wf_warn', 1) as any) as any).deny).toBeUndefined()
+      w.rateLimits = GREEN
+      for (let i = 2; i <= 8; i++) {
+        const r: any = await $.agent.spawn(spawnInput('wf_warn', i) as any)
+        expect(r.deny).toBeUndefined()
+      }
+      const ninth: any = await $.agent.spawn(spawnInput('wf_warn', 9) as any)
+      expect(ninth.deny).toContain('Max 5x, which applied when the run started, allows 8')
+      expect(w.spawns.length).toBe(8)
+    })
+
+    test('Pro yellow is Solo: an Agent with isolation remote (a cloud session) is denied, a local one passes', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      const remote = await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'remote' } as any)
+      expect(isRefused(remote)).toBe(true)
+      expect(denyText(remote)).toContain("isolation 'remote'")
+      const local = await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'worktree' } as any)
+      expect(isRefused(local)).toBe(false)
+      expect(w.calls).toEqual([expect.objectContaining({ isolation: 'worktree' })])
+    })
+
+    test('an Agent with isolation remote passes the cloud column on Max 5x and is denied while red', async ($, on) => {
+      const w = world(on, GREEN)
+      await start($)
+      expect(isRefused(await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'remote' } as any))).toBe(false)
+      w.rateLimits = RED
+      expect(denyText(await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'remote' } as any))).toContain('Budget red')
+      expect(w.calls.length).toBe(1)
+    })
+
     test('Pro yellow is Solo: the Workflow call itself is denied', { options: PRO }, async ($, on) => {
       const w = world(on, YELLOW)
       await start($)
@@ -450,6 +565,72 @@ describe('model-guard', () => {
       expect(isRefused(r2)).toBe(true)
       expect(isRefused(r3)).toBe(false)
       expect(w.calls.map(c => c.command)).toEqual([base + ' sonnet high'])
+    })
+
+    test('a quoted cmd /c or pwsh -Command script followed by a redirection is still read', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ tool: 'PowerShell', command: 'cmd /c "claude --cloud x" 2>&1' } as any)
+      const r = await $.tool.call({ tool: 'PowerShell', command: 'pwsh -Command "claude --cloud --model fable x" > o.txt' } as any)
+      expect(isRefused(r)).toBe(true)
+      expect(w.calls.map(c => c.command)).toEqual(['cmd /c "claude --model sonnet --cloud x" 2>&1'])
+    })
+  })
+
+  describe('local headless sessions (claude -p, --bg)', () => {
+    test('without --model they get --model sonnet; a named model passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      await $.tool.call({ tool: 'Bash', command: 'claude -p "refactor the parser" --max-turns 30' } as any)
+      await $.tool.call({ tool: 'PowerShell', command: 'claude --bg "run the nightly sweep"' } as any)
+      await $.tool.call({ tool: 'Bash', command: 'claude --print --model opus "audit auth"' } as any)
+      expect(w.calls.map(c => c.command)).toEqual([
+        'claude --model sonnet -p "refactor the parser" --max-turns 30',
+        'claude --model sonnet --bg "run the nightly sweep"',
+        'claude --print --model opus "audit auth"',
+      ])
+      expect(w.logs.length).toBe(2)
+      expect(w.logs[0].text).toContain('claude -p/--bg')
+    })
+
+    test('on fable or the bare haiku alias they are denied; a pinned Haiku id passes', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const r1 = await $.tool.call({ tool: 'Bash', command: 'claude -p "x" --model fable' } as any)
+      const r2 = await $.tool.call({ tool: 'Bash', command: 'claude --bg --model haiku "x"' } as any)
+      const r3 = await $.tool.call({ tool: 'Bash', command: 'claude -p "x" --model claude-haiku-5-5' } as any)
+      expect(denyText(r1)).toContain('Headless and background sessions')
+      expect(isRefused(r2)).toBe(true)
+      expect(isRefused(r3)).toBe(false)
+      expect(w.calls.length).toBe(1)
+    })
+
+    test('Solo (Pro yellow) has no cloud slot but still runs a local one', { options: PRO }, async ($, on) => {
+      const w = world(on, YELLOW)
+      await start($)
+      const r = await $.tool.call({ tool: 'Bash', command: 'claude -p "x"' } as any)
+      expect(isRefused(r)).toBe(false)
+      expect(w.calls[0].command).toBe('claude --model sonnet -p "x"')
+    })
+  })
+
+  describe('Monitor runs shell commands too', () => {
+    test('a Monitor launch is checked like Bash: launch.exp on fable denied, claude --cloud rewritten', async ($, on) => {
+      const w = world(on)
+      await start($)
+      const bad = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 'expect launch.exp t r l fable high' } as any)
+      expect(isRefused(bad)).toBe(true)
+      await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 'claude --cloud "x"' } as any)
+      expect(w.calls.map(c => c.command)).toEqual(['claude --model sonnet --cloud "x"'])
+    })
+
+    test('a Monitor watch without a command (a WebSocket) passes untouched, even when red', async ($, on) => {
+      const w = world(on, RED)
+      await start($)
+      const input = { tool: 'Monitor', description: 'ws', timeout_ms: 1000, ws: { url: 'wss://example.test/feed' } }
+      expect(isRefused(await $.tool.call(input as any))).toBe(false)
+      expect(w.calls).toEqual([expect.objectContaining(input)])
+      expect(w.logs).toEqual([])
     })
   })
 
@@ -531,8 +712,10 @@ describe('model-guard', () => {
       await start($)
       const r1 = await $.tool.call({ tool: 'Bash', command: 42 } as any)
       const r2 = await $.tool.call({ tool: 'PowerShell', command: { claude: '--cloud' } } as any)
+      const r3 = await $.tool.call({ tool: 'Monitor', description: 'w', timeout_ms: 1000, command: 42 } as any)
       expect(isRefused(r1)).toBe(true)
       expect(isRefused(r2)).toBe(true)
+      expect(isRefused(r3)).toBe(true)
       expect(denyText(r1)).toContain('model-guard could not check this launch')
       expect(w.calls).toEqual([])
     })

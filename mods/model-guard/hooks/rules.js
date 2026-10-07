@@ -6,7 +6,7 @@
 //   to     where the log goes: 'transcript' (default) or 'debug'
 // A malformed event (a field of the wrong type) throws: the guard's .catch then refuses it.
 
-import { modelFamily, parsePlanLine } from './budget.js'
+import { PROFILES, modelFamily, parsePlanLine } from './budget.js'
 
 // Agent types that inherit the session model when no model is given (Opus by default).
 export const INHERITING_TYPES = ['general-purpose', 'Explore', 'Plan']
@@ -16,6 +16,12 @@ export const LAUNCH_ACTIONS = ['create', 'update', 'run', 'create_webhook_trigge
 
 const PREFIX_WORDS = ['exec', 'nohup', 'time', 'command', 'env', 'sudo', 'npx', 'bunx', 'call', 'xargs']
 
+// claude's own subcommands: they manage the install or local sessions and never start one.
+const MANAGEMENT = [
+  'plugin', 'plugins', 'mcp', 'auth', 'update', 'upgrade', 'agents', 'doctor', 'config', 'attach', 'logs',
+  'stop', 'kill', 'rm', 'respawn', 'install', 'setup-token', 'auto-mode', 'import', 'purge', 'gateway',
+]
+
 // ---------------------------------------------------------------- texts
 
 const TEXTS = {
@@ -23,7 +29,7 @@ const TEXTS = {
     red: 'rosso', yellow: 'giallo', green: 'verde', unknown: 'sconosciuto',
     agentNoModel: 'model-guard: Agent senza modello -> sonnet',
     haiku: 'model-guard: haiku -> sonnet (model-mix non usa l\'alias haiku)',
-    fable: 'model-guard: fable -> opus (Fable solo su Max 20x, budget verde, in primo piano, senza isolamento)',
+    fable: 'model-guard: fable -> opus sugli agenti (un mod non legge la finestra Fable: niente Fable fuori dalla sessione principale)',
     ownModel: t => `model-guard: tipo ${t} senza modello, lasciato al modello della sua definizione`,
     deniedRed: b => `model-guard: lancio bloccato, budget rosso (${budgetBrief(b, 'it')})`,
     deniedPaused: at => `model-guard: lancio bloccato, finestra 5 ore oltre il 90% fino alle ${at}`,
@@ -31,8 +37,10 @@ const TEXTS = {
     resumeRed: b => `model-guard: budget rosso (${budgetBrief(b, 'it')}), ripresa del workflow consentita (lavoro aperto)`,
     unknown: 'model-guard: nessuna lettura del budget ancora, lancio consentito',
     cloudModel: 'model-guard: claude --cloud senza --model -> --model sonnet',
-    cloudNested: 'model-guard: claude --cloud senza --model in uno script annidato, bloccato',
+    localModel: 'model-guard: claude -p/--bg senza --model -> --model sonnet',
+    nested: 'model-guard: lancio di claude senza --model in uno script annidato, bloccato',
     cloudBad: m => `model-guard: sessione cloud con modello ${m} bloccata`,
+    localBad: m => `model-guard: sessione headless con modello ${m} bloccata`,
     launchBad: m => `model-guard: launch.exp con modello ${m} bloccato`,
     wfFable: 'model-guard: agente di workflow su Fable bloccato, va fissato opus',
     wfHaiku: 'model-guard: agente di workflow con alias haiku bloccato, va fissato sonnet',
@@ -47,7 +55,7 @@ const TEXTS = {
     red: 'red', yellow: 'yellow', green: 'green', unknown: 'unknown',
     agentNoModel: 'model-guard: Agent without a model -> sonnet',
     haiku: 'model-guard: haiku -> sonnet (model-mix never uses the haiku alias)',
-    fable: 'model-guard: fable -> opus (Fable only on Max 20x, green budget, foreground, no isolation)',
+    fable: 'model-guard: fable -> opus on agents (a mod cannot read the Fable window: no Fable outside the main session)',
     ownModel: t => `model-guard: type ${t} has no model, left to its definition's model`,
     deniedRed: b => `model-guard: launch blocked, budget red (${budgetBrief(b, 'en')})`,
     deniedPaused: at => `model-guard: launch blocked, 5-hour window past 90% until ${at}`,
@@ -55,8 +63,10 @@ const TEXTS = {
     resumeRed: b => `model-guard: budget red (${budgetBrief(b, 'en')}), workflow resume allowed (open work)`,
     unknown: 'model-guard: no budget reading yet, launch allowed',
     cloudModel: 'model-guard: claude --cloud without --model -> --model sonnet',
-    cloudNested: 'model-guard: claude --cloud without --model inside a nested script, blocked',
+    localModel: 'model-guard: claude -p/--bg without --model -> --model sonnet',
+    nested: 'model-guard: claude launch without --model inside a nested script, blocked',
     cloudBad: m => `model-guard: cloud session on ${m} blocked`,
+    localBad: m => `model-guard: headless session on ${m} blocked`,
     launchBad: m => `model-guard: launch.exp on ${m} blocked`,
     wfFable: 'model-guard: workflow agent on Fable blocked, pin opus',
     wfHaiku: 'model-guard: workflow agent on the haiku alias blocked, pin sonnet',
@@ -126,14 +136,26 @@ export function planFromOption(text) {
   return parsePlanLine(text) || parsePlanLine('Claude plan: ' + text.trim())
 }
 
+// Whether the plan line banks a 5-hour reset still worth redeeming (no expiry, or not expired before today).
+export function fiveHourBanked(plan, now) {
+  if (!plan || !Array.isArray(plan.banked) || typeof now !== 'number') return false
+  const today = new Date(now).toISOString().slice(0, 10)
+  return plan.banked.some(r => r && r.type === '5-hour' && (!r.expires || r.expires >= today))
+}
+
 // ---------------------------------------------------------------- budget gate (rules 4, 5, 8)
 
+// The redeem advice only when it pays (budget.md): a banked weekly reset is counted and weekly use is
+// at or above 100 - reserve. A red caused by pace alone gets no such sentence.
 function redReason(b) {
   const parts = []
   if (typeof b.margin === 'number') parts.push('margin ' + signed(b.margin))
   if (b.weekly) parts.push('weekly ' + Math.round(b.weekly.used) + '% used')
   if (b.weekly && b.weekly.resetsAt) parts.push('weekly reset ' + dateUtc(b.weekly.resetsAt, 'en'))
-  return `Budget red (${parts.join(', ')}): model-guard did not run this launch. Start nothing new; finish open work only (a fix on a worker's own open PR, a final review in this session, merging what is green). If the person has a banked weekly reset, ask them to redeem it (Settings > Usage).`
+  const redeem = !!(b.resets && b.resets.length && b.weekly && b.plan && typeof b.plan.reserve === 'number'
+    && b.weekly.used >= 100 - b.plan.reserve)
+  return `Budget red (${parts.join(', ')}): model-guard did not run this launch. Start nothing new; finish open work only (a fix on a worker's own open PR, a final review in this session, merging what is green).`
+    + (redeem ? ' A banked weekly reset is counted: ask the person to redeem it (Settings > Usage).' : '')
 }
 
 function pausedReason(b) {
@@ -144,12 +166,17 @@ function pausedReason(b) {
     : `The 5-hour window is at ${used}: model-guard paused new launches until it resets. Finish open work meanwhile.`
 }
 
-function pausedGate(b, t) {
+// ctx.fiveHourBanked: the plan line banks a 5-hour reset (budget.md: with a green weekly color, ask
+// the person whether to redeem it instead of pausing; model-guard cannot redeem, so it still pauses).
+function pausedGate(b, t, ctx) {
   const at = b.fiveHour && b.fiveHour.resetsAt ? clockUtc(b.fiveHour.resetsAt) : '?'
-  return { deny: pausedReason(b), log: t.deniedPaused(at) }
+  const ask = b.color === 'green' && ctx && ctx.fiveHourBanked
+    ? ' A 5-hour reset is banked and the weekly color is green: ask the person whether to redeem it (Settings > Usage) instead of waiting.'
+    : ''
+  return { deny: pausedReason(b) + ask, log: t.deniedPaused(at) }
 }
 
-// The gate on new work. ctx: { budget, redPolicy, lang, unknownLogged }
+// The gate on new work. ctx: { budget, redPolicy, lang, unknownLogged, fiveHourBanked?, fableLogged? }
 // An unknown color (no reading yet) always allows, with one line per stretch without a reading:
 // a session that never gets a reading (an API key, say) must not be locked out.
 // Returns { deny, log } | { note, unknownNoted? } | null.
@@ -158,7 +185,7 @@ export function launchGate(ctx) {
   const t = texts(ctx.lang)
   const red = b.color === 'red'
   if (red && ctx.redPolicy !== 'warn') return { deny: redReason(b), log: t.deniedRed(b) }
-  if (b.pausedFiveHour) return pausedGate(b, t)
+  if (b.pausedFiveHour) return pausedGate(b, t, ctx)
   if (red) return { note: t.warnRed(b) }
   if (b.color === 'unknown' && !ctx.unknownLogged) return { note: t.unknown, unknownNoted: true }
   return null
@@ -186,21 +213,29 @@ function optionalString(value, field) {
 
 // ---------------------------------------------------------------- Agent tool (rules 1, 2, 3 + gate)
 
-function fableAllowed(input, b) {
-  return !!(b.plan && b.plan.known && b.plan.name === 'Max 20x' && b.color === 'green'
-    && input.run_in_background === false && !input.isolation)
-}
-
+// Fable never runs on an Agent call: a mod cannot read the Fable window, and budget.md runs no Fable
+// stages when it is not readable. The rewrite is logged to the transcript once (ctx.fableLogged after).
+// isolation 'remote' starts a cloud session: it also needs a cloud slot in today's profile.
 export function decideAgent(input, ctx) {
   const model = optionalString(input.model, 'model')
   const type = optionalString(input.subagent_type, 'subagent_type')
-  optionalString(input.isolation, 'isolation')
+  const isolation = optionalString(input.isolation, 'isolation')
   const t = texts(ctx.lang)
   const gate = launchGate(ctx)
   if (gate && gate.deny) return denied(gate)
+  const p = ctx.budget.profile
+  if (isolation === 'remote' && ctx.budget.color !== 'red' && p && p.cloud === 0) {
+    return {
+      action: 'deny',
+      reason: `Today's profile is ${p.name} (budget ${ctx.budget.color}): no new cloud sessions, and isolation 'remote' starts one. Run the agent locally (leave out isolation: 'remote') or do the work in this session.`,
+      log: t.cloudSolo(p),
+      to: 'transcript',
+    }
+  }
   let next = null
   let line = ''
   let why = ''
+  let fableNoted = false
   if (!model) {
     if (!type || INHERITING_TYPES.includes(type)) {
       next = 'sonnet'
@@ -216,13 +251,19 @@ export function decideAgent(input, ctx) {
     next = 'sonnet'
     line = t.haiku
     why = 'Agent model haiku set to sonnet: model-mix never uses the haiku alias.'
-  } else if (model === 'fable' && !fableAllowed(input, ctx.budget)) {
+  } else if (model === 'fable') {
     next = 'opus'
-    line = t.fable
-    why = 'Agent model fable set to opus: Fable only runs on Max 20x, green budget, foreground, without isolation.'
+    fableNoted = !ctx.fableLogged
+    line = fableNoted ? t.fable : ''
+    why = 'Agent model fable set to opus: model-guard cannot read the Fable window, and budget.md runs no Fable stages when it is not readable.'
   }
   if (!next) return allowWith(gate, 'Agent model kept: ' + model + '.')
   const d = { action: 'rewrite', input: { ...input, model: next }, reason: why, log: joinLogs(gate && gate.note, line), to: 'transcript' }
+  if (!d.log && model === 'fable') {
+    d.log = t.fable
+    d.to = 'debug'
+  }
+  if (fableNoted) d.fableNoted = true
   if (gate && gate.unknownNoted) d.unknownNoted = true
   return d
 }
@@ -239,7 +280,7 @@ export function decideWorkflow(input, ctx) {
   const b = ctx.budget
   const t = texts(ctx.lang)
   if (resume) {
-    if (b.pausedFiveHour) return denied(pausedGate(b, t))
+    if (b.pausedFiveHour) return denied(pausedGate(b, t, ctx))
     const gate = b.color === 'red' ? { note: t.resumeRed(b) } : launchGate(ctx)
     return allowWith(gate, 'Workflow resume allowed: it finishes open work.')
   }
@@ -336,7 +377,10 @@ function hereString(command, i) {
 // here-string (`@'` ... `'@`) is one token holding its body, never split into commands (only a
 // nested `pwsh -Command @'...'@` reads it as a script). Even an unquoted `<<EOF` or `@"` body, which
 // the shell expands, is skipped: a launch hidden in a `$(...)` there is far rarer than commit, PR and
-// brief texts that only mention `claude --cloud`.
+// brief texts that only mention `claude --cloud`. A heredoc inside a `$(...)` inside double quotes
+// (Claude Code's commit and PR idiom `"$(cat <<'EOF' ... EOF\n)"`) is data too: its body stays in the
+// quoted token, and its quotes never close the string.
+// skill-router's routes.js holds a copy of this tokenizer: keep the two identical.
 export function tokenize(command) {
   const segments = [[]]
   let tok = null
@@ -389,13 +433,48 @@ export function tokenize(command) {
       tok.value += command.slice(i + 1, stop)
       i = close < 0 ? command.length : close + 1
     } else if (c === '"') {
+      let subs = 0 // open `$(` inside this string
+      let inner = [] // heredocs opened inside them, waiting for the end of their line
       i++
       while (i < command.length && command[i] !== '"') {
-        if ((command[i] === '\\' || command[i] === '`') && (command[i + 1] === '"' || command[i + 1] === '\\' || command[i + 1] === '`')) {
+        const d = command[i]
+        if (d === '$' && command[i + 1] === '(') {
+          subs++
+          tok.value += '$('
+          i += 2
+          continue
+        }
+        if (d === ')' && subs > 0) subs--
+        if (subs > 0 && d === '<' && command[i + 1] === '<' && command[i + 2] !== '<' && command[i - 1] !== '<') {
+          let j = i + 2
+          const stripTabs = command[j] === '-'
+          if (stripTabs) j++
+          while (command[j] === ' ' || command[j] === '\t') j++
+          const { word, next } = heredocWord(command, j)
+          if (word) inner.push({ word, stripTabs })
+          tok.value += command.slice(i, next)
+          i = next
+          continue
+        }
+        if (d === '\n' && inner.length) {
+          let p = i + 1
+          for (const h of inner) {
+            const end = heredocEnd(command, p, h)
+            if (end < 0) { p = -1; break }
+            p = end
+          }
+          inner = []
+          if (p > 0) {
+            tok.value += command.slice(i, p)
+            i = p
+            continue
+          }
+        }
+        if ((d === '\\' || d === '`') && (command[i + 1] === '"' || command[i + 1] === '\\' || command[i + 1] === '`')) {
           tok.value += command[i + 1]
           i += 2
         } else {
-          tok.value += command[i]
+          tok.value += d
           i++
         }
       }
@@ -441,38 +520,64 @@ const SCRIPT_FLAG = /^(-[a-z]*c|-command|\/c|\/k)$/i
 const REST_SHELLS = /^(pwsh|powershell|cmd)(\.exe)?$/
 const STARTERS = ['start-process', 'start', 'saps']
 
-// The script a nested shell runs (`bash -lc "..."`, `pwsh -Command "..."`, `cmd /c "..."`), else null.
-// For cmd and PowerShell an unquoted script (`cmd /c claude --cloud x`) is the rest of the segment:
-// a synthetic token whose value is that raw text.
-function nestedScript(command, seg, ci) {
+// The scripts a nested shell may run (`bash -lc "..."`, `pwsh -Command "..."`, `cmd /c "..."`), in the
+// order to try, else null. For cmd and PowerShell the script flag takes the rest of the segment: an
+// unquoted script (`cmd /c claude --cloud x`) is that raw text, a synthetic token. A quoted script with
+// more words after it is tried as the quoted text first (`cmd /c "claude --cloud x" 2>&1`, where the
+// rest is the outer shell's redirection), then as the rest of the segment (`cmd /c "claude" --cloud x`).
+function nestedScripts(command, seg, ci) {
   const shell = baseName(seg[ci].value)
   if (!SHELLS.test(shell)) return null
   for (let j = ci + 1; j < seg.length - 1; j++) {
     if (!SCRIPT_FLAG.test(seg[j].value)) continue
-    if (REST_SHELLS.test(shell) && j + 2 < seg.length) {
-      const start = seg[j + 1].start
-      const end = seg[seg.length - 1].end
-      return { value: command.slice(start, end), start, end, synthetic: true }
-    }
-    return seg[j + 1]
+    if (!REST_SHELLS.test(shell) || j + 2 >= seg.length) return [seg[j + 1]]
+    const start = seg[j + 1].start
+    const end = seg[seg.length - 1].end
+    const rest = { value: command.slice(start, end), start, end, synthetic: true }
+    const q = command[start]
+    return q === '"' || q === "'" || q === '@' ? [seg[j + 1], rest] : [rest]
   }
   return null
 }
 
-// `Start-Process claude -ArgumentList '--cloud','task'` (or cmd's `start claude --cloud x`): a cloud
-// launch whose arguments model-guard cannot edit in place, else null.
-function startedCloud(seg, ci) {
+function hasFlag(values, ...names) {
+  return values.some(v => names.includes(v) || names.some(n => v.startsWith(n + '=')))
+}
+
+// What a claude command line starts, from its argument values: 'cloud', 'local' or null.
+//   `--cloud` with `-p`/`--print` (and no `--environment`) only queues a message to an existing cloud
+//   session (`claude -p "<msg>" --cloud <session_id|cse_id|url>`): steering open work, null. Without a
+//   terminal --cloud cannot create a session; `-p --environment <id> --cloud` does, so it stays a launch.
+//   `--cloud` otherwise: a new cloud session.
+//   `-p`/`--print` or `--bg`/`--background` without --cloud: a new local headless session.
+//   A management subcommand (`claude plugin ...`), --version or --help: null.
+export function claudeLaunch(values) {
+  if (hasFlag(values, '--cloud')) return hasFlag(values, '-p', '--print') && !hasFlag(values, '--environment') ? null : 'cloud'
+  if (MANAGEMENT.includes(values[0]) || hasFlag(values, '--version', '-v', '--help', '-h')) return null
+  return hasFlag(values, '-p', '--print', '--bg', '--background') ? 'local' : null
+}
+
+// Start-Process's own parameters, left out of the words claude receives.
+const STARTER_PARAMS = /^-(argumentlist|args|filepath|wait|nonewwindow|passthru|windowstyle|workingdirectory|verb)$/i
+
+// `Start-Process claude -ArgumentList '--cloud','task'` (or cmd's `start claude -p x`): a launch whose
+// arguments model-guard cannot edit in place, else null.
+function startedLaunch(seg, ci) {
   if (!STARTERS.includes(baseName(seg[ci].value))) return null
   const rest = seg.slice(ci + 1)
-  if (!rest.some(a => isClaude(a.value))) return null
+  const at = rest.findIndex(a => isClaude(a.value))
+  if (at < 0) return null
+  const words = rest.slice(at + 1).map(a => a.value).join(' ').split(/[\s,'"]+/).filter(w => w && !STARTER_PARAMS.test(w))
+  const kind = claudeLaunch(words)
+  if (!kind) return null
   const text = rest.map(a => a.value).join(' ')
-  if (!/(^|[\s,'"])--cloud(?![\w-])/.test(text)) return null
   const m = /(?:^|[\s,'"])--model(?:=|[\s,'"]+)([^\s,'"]+)/.exec(text)
-  return { kind: 'cloud', hasModel: /(^|[\s,'"])--model(?![\w-])/.test(text), model: m ? m[1] : null, insertAt: null }
+  return { kind, hasModel: /(^|[\s,'"])--model(?![\w-])/.test(text), model: m ? m[1] : null, insertAt: null }
 }
 
 // The launches a command line holds:
-//   { kind: 'cloud', hasModel, model, insertAt }  for `claude ... --cloud ...`
+//   { kind: 'cloud', hasModel, model, insertAt }  for `claude ... --cloud ...` (not a -p follow-up)
+//   { kind: 'local', hasModel, model, insertAt }  for `claude -p ...`, `claude --bg ...` (headless, local)
 //     (insertAt null when the launch sits inside a nested shell's script that cannot be edited in place)
 //   { kind: 'launchExp', model }                  for `expect .../launch.exp <task> <rules> <log> <model> <effort>`
 // Nested shells (`bash -c "claude --cloud ..."`) are read too, up to 3 levels deep.
@@ -484,31 +589,34 @@ export function scanShell(command, depth = 0) {
     const ci = commandIndex(seg)
     if (ci < 0) continue
     const word = seg[ci]
-    const script = depth < 3 ? nestedScript(command, seg, ci) : null
-    if (script) {
-      const raw = command.slice(script.start, script.end)
-      const quote = !script.synthetic && (raw[0] === '"' || raw[0] === "'") ? raw[0] : ''
-      // Offsets map back only when the script token is the plain text in one pair of quotes (or none).
-      const exact = raw === quote + script.value + quote
-      for (const inner of scanShell(script.value, depth + 1)) {
-        if (inner.kind === 'cloud') {
-          launches.push({ ...inner, insertAt: exact && inner.insertAt !== null ? script.start + quote.length + inner.insertAt : null })
-        } else {
-          launches.push(inner)
+    const scripts = depth < 3 ? nestedScripts(command, seg, ci) : null
+    if (scripts) {
+      for (const script of scripts) {
+        const found = scanShell(script.value, depth + 1)
+        if (!found.length) continue
+        const raw = command.slice(script.start, script.end)
+        const quote = !script.synthetic && (raw[0] === '"' || raw[0] === "'") ? raw[0] : ''
+        // Offsets map back only when the script token is the plain text in one pair of quotes (or none).
+        const exact = raw === quote + script.value + quote
+        for (const inner of found) {
+          if (inner.kind === 'launchExp') launches.push(inner)
+          else launches.push({ ...inner, insertAt: exact && inner.insertAt !== null ? script.start + quote.length + inner.insertAt : null })
         }
+        break
       }
       continue
     }
-    const started = startedCloud(seg, ci)
+    const started = startedLaunch(seg, ci)
     if (started) {
       launches.push(started)
       continue
     }
     if (isClaude(word.value)) {
       const args = seg.slice(ci + 1)
-      if (!args.some(a => a.value === '--cloud' || a.value.startsWith('--cloud='))) continue
+      const kind = claudeLaunch(args.map(a => a.value))
+      if (!kind) continue
       const m = flagValue(args, '--model')
-      launches.push({ kind: 'cloud', hasModel: m.present, model: m.value, insertAt: word.end })
+      launches.push({ kind, hasModel: m.present, model: m.value, insertAt: word.end })
       continue
     }
     let li = -1
@@ -533,14 +641,21 @@ export function forbiddenModel(model) {
   return null
 }
 
+// A claude launch that takes --model on its own command line (cloud or local headless).
+function namesModel(l) {
+  return l.kind === 'cloud' || l.kind === 'local'
+}
+
 export function insertModelFlags(command, launches) {
   let out = command
-  const points = launches.filter(l => l.kind === 'cloud' && !l.hasModel && typeof l.insertAt === 'number').map(l => l.insertAt).sort((a, b) => b - a)
+  const points = launches.filter(l => namesModel(l) && !l.hasModel && typeof l.insertAt === 'number').map(l => l.insertAt).sort((a, b) => b - a)
   for (const at of points) out = out.slice(0, at) + ' --model sonnet' + out.slice(at)
   return out
 }
 
 // launches: scanShell(input.command), computed by the caller before it reads the budget.
+// Cloud, local headless (-p, --bg) and launch.exp launches all pass the gate (red, paused) and the
+// model check; only cloud ones (and launch.exp) need a cloud slot in today's profile.
 export function decideShell(input, ctx, launches) {
   const found = launches || scanShell(input.command)
   if (!found.length) return { action: 'allow', reason: 'No launch in this command.', log: '' }
@@ -550,11 +665,20 @@ export function decideShell(input, ctx, launches) {
   for (const l of found) {
     const bad = forbiddenModel(l.model)
     if (!bad) continue
+    const name = bad === 'fable' ? 'Fable' : 'the haiku alias'
     if (l.kind === 'cloud') {
       return {
         action: 'deny',
-        reason: `Cloud sessions never run ${bad === 'fable' ? 'Fable' : 'the haiku alias'} (model-mix): use --model sonnet, or --model opus for security-critical work.`,
+        reason: `Cloud sessions never run ${name} (model-mix): use --model sonnet, or --model opus for security-critical work.`,
         log: t.cloudBad(bad),
+        to: 'transcript',
+      }
+    }
+    if (l.kind === 'local') {
+      return {
+        action: 'deny',
+        reason: `Headless and background sessions (claude -p, --bg) never run ${name} (model-mix): use --model sonnet, or --model opus for security-critical work.`,
+        log: t.localBad(bad),
         to: 'transcript',
       }
     }
@@ -568,34 +692,35 @@ export function decideShell(input, ctx, launches) {
   // Yellow steps the profile down with its cloud-session column: Solo (Pro yellow) allows no new ones.
   // Red is the gate's (with redPolicy warn it only flags); model-guard cannot count running sessions.
   const p = ctx.budget.profile
-  if (ctx.budget.color !== 'red' && p && p.cloud === 0) {
+  if (ctx.budget.color !== 'red' && p && p.cloud === 0 && found.some(l => l.kind === 'cloud' || l.kind === 'launchExp')) {
     return {
       action: 'deny',
-      reason: `Today's profile is ${p.name} (budget ${ctx.budget.color}): no new cloud sessions. Do the work in this session; finishing open work (a fix message to a worker on its own open PR) continues.`,
+      reason: `Today's profile is ${p.name} (budget ${ctx.budget.color}): no new cloud sessions. Do the work in this session; finishing open work (a fix message to a worker on its own open PR, claude -p "<msg>" --cloud <session>) continues.`,
       log: t.cloudSolo(p),
       to: 'transcript',
     }
   }
-  if (found.some(l => l.kind === 'cloud' && !l.hasModel && l.insertAt === null)) {
+  if (found.some(l => namesModel(l) && !l.hasModel && l.insertAt === null)) {
     return {
       action: 'deny',
-      reason: 'This command starts claude --cloud inside a nested shell script (or Start-Process) without --model, and model-guard cannot add it there. Run it again with --model sonnet (or --model opus for security-critical work) on that claude command.',
-      log: t.cloudNested,
+      reason: 'This command starts claude (--cloud, -p or --bg) inside a nested shell script (or Start-Process) without --model, and model-guard cannot add it there. Run it again with --model sonnet (or --model opus for security-critical work) on that claude command.',
+      log: t.nested,
       to: 'transcript',
     }
   }
-  if (found.some(l => l.kind === 'cloud' && !l.hasModel)) {
+  const unnamed = found.filter(l => namesModel(l) && !l.hasModel)
+  if (unnamed.length) {
     const d = {
       action: 'rewrite',
       input: { ...input, command: insertModelFlags(input.command, found) },
-      reason: 'Added --model sonnet to claude --cloud: model-mix names the model on every cloud session.',
-      log: joinLogs(gate && gate.note, t.cloudModel),
+      reason: 'Added --model sonnet to each claude launch without one (--cloud, -p or --bg): model-mix names the model on every delegated session.',
+      log: joinLogs(gate && gate.note, unnamed.some(l => l.kind === 'cloud') && t.cloudModel, unnamed.some(l => l.kind === 'local') && t.localModel),
       to: 'transcript',
     }
     if (gate && gate.unknownNoted) d.unknownNoted = true
     return d
   }
-  return allowWith(gate, 'Cloud launch allowed.')
+  return allowWith(gate, 'Launch allowed.')
 }
 
 // ---------------------------------------------------------------- workflow agents at agent.spawn (rules 3, 6)
@@ -623,7 +748,11 @@ export function decideWorkflowAgent(input, ctx, run) {
   const known = !!(run && run.admitted instanceof Set && typeof run.width === 'number')
   // A run first seen while its width is above 0 has started: record it even when this agent is refused
   // for its model, so its other agents keep that width if the budget turns red meanwhile.
-  const startRun = known ? undefined : { width: today.width, name: today.name }
+  // A run admitted while red under redPolicy warn (today's width 0) records the plan's own width, so it
+  // is not cut off at 0 once the budget leaves red.
+  const warnAdmits = b.color === 'red' && ctx.redPolicy === 'warn' && today.width === 0
+  const base = warnAdmits && b.plan && PROFILES[b.plan.name] ? PROFILES[b.plan.name] : today
+  const startRun = known ? undefined : { width: base.width, name: base.name }
   const withRun = d => (startRun && (d.admit || today.width > 0) ? { ...d, startRun } : d)
   if (modelFamily(effective) === 'fable') {
     return withRun({

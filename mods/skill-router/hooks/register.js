@@ -1,8 +1,10 @@
 // skill-router: the right skill loads at the right moment, by deterministic rules and no model call.
-//   1. Tracks the skills loaded this session (skill.prompt, the Skill tool, slash-command expansion).
+//   1. Tracks the skills the main conversation loaded (the Skill tool, slash-command expansion, and
+//      the transcript after a resume or fork); skills a subagent loads stay in the subagent.
 //   2. Knows which skills exist ($.command.list() at session start).
 //   3. On the person's prompts, adds one hidden English line naming the matching skills not loaded yet.
-//   4. Holds a launch, a merge or a mod edit once until its prerequisite skills are loaded.
+//   4. Holds a launch, a merge or a mod edit of the main conversation once until its prerequisite
+//      skills are loaded; subagents' calls pass and leave the gates armed.
 // The only module that touches `$`; the route table and every decision live in routes.js.
 
 import {
@@ -18,19 +20,53 @@ const memo = {
   suggestedAt: new Map(),   // skill -> number of the person's prompt it was last suggested on
   prompts: 0,               // the person's prompts in this conversation
   fired: new Set(),         // gate keys that already held a call
+  generation: 0,            // bumped on every new conversation
+  rescan: false,            // the transcript may hold skills loaded before this process or conversation
+  rescanning: null,         // the running or finished rebuild
 }
 
-// A new conversation (/clear, /resume, a fork) starts with nothing loaded, suggested or held.
+// A new conversation (/clear, /resume, a fork) starts with nothing suggested or held; /resume and a
+// fork then rebuild what is loaded from their transcript (rescan), /clear starts with nothing loaded.
 function resetConversation() {
   memo.loaded = new Set()
   memo.suggestedAt = new Map()
   memo.prompts = 0
   memo.fired = new Set()
+  memo.generation++
 }
 
 function markLoaded(name) {
   const tail = skillTail(name)
   if (tail) memo.loaded.add(tail)
+}
+
+// The skills the main conversation's transcript already loaded: Skill tool uses that did not fail,
+// and slash commands the person typed. Read lazily, at the first prompt or gate after the flag is
+// set, so a transcript that is not readable yet when the session starts is still read.
+async function rebuildLoaded($) {
+  const generation = memo.generation
+  try {
+    const messages = await $.session.messages()
+    if (!Array.isArray(messages) || generation !== memo.generation) return
+    for (const m of messages) {
+      if (!m) continue
+      for (const u of Array.isArray(m.toolUses) ? m.toolUses : []) {
+        if (u && u.tool === 'Skill' && u.isError !== true && u.input && typeof u.input.skill === 'string') markLoaded(u.input.skill)
+      }
+      if (m.role === 'user' && typeof m.text === 'string') {
+        for (const x of m.text.matchAll(/<command-name>\/?([^<\s]+)<\/command-name>/g)) markLoaded(x[1])
+      }
+    }
+  } catch {}
+}
+
+// Starts the rebuild once per flag; parallel callers await the same one, so none decides early.
+function rescanLoaded($) {
+  if (memo.rescan) {
+    memo.rescan = false
+    memo.rescanning = rebuildLoaded($)
+  }
+  return memo.rescanning
 }
 
 // At most 3 tries per process: a failing list, or one naming no routed skill, leaves `installed` unknown.
@@ -91,30 +127,35 @@ export function register(on, options) {
 
   // ------------------------------------------------ observers: they record and pass on unchanged
 
+  // A process started with --resume or --continue holds a transcript from its first moment: read it
+  // once (on a fresh start the read finds nothing).
   on('session.start', async ($, e, next) => {
+    memo.rescan = true
     const result = await next(e)
     await refreshInstalled($)
     return result
   }).catch(passOn)
 
   on('classic.SessionStart', async ($, e, next) => {
-    if (e.source === 'clear' || e.source === 'resume' || e.source === 'fork') resetConversation()
+    if (e.source === 'clear') resetConversation()
+    else if (e.source === 'resume' || e.source === 'fork') {
+      resetConversation()
+      memo.rescan = true
+    }
     return next(e)
   }).catch(passOn)
 
-  on('skill.prompt', async ($, e, next) => {
-    markLoaded(e.skill)
-    return next(e)
-  }).catch(passOn)
-
+  // Only the main conversation's loads count (no agentId), and only a call that ran: an error or a
+  // deny from a hook beneath loaded nothing. skill.prompt is not read: it fires for subagents and
+  // preloads too, without saying whose loop it is.
   on('tool.call', { tool: 'Skill' }, async ($, e, next) => {
     const result = await next(e)
-    if (!(result && result.isError)) markLoaded(e.skill)
+    if (e.agentId === undefined && result && !result.isError && typeof result.deny !== 'string') markLoaded(e.skill)
     return result
   }).catch(passOn)
 
   on('classic.UserPromptExpansion', async ($, e, next) => {
-    if (e.expansion_type !== 'mcp_prompt') markLoaded(e.command_name)
+    if (e.agent_id === undefined && e.expansion_type !== 'mcp_prompt') markLoaded(e.command_name)
     return next(e)
   }).catch(passOn)
 
@@ -127,6 +168,7 @@ export function register(on, options) {
       if (typeof e.text !== 'string') throw new TypeError('prompt text is not text')
       memo.prompts++
       await refreshInstalled($)
+      await rescanLoaded($)
       const picks = pickSuggestions({
         text: e.text,
         installed: memo.installed,
@@ -147,27 +189,40 @@ export function register(on, options) {
   if (config.gate !== 'off') {
     // These gates are workflow nudges, not security guards: each holds a call at most once per
     // session per requirement, the retry always passes, and a gate that fails lets the call through
-    // (.catch passes on with next(e) instead of refusing).
+    // (.catch passes on with next(e) instead of refusing). They read only the main conversation's
+    // calls: a subagent's or workflow agent's (agentId set) passes and spends no gate.
 
     on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
+      if (e.agentId !== undefined) return next(e)
       const resume = e.resumeFromRunId
       if (resume !== undefined && resume !== null) {
         if (typeof resume !== 'string') throw new TypeError('resumeFromRunId is not text')
         return next(e) // resuming finishes open work: nothing to hold
       }
+      await rescanLoaded($)
       return hold($, e, next, ['workflow'])
     }).catch(passOn)
 
-    on('tool.call', { tool: 'Agent' }, async ($, e, next) => hold($, e, next, ['agent'])).catch(passOn)
+    on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+      if (e.agentId !== undefined) return next(e)
+      await rescanLoaded($)
+      return hold($, e, next, ['agent'])
+    }).catch(passOn)
 
-    on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+    // Every tool that runs a shell command; a Monitor watch without a command (a WebSocket) passes.
+    on('tool.call', { tool: ['Bash', 'PowerShell', 'Monitor'] }, async ($, e, next) => {
+      if (e.agentId !== undefined) return next(e)
+      if (e.tool === 'Monitor' && (e.command === undefined || e.command === null)) return next(e)
       const keys = shellGates(e.command)
       if (!keys.length) return next(e)
+      await rescanLoaded($)
       return hold($, e, next, keys)
     }).catch(passOn)
 
     on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
+      if (e.agentId !== undefined) return next(e)
       const keys = writeGates(e)
+      await rescanLoaded($)
       // No file system call unless a gate could still fire.
       if (!gateCheck(keys, memo)) return next(e)
       if (!(await inMod($, e.file_path))) return next(e)
