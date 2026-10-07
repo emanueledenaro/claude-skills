@@ -1,0 +1,47 @@
+{
+  "name": "coordinator-lens",
+  "version": "0.1.0",
+  "description": "Makes the coordinator's work visible and calm: budget color and pace, workers, merges, the round, the skill flow, night mode and decisions, in a band above the prompt, a /coord pane and card, and a few toasts. It observes only and spends nothing.",
+  "author": { "name": "Emanuele Denaro" },
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the text you see (the text the model reads is always English).",
+      "required": false,
+      "default": "it",
+      "options": ["it", "en"]
+    },
+    "planLine": {
+      "type": "string",
+      "title": "Plan line",
+      "description": "Fallback for the 'Claude plan:' line of your CLAUDE.md, for example: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22. Leave empty to read it from CLAUDE.md.",
+      "required": false,
+      "default": ""
+    },
+    "prPolling": {
+      "type": "string",
+      "title": "Pull request polling",
+      "description": "Run `gh pr list` every 5 minutes to show open pull requests and their checks.",
+      "required": false,
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "stalledMinutes": {
+      "type": "string",
+      "title": "Stalled after (minutes)",
+      "description": "A running agent or workflow with no activity for this long is shown as stalled.",
+      "required": false,
+      "default": "10",
+      "options": ["5", "10", "20", "30"]
+    },
+    "contextLine": {
+      "type": "string",
+      "title": "Budget line for the model",
+      "description": "Add one hidden budget line to a prompt when the color, profile, 5-hour pause or weekly 5-point bucket changed.",
+      "required": false,
+      "default": "on",
+      "options": ["on", "off"]
+    }
+  }
+}
