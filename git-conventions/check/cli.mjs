@@ -54,7 +54,7 @@ function readCommits(base, head) {
   return log.split('\0').filter((record) => record !== '').map((record) => {
     const [sha, parents, ...body] = record.split(FIELD_SEPARATOR);
     // A commit in history has no comment lines: a first line starting with # is its subject.
-    const subject = firstMessageLine(body.join(FIELD_SEPARATOR), { commentChar: null });
+    const subject = firstMessageLine(body.join(FIELD_SEPARATOR), { commentMarker: null });
     return { sha, parents: parents.split(' ').filter(Boolean), subject: subject ?? '' };
   });
 }
@@ -127,7 +127,7 @@ function commentMarker() {
   const configured = gitOutput(['config', '--get-regexp', '^core[.]comment(char|string)$']);
   const lastLine = configured?.split('\n').at(-1) ?? '';
   const value = lastLine.includes(' ') ? lastLine.slice(lastLine.indexOf(' ') + 1) : '';
-  return value === '' || value === 'auto' ? '#' : value;
+  return value === '' || value.toLowerCase() === 'auto' ? '#' : value;
 }
 
 function isMergeInProgress() {
@@ -151,7 +151,7 @@ function commitMsg(args) {
   } catch (error) {
     return usageError(`cannot read ${files[0]}: ${error.message}`);
   }
-  const line = firstMessageLine(text, { commentChar: commentMarker() });
+  const line = firstMessageLine(text, { commentMarker: commentMarker() });
   if (line === null) {
     err('commit message is empty. expected a first line <type>[(scope)][!]: <description>');
     return 1;

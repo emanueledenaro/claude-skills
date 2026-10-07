@@ -193,6 +193,8 @@ describe('commit-msg command', () => {
     assert.match(notComment.err, /commit subject "# not a comment here"/);
     repo.git('config', 'core.commentChar', 'auto');
     assert.equal(runCommitMsg(repo, '# a comment\nfeat: add a thing\n').code, 0);
+    repo.git('config', 'core.commentChar', 'AUTO');
+    assert.equal(runCommitMsg(repo, '# a comment\nfeat: add a thing\n').code, 0);
   });
 
   it('honors core.commentString, and the last of commentChar and commentString wins', () => {

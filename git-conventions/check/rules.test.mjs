@@ -285,7 +285,7 @@ describe('commit message files', () => {
     const verbose = `\n${scissors}\n# Do not modify or remove the line above.\ndiff --git a/x b/x\n+feat: not a subject\n`;
     assert.equal(firstMessageLine(verbose), null);
     assert.equal(firstMessageLine(`feat: one\n\n${scissors}\ndiff --git a/x b/x\n`), 'feat: one');
-    assert.equal(firstMessageLine(`;${scissors.slice(1)}\nfeat: x\n`, { commentChar: ';' }), null);
+    assert.equal(firstMessageLine(`;${scissors.slice(1)}\nfeat: x\n`, { commentMarker: ';' }), null);
   });
 
   it('keeps a leading UTF-8 byte order mark, as git stores it in the message', () => {
@@ -295,9 +295,9 @@ describe('commit message files', () => {
   });
 
   it('honors another comment character, and none with null', () => {
-    assert.equal(firstMessageLine(';comment\nfeat: one', { commentChar: ';' }), 'feat: one');
-    assert.equal(firstMessageLine('# not a comment here\nfeat: one', { commentChar: ';' }), '# not a comment here');
-    assert.equal(firstMessageLine('# note\nfeat: one', { commentChar: null }), '# note');
+    assert.equal(firstMessageLine(';comment\nfeat: one', { commentMarker: ';' }), 'feat: one');
+    assert.equal(firstMessageLine('# not a comment here\nfeat: one', { commentMarker: ';' }), '# not a comment here');
+    assert.equal(firstMessageLine('# note\nfeat: one', { commentMarker: null }), '# note');
   });
 
   it('takes the first line that is not blank or a comment', () => {

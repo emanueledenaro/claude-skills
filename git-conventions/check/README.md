@@ -6,7 +6,7 @@ A validator for the rules in `../SKILL.md`: commit subjects, branch names and PR
 
 1. Copy this folder into the project (keep `.gitattributes`, it keeps the scripts on LF), or call it where it is installed (`~/.claude/skills/git-conventions/check`). Below, `<path>` is that folder.
 2. Check every commit message as it is written:
-   - Run `git config --get core.hooksPath` first, and look for hooks other than `*.sample` in `.git/hooks`: setting `core.hooksPath` replaces both a hooks path already set (husky) and `.git/hooks`, where lefthook and pre-commit install their hooks. With an existing hook manager, skip the next line and call `node <path>/cli.mjs commit-msg "$1"` from its commit-msg hook instead.
+   - Run `git config --get core.hooksPath` first, and look for hooks other than `*.sample` in `$(git rev-parse --git-path hooks)` (`.git/hooks`, or the main checkout's in a linked worktree): setting `core.hooksPath` replaces both a hooks path already set (husky) and that folder, where lefthook and pre-commit install their hooks. With an existing hook manager, skip the next line and call `node <path>/cli.mjs commit-msg "$1"` from its commit-msg hook instead.
    - `git config core.hooksPath <path>/hooks`
    - On Linux and macOS: `chmod +x <path>/hooks/commit-msg`
    - A relative path is read from the project root. The hook runs `../cli.mjs`, so copying only `commit-msg` into `.git/hooks` stops every commit with a message saying so.
@@ -34,6 +34,7 @@ Exit 0 when valid, 1 with the messages when not, 2 on a usage error (unknown com
 - It cannot tell which branch a commit lands on, so it does not check the `(#N)` suffix of the merge subject on the main branch. That stays with whoever merges: `gh pr merge N --merge --subject "<PR title> (#N)"`.
 - An octopus merge (`Merge branches 'main' and 'develop' into x`) is not accepted as git writes it: give it a conventional subject.
 - The amended-merge rule compares subjects, so a new commit made right after a merge with the merge's own default subject (`git commit -C HEAD`, say) passes the hook too. `commit-range` still fails it.
+- With `-m` or `-F` and no editor, git keeps comment lines in the message, while the hook skips them as an editor session would. A message whose first line is a comment can pass the hook and then fail `commit-range`: run `commit-range` before pushing.
 
 ## Test it
 

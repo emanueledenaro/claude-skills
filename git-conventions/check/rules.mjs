@@ -211,12 +211,12 @@ export function checkBranchName(name) {
  * for none) and ignores everything from the scissors line that "git commit -v" writes. A leading
  * byte order mark stays: git keeps it in the stored message, and checkCommitSubject rejects it.
  */
-export function firstMessageLine(text, { commentChar = '#' } = {}) {
+export function firstMessageLine(text, { commentMarker = '#' } = {}) {
   const lines = String(text).split('\n').map(withoutCarriageReturn);
-  const hasComments = commentChar !== null;
-  const scissorsAt = hasComments ? lines.indexOf(`${commentChar}${SCISSORS}`) : -1;
+  const hasComments = commentMarker !== null;
+  const scissorsAt = hasComments ? lines.indexOf(`${commentMarker}${SCISSORS}`) : -1;
   const message = scissorsAt === -1 ? lines : lines.slice(0, scissorsAt);
   const isBlank = (line) => /^[ \t]*$/.test(line);
-  const isComment = (line) => hasComments && line.startsWith(commentChar);
+  const isComment = (line) => hasComments && line.startsWith(commentMarker);
   return message.find((line) => !isBlank(line) && !isComment(line)) ?? null;
 }
