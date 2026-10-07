@@ -15,7 +15,7 @@ Source: Claude Code skills page and the Agent Skills overview. Claude Code makes
 | `user-invocable` | `false`: hidden from the `/` menu, Claude-only, description still in context | Saves no listing tokens |
 | `allowed-tools` | Pre-approves tools for this turn only; it does not restrict | Narrow patterns. A broad `Bash` grant skips prompts for every command: finding |
 | `disallowed-tools` | Listed in the frontmatter reference | Behavior not checked here |
-| `model`, `effort` | Override; with `context: fork`, `model` sets the subagent's model. `effort`: low, medium, high, xhigh, max | Per `model-mix`: a full model ID, never the `haiku` alias, never Fable on delegated work |
+| `model`, `effort` | Override; with `context: fork`, `model` sets the subagent's model. `effort`: low, medium, high, xhigh, max | Per `model-mix`: `haiku`, `sonnet` or `opus` (`haiku` is Haiku 5.5 only from Claude Code v2.1.293), never Fable on delegated work |
 | `context: fork` | Runs in an isolated subagent that gets the skill text as its prompt and no conversation history. Its edits sit outside checkpoints, so `/rewind` does not undo them | Only for skills with explicit task instructions, never reference-only skills |
 | `agent` | With fork: `Explore`, `Plan` or `general-purpose` | Matches the task |
 | `background` | Fork only, default true, v2.1.218+ | A fork runs blocking in the foreground under `-p`, the Agent SDK, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` and scheduled-task firing; a background fork gets the narrower background tool set |

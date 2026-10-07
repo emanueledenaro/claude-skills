@@ -55,13 +55,13 @@ All of these are the person's configuration: propose, do not set (`update-config
 | Goal | Setting |
 | --- | --- |
 | Lower the auto-compact window | `/autocompact 500k`, `--autocompact <auto\|tokens>`, `autoCompactWindow`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k to 1M); the env var beats the others; since v2.1.288 the command saves the window per model |
-| Hold sessions to 200K | `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`. Sonnet 5.5 and Opus 5.5 are native 1M with no price premium, but every turn still resends the history |
+| Hold sessions to 200K | `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`. Sonnet 5.5 and Opus 5.5 are native 1M with no price premium; Haiku 5.5 is 1M but costs 5× per token past 100K. Every turn still resends the history |
 | Drop MCP | `/mcp`, `disabledMcpServers`, `claude mcp remove`, `disableClaudeAiConnectors` or `ENABLE_CLAUDEAI_MCP_SERVERS=false` |
 | Tool search | `ENABLE_TOOL_SEARCH=false` turns deferral off; a non-first-party `ANTHROPIC_BASE_URL` turns it off unless `ENABLE_TOOL_SEARCH=true` and the proxy forwards `tool_reference` blocks |
 | Cap MCP output | `MAX_MCP_OUTPUT_TOKENS` (default 25,000, warning at 10,000, text over 50,000 characters goes to disk) |
 | Skill listing | `disable-model-invocation: true` (also stops preloading into subagents and a scheduled task running the skill); `skillOverrides` values `on`, `name-only`, `user-invocable-only`, `off`, matched by skill name; plugin skills are not covered, use `/plugin`; `/skills` cycles the state |
 | Subagent model | Order: per-call `model`, frontmatter, `CLAUDE_CODE_SUBAGENT_MODEL`, main model. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` (v2.1.257+) makes the variable win (`model-mix`) |
-| Thinking spend | Thinking cannot be switched off on Opus 5.5 and Sonnet 5.5; lowering effort is the lever |
+| Thinking spend | Thinking cannot be switched off on Opus 5.5, Sonnet 5.5 and Haiku 5.5; lowering effort is the lever |
 
 ## Compact templates
 

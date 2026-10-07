@@ -45,6 +45,8 @@ Verified: Desktop keeps its own copy at `%APPDATA%\Claude\claude-code\<version>\
 Get-ChildItem "$env:APPDATA\Claude\claude-code" -Directory | Sort-Object { [version]$_.Name } | Select-Object -Last 1 | ForEach-Object { & "$($_.FullName)\claude.exe" --version }
 ```
 
+macOS (verified 2026-10-07): `ls ~/Library/Application\ Support/Claude/claude-code/` lists one folder per version (`2.1.293`); inside it is a hashed folder, not a `claude` binary, so take the version from the folder name.
+
 Git Bash: `ls "$APPDATA/Claude/claude-code/"`, then run the newest `claude.exe --version`. The pipeline above was not run as written; the folder listing and the `--version` call were.
 
 - The bundle is usually older than the CLI. List the CHANGELOG sections between the two versions and name the fixes it lacks (Windows, `/loop`, background wakeups).
@@ -56,7 +58,7 @@ Git Bash: `ls "$APPDATA/Claude/claude-code/"`, then run the newest `claude.exe -
 - Overview: `https://platform.claude.com/docs/en/about-claude/models/overview` (canonical path moved to `/docs/en/models/overview`). New models appear as table columns.
 - Deprecations: `https://platform.claude.com/docs/en/about-claude/model-deprecations`. It has a `Model status` table and dated `### YYYY-MM-DD: ...` history headings. Some active models are in this table only, not in the overview columns: parse both.
 - Retirement needs at least 60 days' notice, and a "not sooner than" date is only a floor. A model with no deprecation entry cannot be retired within 60 days of today (inference from the notice rule).
-- Alias warning: the docs do not say which version an alias such as `haiku` points to; compare full ids.
+- Aliases: the Claude Code model-config page (`https://code.claude.com/docs/en/model-config`) has a table of what `opus`, `sonnet` and `haiku` resolve to per provider, and the minimum Claude Code version for each new model. Diff it with the ids; on 2026-10-07 `haiku` is Haiku 5.5 on the Anthropic API from v2.1.293 and Haiku 4.5 elsewhere.
 - Fetch and hash: unverified. `curl` was blocked in the research session, so plain fetch and the stability of these pages' hashes were not tested. Calibrate as in `SKILL.md` section 3.
 
 Git Bash:
@@ -106,10 +108,10 @@ Which skill holds the line a change probably touches. Find the line with `grep -
 
 | Change | Look in |
 | --- | --- |
-| New or retiring model, Haiku 5.x | `model-mix/SKILL.md` Models table and the Haiku bullet; model ids anywhere else |
+| New or retiring model, an alias that resolves to another model | `model-mix/SKILL.md` Models table and the Haiku 5.5 bullets; model ids anywhere else |
 | 5-hour, weekly or reset rules, plan ratios | `model-mix/SKILL.md` Plan profiles; `model-mix/budget.md` Overrides |
 | Routine or scheduled-task limits | `overnight`, `cloud-worker`, and `model-mix` routine bullet |
-| Version floors, mods API | `smart-mods` section 2 and 3; `mod-ui` |
+| Version floors, mods API | `smart-mods/SKILL.md` sections 2, 3 and 6, `smart-mods/writing.md`, `smart-mods/testing.md`, `smart-mods/vetting.md`; `mod-ui` |
 | Windows fixes now in the bundle | `windows-ops`; `overnight` (runtime choice) |
 | `--cloud`, `--ref`, `--on-branch`, `/model` in cloud sessions | `cloud-worker`; `model-mix` Cloud session bullet; `coordinator-method` launch recipe |
 | Skill listing, frontmatter fields, audit commands | `skill-audit`; `context-hygiene` |
