@@ -2,15 +2,17 @@
 # git-conventions commit-msg hook: checks the first non-comment line of the message.
 # Enable it with: git config core.hooksPath <path to this folder>
 # On Linux and macOS the file needs the executable bit: chmod +x <path>/commit-msg
+# GIT_CONVENTIONS_NODE names the node binary when it is not "node" on the PATH.
 here=$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd) || exit 1
-if ! command -v node >/dev/null 2>&1; then
+cli="$here/../cli.mjs"
+if [ ! -f "$cli" ]; then
+  echo "git-conventions: cli.mjs not found next to $here; enable the hook with git config core.hooksPath <check>/hooks" >&2
+  exit 1
+fi
+node_bin=${GIT_CONVENTIONS_NODE:-node}
+if ! command -v "$node_bin" >/dev/null 2>&1; then
   echo "git-conventions: node not found, commit message not checked" >&2
   exit 0
 fi
-merge=""
-merge_head=$(git rev-parse --git-path MERGE_HEAD 2>/dev/null) || merge_head=""
-if [ -n "$merge_head" ] && [ -f "$merge_head" ]; then
-  merge="--merge"
-fi
-# $merge is empty or one flag, so it stays unquoted
-exec node "$here/../cli.mjs" commit-msg "$1" $merge
+# The CLI sees a merge in progress or an amended merge commit by itself.
+exec "$node_bin" "$cli" commit-msg "$1"
