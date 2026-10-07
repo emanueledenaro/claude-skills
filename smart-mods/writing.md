@@ -39,8 +39,8 @@ Read this from `SKILL.md` sections 2 and 3 when you create the manifest, run a p
 ## Model calls
 
 - `$.model.complete`, `$.model.classify`, `$.model.fork` and `$.agent.spawn` spend the person's plan or API key, shared with everything in `model-mix`.
-- Pass `model` to `$.model.complete`, `$.model.classify` and `$.agent.spawn`, set to the model the `model-mix` table gives for the job (Sonnet for sorting or summarizing text), and give `$.model.complete` a low `maxTokens` (default 1024) and `effort: 'low'` for a label.
-- Never pass the `haiku` alias the docs' examples use, never pass Fable, and never omit `model`: `$.model.classify` without it uses the engine's small fast model, and `$.agent.spawn` without it runs on the agent's own model or the session's.
+- Pass `model` to `$.model.complete`, `$.model.classify` and `$.agent.spawn`, set to the model the `model-mix` table gives for the job (Haiku for sorting, classifying or summarizing short text, Sonnet when the text runs past 100K tokens), and give `$.model.complete` a low `maxTokens` (default 1024) and `effort: 'low'` for a label.
+- Pass `haiku` only as `model-mix` allows it (Claude Code v2.1.293 or later, Anthropic API), never pass Fable, and never omit `model`: `$.model.classify` without it uses the engine's small fast model, and `$.agent.spawn` without it runs on the agent's own model or the session's.
 - `$.model.fork` takes only `prompt` and always runs on the session's model, so call it only from a command the person runs.
 - Call a model only from a command, a button or a timer with a capped count, never from hooks that fire on every event (`tool.call`, `tool.check`, `turn.step`, `ui.render`, `session.append`, `prompt.edit`).
 - A `turn.step` or `agent.spawn` hook that sets `model` or `effort` follows `model-mix` too: it may move work down to the row `model-mix` gives, never above it and never to Fable, unless the person asked for exactly that.

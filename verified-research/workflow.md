@@ -77,7 +77,7 @@ export const meta = {
   name: 'verified-research',
   description: 'Read, verify and critique claims per research area',
   phases: [
-    { title: 'Read and verify', detail: 'Sonnet reader then Opus verifier per area' },
+    { title: 'Read and verify', detail: 'Haiku reader then Opus verifier per area' },
     { title: 'Critic', detail: 'Opus completeness critic' },
   ],
 }
@@ -121,7 +121,7 @@ const verifyArea = async (c, a) => {
 phase('Read and verify')
 const verified = (await pipeline(
   areas,
-  (a) => agent(readerPrompt(a), { label: 'read ' + a.name, phase: 'Read and verify', schema: CLAIMS, model: 'sonnet', effort: 'medium' }),
+  (a) => agent(readerPrompt(a), { label: 'read ' + a.name, phase: 'Read and verify', schema: CLAIMS, model: 'haiku', effort: 'medium' }),
   verifyArea,
 )).filter(Boolean)
 log(`${verified.length}/${areas.length} areas verified`)
@@ -148,7 +148,7 @@ Notes on the skeleton:
 ## Report footer
 
 ```
-fleet: 4 readers (Sonnet medium) + 4 verifiers (Opus high) + 1 critic (Opus high)
+fleet: 4 readers (Haiku medium) + 4 verifiers (Opus high) + 1 critic (Opus high)
 weekly points: <after> - <before> = N (five-hour: M)
 facts read on: <today>
 not covered: <dropped areas, unreadable sources>
