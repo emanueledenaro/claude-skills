@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   GATES, LISTED_ONLY, ROUTES, ancestorDirs, contextLine, gateCheck, gateLog, isPersonOrigin, isUnder, joinPath,
   leadingCommand, logLine, matchRoutes, namesFrom, normalize, pickSuggestions, samePath, shellGates, skillTail,
-  tokenize, trustedList, writeGates,
+  tokenize, tokenizeFull, trustedList, writeGates,
 } from '../hooks/routes.js'
 
 // Italian and English prompts each route must catch.
@@ -469,5 +469,182 @@ describe('indirect launches: claude run by Start-Process or cmd start is a cloud
       'Start-Process code D:\\Progetti\\claude',
       'start "" notepad claude',
     ]) expect(shellGates(c), c).toEqual([])
+  })
+})
+
+describe('shell commands: continuations, wrappers, positions and nested scripts (as model-guard reads them)', () => {
+  test('a launch broken over lines (backslash, backtick, backtick-CRLF) is held', () => {
+    for (const c of ['claude \\\n  --cloud "fix the bug"', 'claude `\n --cloud "x"', 'claude `\r\n --cloud "x"']) expect(shellGates(c), c).toEqual(['cloud'])
+    expect(shellGates('claude -p "address the review" \\\n  --cloud cse_123')).toEqual([])
+  })
+
+  test('a cloud launch or a PR merge behind a wrapper, in a loop or if body, a brace group or a script block is held', () => {
+    for (const c of [
+      'timeout 600 claude --cloud "x"', 'caffeinate -is claude --cloud x', 'nice -n 5 claude --cloud x', 'env -u FOO claude --cloud x',
+      'env -i claude --cloud x', 'sudo -u x claude --cloud x', 'sudo -E claude --cloud x', 'xargs -I{} claude --cloud {}', 'watch -n 9 claude --cloud x',
+      'setsid claude --cloud x', 'stdbuf -oL claude --cloud x', 'command claude --cloud x', 'exec claude --cloud x',
+      'if true; then claude --cloud "x"; fi', '{ claude --cloud "x"; }', 'for t in a b; do claude --cloud "$t"; done',
+      '1..3 | ForEach-Object { claude --cloud "t $_" }', 'npx -y @anthropic-ai/claude-code --cloud x',
+    ]) expect(shellGates(c), c).toEqual(['cloud'])
+    for (const c of [
+      'if true; then gh pr merge 3 --squash; fi', 'for p in 1 2; do gh pr merge $p; done', 'timeout 60 gh pr merge 3',
+      '{ gh pr merge 3; }', '1..3 | ForEach-Object { gh pr merge $_ }',
+    ]) expect(shellGates(c), c).toEqual(['merge'])
+  })
+
+  test('eval, Invoke-Expression, heredocs and pipes into a shell, and substitutions in double quotes are read', () => {
+    for (const c of [
+      'eval "claude --cloud x"', 'iex "claude --cloud x"', "bash <<'EOF'\nclaude --cloud x\nEOF", "cat <<'EOF' | sh\nclaude --cloud x\nEOF",
+      'X="$(claude --cloud x)"', 'echo "`claude --cloud x`"', 'tmux new -d "claude --cloud x"',
+    ]) expect(shellGates(c), c).toEqual(['cloud'])
+    for (const c of ['eval "gh pr merge 3"', "bash <<'EOF'\ngh pr merge 3\nEOF", 'echo "$(gh pr merge 3)"', 'sh -c "timeout 9 gh pr merge 3"']) {
+      expect(shellGates(c), c).toEqual(['merge'])
+    }
+  })
+
+  test('mentions stay mentions: echo, quoted text, a heredoc fed to cat', () => {
+    for (const c of ['echo gh pr merge 3', 'echo claude --cloud x', 'echo "gh pr merge 3"', "cat <<'EOF' > notes\ngh pr merge 3\nEOF"]) {
+      expect(shellGates(c), c).toEqual([])
+    }
+  })
+
+  test('launch.ps1 behind powershell options that take a value', () => {
+    expect(shellGates('powershell -ExecutionPolicy Bypass -File C:\\s\\launch.ps1 t none l sonnet')).toEqual(['cloud'])
+  })
+})
+
+describe('review round: redirections with & and bash -c --', () => {
+  test('a redirection holding & or | before the flags keeps the cloud launch whole', () => {
+    for (const c of ['claude 2>&1 --cloud "task" --model fable', 'claude &>log --cloud x', 'claude >| log --cloud x', 'claude >/dev/null 2>&1 --cloud x']) {
+      expect(shellGates(c), c).toEqual(['cloud'])
+    }
+    expect(shellGates('claude 2>&1 -p x --model fable')).toEqual([])
+  })
+
+  test('bash -c reads past -- and its options to the script', () => {
+    expect(shellGates('bash -c -- "claude --cloud x"')).toEqual(['cloud'])
+    expect(shellGates('sh -c -e "gh pr merge 3"')).toEqual(['merge'])
+    expect(shellGates('bash -c -o pipefail "claude --cloud x"')).toEqual(['cloud'])
+  })
+})
+
+describe('a local merge pushed to main is a merge', () => {
+  test('git merge followed by git push to main or master in the same command is held', () => {
+    for (const c of [
+      'git merge feature && git push origin main',
+      'git merge --no-ff feature; git push -u origin master',
+      'git -C repo merge x && git push origin HEAD:main',
+      'git merge x\ngit push origin refs/heads/main',
+    ]) expect(shellGates(c), c).toEqual(['merge'])
+  })
+
+  test('a merge alone, a push alone, a push to another branch or after --abort holds nothing', () => {
+    for (const c of [
+      'git merge origin/main', 'git push origin main', 'git merge feature && git push origin feature',
+      'git merge --abort; git push origin main', 'git push origin main && git merge feature',
+    ]) expect(shellGates(c), c).toEqual([])
+  })
+})
+
+// The shell parser is the same text in model-guard's rules.js and skill-router's routes.js. This corpus,
+// with its expected output, is the same in both mods' tests: a change to one tokenizer fails here.
+// Tokens are [value, start, end]; bodies are [segment, text].
+const TOKENIZER_CORPUS: [string, any][] = [
+  ["cd \"C:\\My Repo\" && claude --cloud 'fix it'; echo done | tee x", {
+    segments: [[["cd", 0, 2], ["C:\\My Repo", 3, 15]], [["claude", 19, 25], ["--cloud", 26, 33], ["fix it", 34, 42]], [["echo", 44, 48], ["done", 49, 53]], [["tee", 56, 59], ["x", 60, 61]]],
+    ends: ["&&", ";", "|", ""], subs: [], bodies: [],
+  }],
+  ["claude \\\n  --cloud \"fix the bug\"", {
+    segments: [[["claude", 0, 6], ["--cloud", 11, 18], ["fix the bug", 19, 32]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["claude `\r\n --cloud \"x\"", {
+    segments: [[["claude", 0, 6], ["--cloud", 11, 18], ["x", 19, 22]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["Start-Process `\n  -FilePath claude `\n  -ArgumentList '--cloud','x'", {
+    segments: [[["Start-Process", 0, 13], ["-FilePath", 18, 27], ["claude", 28, 34], ["-ArgumentList", 39, 52], ["--cloud,x", 53, 66]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["for t in a b; do claude -p \"$t\"; done", {
+    segments: [[["for", 0, 3], ["t", 4, 5], ["in", 6, 8], ["a", 9, 10], ["b", 11, 12]], [["do", 14, 16], ["claude", 17, 23], ["-p", 24, 26], ["$t", 27, 31]], [["done", 33, 37]]],
+    ends: [";", ";", ""], subs: [], bodies: [],
+  }],
+  ["{ claude --cloud x; }", {
+    segments: [[["claude", 2, 8], ["--cloud", 9, 16], ["x", 17, 18]]],
+    ends: [";"], subs: [], bodies: [],
+  }],
+  ["1..3 | ForEach-Object { claude -p \"t $_\" }", {
+    segments: [[["1..3", 0, 4]], [["ForEach-Object", 7, 21]], [["claude", 24, 30], ["-p", 31, 33], ["t $_", 34, 40]]],
+    ends: ["|", "{", "}"], subs: [], bodies: [],
+  }],
+  ["%{claude -p x}", {
+    segments: [[["%", 0, 1]], [["claude", 2, 8], ["-p", 9, 11], ["x}", 12, 14]]],
+    ends: ["{", ""], subs: [], bodies: [],
+  }],
+  ["find . -exec claude -p {} \\;", {
+    segments: [[["find", 0, 4], [".", 5, 6], ["-exec", 7, 12], ["claude", 13, 19], ["-p", 20, 22], ["{}", 23, 25], ["\\", 26, 27]]],
+    ends: [";"], subs: [], bodies: [],
+  }],
+  ["echo ${HOME} @{u}", {
+    segments: [[["echo", 0, 4], ["${HOME}", 5, 12], ["@{u}", 13, 17]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["X=\"$(claude --cloud x)\" && echo \"`date` and `n\"", {
+    segments: [[["X=$(claude --cloud x)", 0, 23]], [["echo", 27, 31], ["`date` and `n", 32, 47]]],
+    ends: ["&&", ""], subs: ["claude --cloud x", "date"], bodies: [],
+  }],
+  ["echo `claude -p x` done", {
+    segments: [[["echo", 0, 4], ["`claude -p x`", 5, 18], ["done", 19, 23]]],
+    ends: [""], subs: ["claude -p x"], bodies: [],
+  }],
+  ["git commit -m \"$(cat <<'EOF'\na \" b\nEOF\n)\" && echo ok", {
+    segments: [[["git", 0, 3], ["commit", 4, 10], ["-m", 11, 13], ["$(cat <<'EOF'\na \" b\nEOF\n)", 14, 41]], [["echo", 45, 49], ["ok", 50, 52]]],
+    ends: ["&&", ""], subs: ["cat <<'EOF'\na \" b\nEOF\n"], bodies: [],
+  }],
+  ["cat <<'EOF' | bash\nclaude --cloud x\nEOF\necho after", {
+    segments: [[["cat", 0, 3]], [["bash", 14, 18]], [["echo", 40, 44], ["after", 45, 50]]],
+    ends: ["|", "\n", ""], subs: [], bodies: [[0, "claude --cloud x\n"]],
+  }],
+  ["cat <<A <<B\nx\nA\ny\nB\n", {
+    segments: [[["cat", 0, 3]]],
+    ends: ["\n"], subs: [], bodies: [[0, "x\n"], [0, "y\n"]],
+  }],
+  ["@'\nclaude --cloud x\n'@ | iex", {
+    segments: [[["claude --cloud x", 0, 22]], [["iex", 25, 28]]],
+    ends: ["|", ""], subs: [], bodies: [],
+  }],
+  ["cat <<< \"claude -p x\"", {
+    segments: [[["cat", 0, 3], ["<<<", 4, 7], ["claude -p x", 8, 21]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["claude 2>&1 -p x --model fable", {
+    segments: [[["claude", 0, 6], ["2>&1", 7, 11], ["-p", 12, 14], ["x", 15, 16], ["--model", 17, 24], ["fable", 25, 30]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["claude &>log --cloud x", {
+    segments: [[["claude", 0, 6], ["&>log", 7, 12], ["--cloud", 13, 20], ["x", 21, 22]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["a <&3 >|f &>>g & b", {
+    segments: [[["a", 0, 1], ["<&3", 2, 5], [">|f", 6, 9], ["&>>g", 10, 14]], [["b", 17, 18]]],
+    ends: ["&", ""], subs: [], bodies: [],
+  }],
+  ["claude -p \"never closed", {
+    segments: [[["claude", 0, 6], ["-p", 7, 9], ["never closed", 10, 23]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+]
+
+describe('shared tokenizer corpus', () => {
+  test('tokenizeFull gives the same segments, separators, substitutions and heredoc bodies in both mods', () => {
+    for (const [command, want] of TOKENIZER_CORPUS) {
+      const got = tokenizeFull(command)
+      expect({
+        segments: got.segments.map((s: any) => s.map((t: any) => [t.value, t.start, t.end])),
+        ends: got.ends, subs: got.subs.map((s: any) => s.value), bodies: got.bodies.map((b: any) => [b.seg, b.value]),
+      }, command).toEqual(want)
+      expect(tokenize(command)).toEqual(got.segments)
+    }
   })
 })

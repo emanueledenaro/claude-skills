@@ -1,8 +1,9 @@
 {
   "name": "model-guard",
-  "version": "0.2.0",
-  "description": "Enforces model-mix on delegated launches: names the model on Agent calls, cloud and headless sessions, keeps Fable off workers, lets agents use the haiku alias only where it is Haiku 5.5 (Claude Code 2.1.293 or later on the Anthropic API; shell launches pin claude-haiku-5-5), caps workflow width by today's budget, and stops new launches while the budget is red or the 5-hour window is paused. Spends nothing.",
+  "version": "0.3.0",
+  "description": "Enforces model-mix on delegated launches: names the model on Agent calls of the built-in types and on cloud and headless shell launches (--model sonnet), keeps Fable off agents, forks, workflow agents, routines and shell launches, lets agents use the haiku alias only where it is Haiku 5.5 (Claude Code 2.1.293 or later on the Anthropic API; shell launches must use the full id claude-haiku-5-5), caps workflow width by today's budget, and stops new launches while the budget is red or the 5-hour window is paused. Spends nothing.",
   "author": { "name": "Emanuele Denaro" },
+  "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
       "type": "string",

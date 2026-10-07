@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
-  claudeLaunch, decideAgent, decideRemoteTrigger, decideShell, decideWorkflow, decideWorkflowAgent, fiveHourBanked,
-  forbiddenModel, haikuAlias, haikuKind, launchGate, parseVersion, planFromFiles, planFromOption, scanShell, statusText, tokenize,
+  bodyModels, claudeLaunch, decideAgent, decideRemoteTrigger, decideShell, decideSpawn, decideWorkflow, decideWorkflowAgent, fiveHourBanked,
+  forbiddenModel, haikuAlias, haikuKind, launchGate, parseVersion, planFromFiles, planFromOption, scanShell, spawnModel, statusText, texts,
+  tokenize, tokenizeFull,
 } from '../hooks/rules.js'
 import { computeBudget, estimatePoints, modelFamily } from '../hooks/budget.js'
 
@@ -29,7 +30,9 @@ describe('rules', () => {
   })
 
   test('scanShell finds launches only at a command position', () => {
+    // A claude word after a program that never runs its arguments is data.
     expect(scanShell('echo claude --cloud x')).toEqual([])
+    expect(scanShell('echo "claude --cloud x"')).toEqual([])
     expect(scanShell('git log --grep "claude --cloud"')).toEqual([])
     expect(scanShell('claude --version')).toEqual([])
     expect(scanShell('FOO=1 claude --cloud x').length).toBe(1)
@@ -77,7 +80,7 @@ describe('rules', () => {
 
   test('launchGate: red denies, warn notes, paused denies, unknown notes once', () => {
     expect(launchGate(ctx(budget(80)))).toMatchObject({ deny: expect.stringContaining('Budget red') })
-    expect(launchGate(ctx(budget(80), { redPolicy: 'warn' }))).toMatchObject({ note: expect.stringContaining('redPolicy warn') })
+    expect(launchGate(ctx(budget(80), { redPolicy: 'warn' }))).toMatchObject({ note: expect.stringContaining('launch allowed (only flagged)') })
     expect(launchGate(ctx(budget(40, null, 95)))).toMatchObject({ deny: expect.stringContaining('Wait until 13:00 UTC') })
     expect(launchGate(ctx(budget(null)))).toMatchObject({ unknownNoted: true })
     expect(launchGate(ctx(budget(null), { unknownLogged: true }))).toBeNull()
@@ -179,6 +182,7 @@ describe('nested shells', () => {
     expect(scanShell("pwsh -Command 'claude --model fable --cloud x'")).toEqual([expect.objectContaining({ model: 'fable' })])
     expect(scanShell('cmd /c "expect launch.exp t r l haiku low"')).toEqual([{ kind: 'launchExp', model: 'haiku' }])
     expect(scanShell('bash -c "echo claude --cloud"')).toEqual([])
+    expect(scanShell('bash -c "echo \'claude --cloud\'"')).toEqual([])
   })
 
   test('a plain quoted script gets --model sonnet in place; an escaped one is denied', () => {
@@ -317,7 +321,7 @@ describe('local headless sessions are launches (D5)', () => {
     for (const c of [
       'claude --version', 'claude -v', 'claude --help', 'claude plugin validate mods/x --strict', 'claude plugin test mods/x',
       'claude mcp list', 'claude auth status --text', 'claude update', 'claude agents --json', 'claude doctor',
-      'claude config list', 'claude', 'claude "explain this repo"', 'claude --resume abc',
+      'claude config list', 'claude', 'claude --resume abc', 'claude > out.txt', 'claude ultrareview --help',
     ]) expect(scanShell(c), c).toEqual([])
     expect(claudeLaunch(['plugin', 'test', '-p', 'x'])).toBeNull()
   })
@@ -613,7 +617,7 @@ describe('budget texts (D10, 5-hour banked)', () => {
     expect((launchGate(ctx(budget(80))) as any).deny).not.toContain('redeem')
     // Red by pace (84% used, the banked reset lifts the pace to about 56) but under 100 - reserve.
     expect((launchGate(ctx(budget(84, banked))) as any).deny).not.toContain('redeem')
-    expect((launchGate(ctx(budget(90, banked))) as any).deny).toContain('A banked weekly reset is counted')
+    expect((launchGate(ctx(budget(90, banked))) as any).deny).toContain('A weekly reset is banked and at least 2 days are left')
     const expired = planFromOption('Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-01')
     expect((launchGate(ctx(budget(90, expired))) as any).deny).not.toContain('redeem')
   })
@@ -741,5 +745,656 @@ describe('indirect launches: claude run by Start-Process or cmd start is refused
       expect(scanShell(command), command).toEqual([])
       expect(decideShell({ tool: 'PowerShell', command }, ctx(budget(80))).action).toBe('allow')
     }
+  })
+})
+
+describe('line continuations join lines (backslash in Bash, backtick in PowerShell)', () => {
+  test('a launch broken over lines is one launch, rewritten in place', () => {
+    for (const [command, out] of [
+      ['claude \\\n  --cloud "fix the bug"', 'claude --model sonnet \\\n  --cloud "fix the bug"'],
+      ['claude `\n  --cloud "x"', 'claude --model sonnet `\n  --cloud "x"'],
+      ['claude `\r\n  --cloud "x"', 'claude --model sonnet `\r\n  --cloud "x"'],
+    ]) {
+      expect(scanShell(command), command).toEqual([expect.objectContaining({ kind: 'cloud', hasModel: false, insertAt: 6 })])
+      expect((decideShell({ tool: 'Bash', command }, ctx(budget(40))) as any).input.command).toBe(out)
+    }
+  })
+
+  test('a Fable --model on a continuation line is denied', () => {
+    const d: any = decideShell({ tool: 'Bash', command: 'claude --cloud \\\n  --model fable "task"' }, ctx(budget(40)))
+    expect(d.action).toBe('deny')
+    expect(d.reason).toContain('Cloud sessions never run Fable')
+  })
+
+  test('a follow-up to a cloud session split over lines is open work: allowed while red', () => {
+    const command = 'claude -p "address the review comment" \\\n  --cloud cse_123'
+    expect(scanShell(command)).toEqual([])
+    expect(decideShell({ tool: 'Bash', command }, ctx(budget(80))).action).toBe('allow')
+  })
+})
+
+describe('launches behind wrappers, in loop and if bodies, brace groups and script blocks', () => {
+  // [command, the same command with --model sonnet added after the claude word]
+  const WRAPPED = [
+    ['timeout 600 claude --cloud "x"', 'timeout 600 claude --model sonnet --cloud "x"'],
+    ['gtimeout -s KILL -k 5 60 claude -p x', 'gtimeout -s KILL -k 5 60 claude --model sonnet -p x'],
+    ['timeout --signal=TERM 10m claude -p x', 'timeout --signal=TERM 10m claude --model sonnet -p x'],
+    ['caffeinate -is claude -p hi', 'caffeinate -is claude --model sonnet -p hi'],
+    ['caffeinate -t 3600 claude -p hi', 'caffeinate -t 3600 claude --model sonnet -p hi'],
+    ['nice claude -p hi', 'nice claude --model sonnet -p hi'],
+    ['nice -n 10 claude -p hi', 'nice -n 10 claude --model sonnet -p hi'],
+    ['nohup claude -p hi &', 'nohup claude --model sonnet -p hi &'],
+    ['setsid claude -p hi', 'setsid claude --model sonnet -p hi'],
+    ['stdbuf -o L claude -p hi', 'stdbuf -o L claude --model sonnet -p hi'],
+    ['stdbuf -oL claude -p hi', 'stdbuf -oL claude --model sonnet -p hi'],
+    ['time -p claude -p hi', 'time -p claude --model sonnet -p hi'],
+    ['env -i claude -p hi', 'env -i claude --model sonnet -p hi'],
+    ['env -u FOO claude --cloud "x"', 'env -u FOO claude --model sonnet --cloud "x"'],
+    ['env -C /tmp FOO=1 claude -p hi', 'env -C /tmp FOO=1 claude --model sonnet -p hi'],
+    ['sudo -E claude --cloud x', 'sudo -E claude --model sonnet --cloud x'],
+    ['sudo -u x claude -p hi', 'sudo -u x claude --model sonnet -p hi'],
+    ['sudo -u x -g staff -- claude -p hi', 'sudo -u x -g staff -- claude --model sonnet -p hi'],
+    ['xargs -I{} claude -p {}', 'xargs -I{} claude --model sonnet -p {}'],
+    ['xargs -I {} claude -p {}', 'xargs -I {} claude --model sonnet -p {}'],
+    ['cat l | xargs -n1 -P 4 claude -p', 'cat l | xargs -n1 -P 4 claude --model sonnet -p'],
+    ['command claude -p hi', 'command claude --model sonnet -p hi'],
+    ['exec -a w claude -p hi', 'exec -a w claude --model sonnet -p hi'],
+    ['watch claude -p hi', 'watch claude --model sonnet -p hi'],
+    ['watch -n 5 claude -p hi', 'watch -n 5 claude --model sonnet -p hi'],
+    ['sudo -E timeout 60 nice -n 5 claude -p hi', 'sudo -E timeout 60 nice -n 5 claude --model sonnet -p hi'],
+    ['! claude -p x', '! claude --model sonnet -p x'],
+    ['for t in a b; do claude -p "$t"; done', 'for t in a b; do claude --model sonnet -p "$t"; done'],
+    ['if true; then claude --cloud "x"; fi', 'if true; then claude --model sonnet --cloud "x"; fi'],
+    ['if false; then :; else claude -p x; fi', 'if false; then :; else claude --model sonnet -p x; fi'],
+    ['if a; then b; elif c; then claude -p x; fi', 'if a; then b; elif c; then claude --model sonnet -p x; fi'],
+    ['while read t; do claude -p "$t"; done < list', 'while read t; do claude --model sonnet -p "$t"; done < list'],
+    ['{ claude --cloud "x"; }', '{ claude --model sonnet --cloud "x"; }'],
+    ['1..3 | ForEach-Object { claude -p "t $_" }', '1..3 | ForEach-Object { claude --model sonnet -p "t $_" }'],
+    ['1..3 | %{claude -p "t $_"}', '1..3 | %{claude --model sonnet -p "t $_"}'],
+    ['foreach ($t in $list) { claude -p $t }', 'foreach ($t in $list) { claude --model sonnet -p $t }'],
+    ['Invoke-Command -ScriptBlock { claude -p x }', 'Invoke-Command -ScriptBlock { claude --model sonnet -p x }'],
+    ['npx -y @anthropic-ai/claude-code -p hi', 'npx -y @anthropic-ai/claude-code --model sonnet -p hi'],
+    ['bunx @anthropic-ai/claude-code@latest -p hi', 'bunx @anthropic-ai/claude-code@latest --model sonnet -p hi'],
+    ['npx -p @anthropic-ai/claude-code claude -p hi', 'npx -p @anthropic-ai/claude-code claude --model sonnet -p hi'],
+  ]
+
+  test('each one is found and gets --model sonnet in place in green', () => {
+    for (const [command, out] of WRAPPED) {
+      expect(scanShell(command).length, command).toBe(1)
+      const d: any = decideShell({ tool: 'Bash', command }, ctx(budget(40)))
+      expect(d.action, command).toBe('rewrite')
+      expect(d.input.command).toBe(out)
+    }
+  })
+
+  test('each one is denied while red, and with --model fable', () => {
+    for (const [command, out] of WRAPPED) {
+      expect(decideShell({ tool: 'Bash', command }, ctx(budget(80))).reason, command).toContain('Budget red')
+      const fable = out.replace('--model sonnet', '--model fable')
+      expect(decideShell({ tool: 'Bash', command: fable }, ctx(budget(40))).reason, fable).toMatch(/never run Fable/)
+    }
+  })
+
+  test('a mention in quoted text still holds no launch', () => {
+    for (const command of [
+      'echo "claude -p x"', "printf '%s\\n' 'claude --cloud x'", 'grep -rn "claude --cloud" .', 'cat claude.md',
+      'echo claude', 'git log --grep "claude -p"', '$x -replace "a","b"', 'Get-Content C:\\s\\launch.ps1', 'cat launch.ps1',
+    ]) {
+      expect(scanShell(command), command).toEqual([])
+      expect(decideShell({ tool: 'Bash', command }, ctx(budget(80))).action).toBe('allow')
+    }
+  })
+})
+
+describe('nested scripts are read; no edit in place: a missing --model is denied, never a silent pass', () => {
+  const NESTED = [
+    'eval "claude -p x"',
+    'eval claude -p x',
+    'iex "claude -p x"',
+    'Invoke-Expression -Command "claude -p x"',
+    "@'\nclaude -p x\n'@ | iex",
+    '"claude -p x" | Invoke-Expression',
+    "bash <<'EOF'\nclaude --cloud \"x\"\nEOF",
+    'sh -s <<EOF\nclaude --cloud x\nEOF',
+    "cat <<'EOF' | bash\nclaude -p x\nEOF",
+    'echo "claude -p x" | sh',
+    'bash <<< "claude -p x"',
+    'X="$(claude --cloud x)"',
+    'echo "result: $(claude -p x)"',
+    'echo "`claude -p x`"',
+    'echo `claude -p x` done',
+    'tmux new -d "claude -p hi"',
+    'tmux send-keys -t w "claude -p hi" Enter',
+    'screen -dmS w bash -c "claude -p hi"',
+    'ssh host "claude -p x"',
+    "parallel 'claude -p {}' ::: a b",
+    "find . -exec sh -c 'claude -p x' \;",
+    'script -q -c "claude -p hi" /dev/null',
+    'watch -n 5 "claude -p hi"',
+    'env -S "claude -p x"',
+    `osascript -e 'do shell script "claude -p hi"'`,
+    `osascript -e 'tell application "Terminal" to do script "claude --cloud x"'`,
+  ]
+
+  test('each one is found with insertAt null', () => {
+    for (const command of NESTED) {
+      const found = scanShell(command)
+      expect(found.length, command).toBeGreaterThan(0)
+      for (const l of found) expect(l, command).toMatchObject({ insertAt: null })
+    }
+  })
+
+  test('denied in green without --model; with a model named it goes through the gate', () => {
+    for (const command of NESTED) {
+      const d: any = decideShell({ tool: 'Bash', command }, ctx(budget(40)))
+      expect(d.action, command).toBe('deny')
+      expect(d.reason).toContain('inside a nested shell script without --model')
+    }
+    const named = 'eval "claude --model sonnet -p x"'
+    expect(decideShell({ tool: 'Bash', command: named }, ctx(budget(40))).action).toBe('allow')
+    expect(decideShell({ tool: 'Bash', command: named }, ctx(budget(80))).action).toBe('deny')
+    expect(decideShell({ tool: 'Bash', command: "bash <<'EOF'\nclaude --model fable -p x\nEOF" }, ctx(budget(40))).reason).toContain('never run Fable')
+  })
+
+  test('a substitution inside a nested shell script is read once, with the script (rewritten in place)', () => {
+    const d: any = decideShell({ tool: 'Bash', command: 'bash -c "echo $(claude -p x)"' }, ctx(budget(40)))
+    expect(d.input.command).toBe('bash -c "echo $(claude --model sonnet -p x)"')
+  })
+
+  test('scripts nested past 3 levels that name claude are unparsed', () => {
+    let command = 'claude -p x'
+    for (let n = 0; n < 4; n++) command = 'eval "' + command.replace(/["\\]/g, '\\$&') + '"'
+    expect(scanShell(command)).toEqual([{ kind: 'unparsed' }])
+  })
+
+  test('a heredoc fed to a program that is not a shell stays data', () => {
+    expect(scanShell("cat <<'EOF' > brief.md\nclaude -p x\nEOF")).toEqual([])
+    expect(scanShell("cat <<'EOF' | tee brief.md\nclaude -p x\nEOF")).toEqual([])
+  })
+})
+
+describe('a claude word after a program that never runs it is data, in every color', () => {
+  const DATA = [
+    'echo claude --cloud x', 'git log --grep claude -p', 'git log -S claude -p', 'git log --author claude -p',
+    'git grep -n claude -p', 'ls claude -p', 'cat notes/claude -p', 'which claude -p', 'echo hello # claude -p',
+    'grep claude -r . --bg', 'cd x # claude -p', 'git.exe log --grep claude -p', 'gh issue create -t claude -p roadmap',
+  ]
+  test('none is a launch, and each one passes green and red', () => {
+    for (const command of DATA) {
+      expect(scanShell(command), command).toEqual([])
+      for (const b of [budget(40), budget(80)]) expect((decideShell({ tool: 'Bash', command }, ctx(b)) as any).action, command).toBe('allow')
+    }
+  })
+  test('a pipe into a shell still reads the echoed launch', () => {
+    expect(scanShell('echo claude -p x | sh')).toEqual([expect.objectContaining({ kind: 'local' })])
+  })
+})
+
+describe('fail closed: a claude word with a launch flag model-guard cannot read is denied', () => {
+  const UNPARSED = [
+    'screen -dmS w claude -p hi',
+    'tmux new-session -d -s w claude -p hi',
+    'script -q /dev/null claude -p hi',
+    'find . -exec claude -p hi \;',
+    'parallel claude -p ::: a b',
+    'git bisect run claude -p x',
+    'git rebase -x claude -p',
+    'cmd /c "mystery # claude -p x"',
+    'mystery <# c #> claude -p x',
+    '/opt/tools/run claude --bg x',
+    'mystery-wrapper claude ultrareview',
+    '$CLAUDE -p x',
+    '"$CLAUDE" --cloud x',
+    '${CLAUDE_BIN:-claude} -p x',
+    '`which claude` -p x',
+    '$(which claude) -p x',
+    "& C:\\s\\launch.ps1 -ExeArgs @('-p') t none l fable",
+  ]
+  const COLORS: [string, any, any?][] = [
+    ['green', budget(40)], ['red with redPolicy warn', budget(80), { redPolicy: 'warn' }], ['unknown', budget(null)],
+  ]
+
+  test('each one is unparsed and denied in every color with the run-it-directly reason', () => {
+    for (const command of UNPARSED) {
+      expect(scanShell(command), command).toContainEqual({ kind: 'unparsed' })
+      for (const [color, b, extra] of COLORS) {
+        const d: any = decideShell({ tool: 'Bash', command }, ctx(b, extra))
+        expect(d.action, color + ': ' + command).toBe('deny')
+        expect(d.reason).toContain('Run claude directly as the command word with --model')
+        expect(d.log).toBe('model-guard: claude with -p, --cloud or --bg where model-guard cannot read it, blocked: run claude directly with --model')
+      }
+    }
+    expect(decideShell({ tool: 'Bash', command: UNPARSED[0] }, ctx(budget(40), { lang: 'it' })).log).toContain('va lanciato claude direttamente con --model')
+  })
+
+  test('tmux, screen, script, find -exec, parallel, osascript, -pc and $VAR -p are never allowed silently', () => {
+    for (const command of [
+      'tmux new -d "claude -p hi"', 'tmux new -s w claude -p hi', 'screen -dm claude -p hi', 'script -q /dev/null claude -p hi',
+      'find . -exec claude -p hi \;', 'parallel claude -p ::: a', `osascript -e 'do shell script "claude -p hi"'`,
+      'claude -pn w "task"', '$VAR -p x',
+    ]) {
+      expect(scanShell(command).length, command).toBeGreaterThan(0)
+      expect(decideShell({ tool: 'Bash', command }, ctx(budget(40))).action, command).not.toBe('allow')
+    }
+    // Grouped short flags are read one by one: -pc is -p with --continue, a resume of open work.
+    expect(scanShell('claude -pc "go on"')).toEqual([expect.objectContaining({ kind: 'resume' })])
+    expect(claudeLaunch(['-pc', 'go on'])).toBe('resume')
+  })
+})
+
+describe('review round: redirections with &, bash -c --, and quoted claude words', () => {
+  test('a redirection holding & or | before the flags keeps the launch whole: budget gate, --model, Fable check', () => {
+    expect(scanShell('claude 2>&1 -p "x" --model fable')).toEqual([{ kind: 'local', hasModel: true, model: 'fable', insertAt: 6 }])
+    expect(scanShell('claude 2>&1 --cloud "task" --model fable')).toEqual([{ kind: 'cloud', hasModel: true, model: 'fable', insertAt: 6 }])
+    expect(scanShell('claude &>log -p x --model fable')).toEqual([{ kind: 'local', hasModel: true, model: 'fable', insertAt: 6 }])
+    expect(scanShell('claude >/dev/null 2>&1 "fix the bug"')).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: 6 }])
+    expect(scanShell('claude >| log "fix the bug"')).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: 6 }])
+    expect(scanShell('claude &> log "fix the bug"')).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: 6 }])
+    for (const c of ['claude 2>&1 -p "x" --model fable', 'claude 2>&1 --cloud "task" --model fable', 'claude &>log -p x --model fable']) {
+      expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(40))).reason, c).toContain('never run Fable')
+      expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(80))).reason, c).toContain('Budget red')
+    }
+    const green: any = decideShell({ tool: 'Bash', command: 'claude >/dev/null 2>&1 "fix the bug"' }, ctx(budget(40)))
+    expect(green.input.command).toBe('claude --model sonnet >/dev/null 2>&1 "fix the bug"')
+    // The target of `&>`, `>&` and `>|` in the next word is no prompt: a bare claude stays no launch.
+    for (const c of ['claude &> log', 'claude >& log', 'claude >| log', 'claude 2>&1 > log']) expect(scanShell(c), c).toEqual([])
+    // A lone & still runs the next command in the background.
+    expect(scanShell('echo hi & claude -p x')).toEqual([expect.objectContaining({ kind: 'local' })])
+  })
+
+  test('bash -c reads past -- and its options to the script', () => {
+    expect(scanShell('bash -c -- "claude --cloud x --model fable"')).toEqual([{ kind: 'cloud', hasModel: true, model: 'fable', insertAt: 18 }])
+    expect(decideShell({ tool: 'Bash', command: 'bash -c -- "claude --cloud x --model fable"' }, ctx(budget(40))).reason).toContain('never run Fable')
+    expect(decideShell({ tool: 'Bash', command: 'bash -c -- "claude --cloud x --model fable"' }, ctx(budget(80))).reason).toContain('Budget red')
+    for (const [c, out] of [
+      ['sh -c -- "claude -p x"', 'sh -c -- "claude --model sonnet -p x"'],
+      ['zsh -c -e "claude -p x"', 'zsh -c -e "claude --model sonnet -p x"'],
+      ['bash -c -o pipefail "claude -p x"', 'bash -c -o pipefail "claude --model sonnet -p x"'],
+    ]) {
+      expect(scanShell(c), c).toEqual([expect.objectContaining({ kind: 'local', hasModel: false })])
+      expect((decideShell({ tool: 'Bash', command: c }, ctx(budget(40))) as any).input.command, c).toBe(out)
+      expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(80))).action, c).toBe('deny')
+    }
+  })
+
+  test('a shell whose script holds no launch while the words it may run as "$@" do is unparsed', () => {
+    expect(scanShell(`sh -c 'exec "$@"' sh claude -p x`)).toEqual([{ kind: 'unparsed' }])
+    expect(scanShell('bash -c "$CMD" claude -p x')).toEqual([{ kind: 'unparsed' }])
+    expect(decideShell({ tool: 'Bash', command: `sh -c 'exec "$@"' sh claude -p x` }, ctx(budget(40))).action).toBe('deny')
+    expect(scanShell('bash -c "echo hi" x y')).toEqual([])
+  })
+
+  test('a quoted claude word is text: git log -S "claude" -p, grep "claude" -p pass', () => {
+    for (const c of ['git log -S "claude" -p', 'git log --author "claude" -p', 'grep -rn "claude" -p .', "rg 'claude' -p", 'git log -S "/usr/bin/claude" --print']) {
+      expect(scanShell(c), c).toEqual([])
+      for (const w of [40, 80]) expect(decideShell({ tool: 'Bash', command: c }, ctx(budget(w))).action, c).toBe('allow')
+    }
+    // Unquoted behind a program that may run it, the same word may be the program: denied with the
+    // run-it-directly reason. (Behind git log it is data: see the data-command tests.)
+    const d: any = decideShell({ tool: 'Bash', command: 'mystery-run -S claude -p' }, ctx(budget(40)))
+    expect(d.action).toBe('deny')
+    expect(d.reason).toContain('the unquoted word claude')
+  })
+})
+
+describe('headless by redirection: a prompt word from the Bash, PowerShell or Monitor tool runs without a terminal', () => {
+  test('claude "<prompt>" is a local launch: --model sonnet in green, denied while red, Fable and haiku denied', () => {
+    expect(scanShell('claude "fix the ticket"')).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: 6 }])
+    const green: any = decideShell({ tool: 'Bash', command: 'claude "fix the ticket" > out.txt' }, ctx(budget(40)))
+    expect(green.input.command).toBe('claude --model sonnet "fix the ticket" > out.txt')
+    expect(decideShell({ tool: 'Bash', command: 'claude "x"' }, ctx(budget(80))).reason).toContain('Budget red')
+    expect(decideShell({ tool: 'Bash', command: 'claude --model fable "fix the ticket" > out.txt' }, ctx(budget(40))).reason).toContain('never run Fable')
+    expect(decideShell({ tool: 'PowerShell', command: 'claude --model haiku "x" | tee log' }, ctx(budget(40))).reason).toContain('the bare haiku alias')
+  })
+
+  test('options and their values are skipped to find the prompt', () => {
+    for (const c of ['claude --worktree w "x" &', 'claude --effort high --permission-mode plan "x"', 'claude --add-dir ../x "fix"', 'claude -- "x"', 'claude 2>/dev/null "x"']) {
+      expect(scanShell(c), c).toEqual([expect.objectContaining({ kind: 'local' })])
+    }
+    for (const c of ['claude -c "keep going"', 'claude --resume abc "go on"', 'claude --from-pr 12 "x"']) {
+      expect(scanShell(c), c).toEqual([expect.objectContaining({ kind: 'resume' })])
+    }
+  })
+
+  test('no prompt, a management subcommand, --version or --help stay as they were', () => {
+    for (const c of ['claude', 'claude --resume abc', 'claude -c', 'claude > out.txt', 'claude --debug api', 'claude --version', 'claude plugin list', 'claude ultrareview --help']) {
+      expect(scanShell(c), c).toEqual([])
+    }
+  })
+})
+
+describe('--fallback-model and unreadable --model values', () => {
+  test('a forbidden --fallback-model is denied like --model, each comma-separated name', () => {
+    const local: any = decideShell({ tool: 'Bash', command: 'claude -p "x" --model sonnet --fallback-model fable' }, ctx(budget(40)))
+    expect(local.action).toBe('deny')
+    expect(local.reason).toContain('Headless and background sessions (claude -p, --bg) never run Fable (model-mix), not even as --fallback-model')
+    expect(local.reason).toContain('--fallback-model sonnet')
+    const cloud: any = decideShell({ tool: 'Bash', command: 'claude --cloud "task" --model sonnet --fallback-model haiku' }, ctx(budget(40)))
+    expect(cloud.reason).toContain('Cloud sessions never run the bare haiku alias')
+    expect(decideShell({ tool: 'Bash', command: 'claude -p x --model sonnet --fallback-model opus,claude-haiku-4-5' }, ctx(budget(40))).reason).toContain('Haiku 4.5')
+    expect(decideShell({ tool: 'Bash', command: 'claude -p x --model sonnet --fallback-model=opus,claude-haiku-5-5' }, ctx(budget(40))).action).toBe('allow')
+    expect(scanShell('claude -p x --fallback-model=sonnet,opus')).toEqual([{ kind: 'local', hasModel: false, model: null, insertAt: 6, fallback: ['sonnet', 'opus'] }])
+  })
+
+  test('an empty, missing or variable --model names no model, and is denied: --model sonnet would lose to it', () => {
+    for (const c of ['claude --model= -p hi', 'claude -p hi --model', 'claude --cloud --model "$M" x', 'claude -p x --model `cat m`', 'claude --model -p x']) {
+      expect(scanShell(c), c).toEqual([expect.objectContaining({ hasModel: false, model: null, modelUnread: true })])
+      const d: any = decideShell({ tool: 'Bash', command: c }, ctx(budget(40)))
+      expect(d.action, c).toBe('deny')
+      expect(d.reason).toContain('Name the model literally')
+      expect(d.log).toBe('model-guard: claude launch with an empty or variable --model, blocked')
+    }
+    expect(decideShell({ tool: 'Bash', command: 'claude -p hi --model' }, ctx(budget(40), { lang: 'it' })).log).toBe('model-guard: lancio di claude con un --model vuoto o variabile, bloccato')
+  })
+
+  test('the last --model wins, as in claude itself', () => {
+    expect(scanShell('claude --model sonnet -p x --model fable')).toEqual([expect.objectContaining({ model: 'fable' })])
+    expect(decideShell({ tool: 'Bash', command: 'claude --model sonnet -p x --model fable' }, ctx(budget(40))).action).toBe('deny')
+  })
+})
+
+describe("cloud-worker's launch.ps1 is read like launch.exp", () => {
+  const PS1 = 'powershell.exe -NoProfile -File "$HOME\\.claude\\skills\\cloud-worker\\launch.ps1"'
+
+  test('the -File operand, & call, dot-sourcing and a pwsh -Command script; the model is the 4th positional or -Model', () => {
+    for (const [command, model] of [
+      [PS1 + ' task.txt none w.log fable high', 'fable'],
+      ['& "C:\\s\\launch.ps1" task.txt none w.log haiku medium', 'haiku'],
+      ['pwsh -ExecutionPolicy Bypass -File C:\\s\\launch.ps1 t none l sonnet high', 'sonnet'],
+      ['. C:\\s\\launch.ps1 t none l opus', 'opus'],
+      ['& C:\\s\\launch.ps1 -Ref main t none l fable', 'fable'],
+      ['& C:\\s\\launch.ps1 t none l -Model fable', 'fable'],
+      ['& C:\\s\\launch.ps1 t none l -mod:fable', 'fable'],
+      ["& C:\\s\\launch.ps1 t none l -ExeArgs '-p', '--environment' fable", 'fable'],
+      ['& C:\\s\\launch.ps1 t none l -Force -NoTty fable *> log.txt', 'fable'],
+      ['& C:\\s\\launch.ps1 t none l', null],
+      ["powershell -Command \"& 'C:\\s\\launch.ps1' t none l fable high\"", 'fable'],
+    ] as [string, string | null][]) {
+      expect(scanShell(command), command).toEqual([{ kind: 'launchExp', model, script: 'launch.ps1' }])
+    }
+  })
+
+  test('a forbidden model is denied naming launch.ps1, red denies, Solo has no cloud slot, -DryRun launches nothing', () => {
+    const d: any = decideShell({ tool: 'PowerShell', command: PS1 + ' task.txt none w.log fable high' }, ctx(budget(40)))
+    expect(d.action).toBe('deny')
+    expect(d.reason).toContain("launch.ps1's model argument (the 4th) is fable")
+    expect(d.log).toBe('model-guard: launch.ps1 on fable blocked')
+    expect(decideShell({ tool: 'PowerShell', command: PS1 + ' t none l fable' }, ctx(budget(40), { lang: 'it' })).log).toBe('model-guard: launch.ps1 con modello fable bloccato')
+    const sonnet = PS1 + ' task.txt none w.log sonnet high'
+    expect(decideShell({ tool: 'PowerShell', command: sonnet }, ctx(budget(40))).action).toBe('allow')
+    expect(decideShell({ tool: 'PowerShell', command: sonnet }, ctx(budget(80))).reason).toContain('Budget red')
+    expect(decideShell({ tool: 'PowerShell', command: sonnet }, ctx(budget(60, planFromOption('Pro')))).reason).toContain('no new cloud sessions')
+    expect(decideShell({ tool: 'PowerShell', command: '& C:\\s\\launch.ps1 t none l $m' }, ctx(budget(40))).reason).toContain('Name the model literally')
+    expect(scanShell(PS1 + ' t none l fable -DryRun')).toEqual([])
+    expect(scanShell('& C:\\s\\launch.ps1 t none l fable -Dry')).toEqual([])
+  })
+})
+
+describe('claude ultrareview is a cloud launch for the budget gate', () => {
+  test('denied while red or paused, allowed in green; it names no model', () => {
+    expect(scanShell('claude ultrareview 12')).toEqual([{ kind: 'ultrareview' }])
+    expect(scanShell('claude --debug-file d.log ultrareview main')).toEqual([{ kind: 'ultrareview' }])
+    expect(decideShell({ tool: 'Bash', command: 'claude ultrareview 12' }, ctx(budget(80))).reason).toContain('Budget red')
+    expect(decideShell({ tool: 'Bash', command: 'claude ultrareview 12' }, ctx(budget(40, null, 95))).reason).toContain('Wait until')
+    const green: any = decideShell({ tool: 'Bash', command: 'claude ultrareview 12' }, ctx(budget(40)))
+    expect(green.action).toBe('allow')
+    expect(green.input).toBeUndefined()
+  })
+})
+
+// The shell parser is the same text in model-guard's rules.js and skill-router's routes.js. This corpus,
+// with its expected output, is the same in both mods' tests: a change to one tokenizer fails here.
+// Tokens are [value, start, end]; bodies are [segment, text].
+const TOKENIZER_CORPUS: [string, any][] = [
+  ["cd \"C:\\My Repo\" && claude --cloud 'fix it'; echo done | tee x", {
+    segments: [[["cd", 0, 2], ["C:\\My Repo", 3, 15]], [["claude", 19, 25], ["--cloud", 26, 33], ["fix it", 34, 42]], [["echo", 44, 48], ["done", 49, 53]], [["tee", 56, 59], ["x", 60, 61]]],
+    ends: ["&&", ";", "|", ""], subs: [], bodies: [],
+  }],
+  ["claude \\\n  --cloud \"fix the bug\"", {
+    segments: [[["claude", 0, 6], ["--cloud", 11, 18], ["fix the bug", 19, 32]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["claude `\r\n --cloud \"x\"", {
+    segments: [[["claude", 0, 6], ["--cloud", 11, 18], ["x", 19, 22]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["Start-Process `\n  -FilePath claude `\n  -ArgumentList '--cloud','x'", {
+    segments: [[["Start-Process", 0, 13], ["-FilePath", 18, 27], ["claude", 28, 34], ["-ArgumentList", 39, 52], ["--cloud,x", 53, 66]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["for t in a b; do claude -p \"$t\"; done", {
+    segments: [[["for", 0, 3], ["t", 4, 5], ["in", 6, 8], ["a", 9, 10], ["b", 11, 12]], [["do", 14, 16], ["claude", 17, 23], ["-p", 24, 26], ["$t", 27, 31]], [["done", 33, 37]]],
+    ends: [";", ";", ""], subs: [], bodies: [],
+  }],
+  ["{ claude --cloud x; }", {
+    segments: [[["claude", 2, 8], ["--cloud", 9, 16], ["x", 17, 18]]],
+    ends: [";"], subs: [], bodies: [],
+  }],
+  ["1..3 | ForEach-Object { claude -p \"t $_\" }", {
+    segments: [[["1..3", 0, 4]], [["ForEach-Object", 7, 21]], [["claude", 24, 30], ["-p", 31, 33], ["t $_", 34, 40]]],
+    ends: ["|", "{", "}"], subs: [], bodies: [],
+  }],
+  ["%{claude -p x}", {
+    segments: [[["%", 0, 1]], [["claude", 2, 8], ["-p", 9, 11], ["x}", 12, 14]]],
+    ends: ["{", ""], subs: [], bodies: [],
+  }],
+  ["find . -exec claude -p {} \\;", {
+    segments: [[["find", 0, 4], [".", 5, 6], ["-exec", 7, 12], ["claude", 13, 19], ["-p", 20, 22], ["{}", 23, 25], ["\\", 26, 27]]],
+    ends: [";"], subs: [], bodies: [],
+  }],
+  ["echo ${HOME} @{u}", {
+    segments: [[["echo", 0, 4], ["${HOME}", 5, 12], ["@{u}", 13, 17]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["X=\"$(claude --cloud x)\" && echo \"`date` and `n\"", {
+    segments: [[["X=$(claude --cloud x)", 0, 23]], [["echo", 27, 31], ["`date` and `n", 32, 47]]],
+    ends: ["&&", ""], subs: ["claude --cloud x", "date"], bodies: [],
+  }],
+  ["echo `claude -p x` done", {
+    segments: [[["echo", 0, 4], ["`claude -p x`", 5, 18], ["done", 19, 23]]],
+    ends: [""], subs: ["claude -p x"], bodies: [],
+  }],
+  ["git commit -m \"$(cat <<'EOF'\na \" b\nEOF\n)\" && echo ok", {
+    segments: [[["git", 0, 3], ["commit", 4, 10], ["-m", 11, 13], ["$(cat <<'EOF'\na \" b\nEOF\n)", 14, 41]], [["echo", 45, 49], ["ok", 50, 52]]],
+    ends: ["&&", ""], subs: ["cat <<'EOF'\na \" b\nEOF\n"], bodies: [],
+  }],
+  ["cat <<'EOF' | bash\nclaude --cloud x\nEOF\necho after", {
+    segments: [[["cat", 0, 3]], [["bash", 14, 18]], [["echo", 40, 44], ["after", 45, 50]]],
+    ends: ["|", "\n", ""], subs: [], bodies: [[0, "claude --cloud x\n"]],
+  }],
+  ["cat <<A <<B\nx\nA\ny\nB\n", {
+    segments: [[["cat", 0, 3]]],
+    ends: ["\n"], subs: [], bodies: [[0, "x\n"], [0, "y\n"]],
+  }],
+  ["@'\nclaude --cloud x\n'@ | iex", {
+    segments: [[["claude --cloud x", 0, 22]], [["iex", 25, 28]]],
+    ends: ["|", ""], subs: [], bodies: [],
+  }],
+  ["cat <<< \"claude -p x\"", {
+    segments: [[["cat", 0, 3], ["<<<", 4, 7], ["claude -p x", 8, 21]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["claude 2>&1 -p x --model fable", {
+    segments: [[["claude", 0, 6], ["2>&1", 7, 11], ["-p", 12, 14], ["x", 15, 16], ["--model", 17, 24], ["fable", 25, 30]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["claude &>log --cloud x", {
+    segments: [[["claude", 0, 6], ["&>log", 7, 12], ["--cloud", 13, 20], ["x", 21, 22]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+  ["a <&3 >|f &>>g & b", {
+    segments: [[["a", 0, 1], ["<&3", 2, 5], [">|f", 6, 9], ["&>>g", 10, 14]], [["b", 17, 18]]],
+    ends: ["&", ""], subs: [], bodies: [],
+  }],
+  ["claude -p \"never closed", {
+    segments: [[["claude", 0, 6], ["-p", 7, 9], ["never closed", 10, 23]]],
+    ends: [""], subs: [], bodies: [],
+  }],
+]
+
+describe('shared tokenizer corpus', () => {
+  test('tokenizeFull gives the same segments, separators, substitutions and heredoc bodies in both mods', () => {
+    for (const [command, want] of TOKENIZER_CORPUS) {
+      const got = tokenizeFull(command)
+      expect({
+        segments: got.segments.map((s: any) => s.map((t: any) => [t.value, t.start, t.end])),
+        ends: got.ends, subs: got.subs.map((s: any) => s.value), bodies: got.bodies.map((b: any) => [b.seg, b.value]),
+      }, command).toEqual(want)
+      expect(tokenize(command)).toEqual(got.segments)
+    }
+  })
+})
+
+describe('spawned agents run on the model they inherit', () => {
+  const OK = { ok: true }
+  const OLD = { ok: false, why: 'old' }
+  const spawn = (extra: any) => ({ subagentType: 'general-purpose', parentModel: 'claude-opus-5-5', fork: false, ...extra })
+
+  test('spawnModel: own model, fork, inheriting types, a literal inherit, and custom types', () => {
+    expect(spawnModel(spawn({ model: 'sonnet' }))).toMatchObject({ model: 'sonnet', source: 'own' })
+    expect(spawnModel(spawn({ fork: true, subagentType: 'fork', model: 'opus', parentModel: 'claude-fable-5-1' }))).toMatchObject({ model: 'claude-fable-5-1', source: 'fork' })
+    expect(spawnModel(spawn({ subagentType: 'fork', parentModel: 'claude-fable-5-1' }))).toMatchObject({ source: 'fork' })
+    expect(spawnModel(spawn({ model: 'Inherit', parentModel: 'claude-fable-5-1' }))).toMatchObject({ model: 'claude-fable-5-1', source: 'inherit' })
+    expect(spawnModel(spawn({ subagentType: undefined }))).toMatchObject({ source: 'inherit' })
+    expect(spawnModel(spawn({ subagentType: 'code-reviewer', parentModel: 'claude-fable-5-1' }))).toMatchObject({ model: 'claude-fable-5-1', source: 'definition' })
+    expect(() => spawnModel(spawn({ model: 42 }))).toThrow()
+  })
+
+  test('decideSpawn: Fable through a fork, inheritance or a custom type is denied with the general-purpose opus advice', () => {
+    for (const extra of [
+      { fork: true, subagentType: 'fork' }, { model: undefined }, { model: 'inherit' }, { subagentType: 'code-reviewer' }, { model: 'fable' },
+    ]) {
+      const d: any = decideSpawn(spawn({ parentModel: 'claude-fable-5-1', ...extra }), ctx(budget(40), { haiku: OK }))
+      expect(d.action, JSON.stringify(extra)).toBe('deny')
+      expect(d.reason).toContain("subagent_type general-purpose with model: 'opus'")
+    }
+    expect(decideSpawn(spawn({ fork: true, subagentType: 'fork' }), ctx(budget(40))).action).toBe('allow')
+    expect(decideSpawn(spawn({ subagentType: 'code-reviewer', model: 'sonnet', parentModel: 'claude-fable-5-1' }), ctx(budget(40))).action).toBe('allow')
+    // Not gated on the budget: the Agent tool call is.
+    expect(decideSpawn(spawn({ model: 'sonnet' }), ctx(budget(80))).action).toBe('allow')
+  })
+
+  test('decideSpawn: the haiku rules apply to the inherited model', () => {
+    expect(decideSpawn(spawn({ fork: true, subagentType: 'fork', parentModel: 'claude-haiku-4-5' }), ctx(budget(40), { haiku: OK })).reason).toContain('never pins Haiku 4.5')
+    expect(decideSpawn(spawn({ parentModel: 'haiku' }), ctx(budget(40), { haiku: OLD })).reason).toContain("inherit the session's haiku alias")
+    expect(decideSpawn(spawn({ parentModel: 'haiku' }), ctx(budget(40), { haiku: OK })).action).toBe('allow')
+    expect(decideSpawn(spawn({ parentModel: 'claude-haiku-5-5' }), ctx(budget(40), { haiku: OLD })).action).toBe('allow')
+  })
+
+  test('decideWorkflowAgent: a literal inherit and a custom type with no model inherit a Fable session; a named model passes', () => {
+    const wf = (extra: any) => ({ parentModel: 'claude-fable-5-1', workflow: { runId: 'wf', agentIndex: 1 }, ...extra })
+    expect(decideWorkflowAgent(wf({ model: 'inherit' }), ctx(budget(40)), undefined)).toMatchObject({ action: 'deny', reason: expect.stringContaining("would inherit the session's Fable") })
+    expect(decideWorkflowAgent(wf({ subagentType: 'code-reviewer' }), ctx(budget(40)), undefined)).toMatchObject({ action: 'deny', reason: expect.stringContaining('may inherit') })
+    expect(decideWorkflowAgent(wf({ subagentType: 'code-reviewer', model: 'sonnet' }), ctx(budget(40)), undefined).action).toBe('allow')
+  })
+
+  test('decideAgent leaves a fork named fable alone (a fork ignores model): the spawn judges it', () => {
+    const d: any = decideAgent({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'fork', model: 'fable' }, ctx(budget(40)))
+    expect(d.action).toBe('allow')
+    expect(d.input).toBeUndefined()
+  })
+})
+
+describe('a Workflow resume records the run it resumes', () => {
+  test('startRun: today\'s profile, or the plan\'s own when today allows no workflow (red, Solo)', () => {
+    const resume = { tool: 'Workflow', resumeFromRunId: 'wf_abc' }
+    expect((decideWorkflow(resume, ctx(budget(80))) as any).startRun).toEqual({ width: 8, name: 'Max 5x' })
+    expect((decideWorkflow(resume, ctx(budget(80, planFromOption('Max 20x')))) as any).startRun).toEqual({ width: 16, name: 'Max 20x' })
+    expect((decideWorkflow(resume, ctx(budget(60, planFromOption('Pro')))) as any).startRun).toEqual({ width: 4, name: 'Pro' })
+    expect((decideWorkflow(resume, ctx(budget(60, planFromOption('Max 20x')))) as any).startRun).toEqual({ width: 8, name: 'Max 5x' })
+    expect((decideWorkflow({ tool: 'Workflow', name: 'review' }, ctx(budget(40))) as any).startRun).toBeUndefined()
+  })
+})
+
+describe('paused 5-hour window: resumes wait too, and the reason says so', () => {
+  test('the reason names resumes and keeps work in this session, never "finish open work"', () => {
+    const d: any = decideWorkflow({ tool: 'Workflow', resumeFromRunId: 'wf_abc' }, ctx(budget(40, null, 95)))
+    expect(d.reason).toContain('paused new launches and resumes')
+    expect(d.reason).not.toContain('finish open work')
+  })
+
+  test('a local resume while red and paused at once is held for the window', () => {
+    const d: any = decideShell({ tool: 'Bash', command: 'claude --resume abc -p "x"' }, ctx(budget(80, null, 95)))
+    expect(d).toMatchObject({ action: 'deny', reason: expect.stringContaining('Wait until 13:00 UTC') })
+  })
+
+  test('without a reset time the line drops "until"', () => {
+    const b: any = computeBudget({ rateLimits: [reading(40)[0], { kind: 'five_hour', percentUsed: 95 }], now: NOW, plan: null, inFlight: 0, readingAt: NOW })
+    const g: any = launchGate(ctx(b, { lang: 'it' }))
+    expect(g.log).toBe('model-guard: lancio bloccato, finestra 5 ore oltre il 90%')
+  })
+})
+
+describe('RemoteTrigger body models', () => {
+  test('bodyModels finds every text field named *model at any depth', () => {
+    expect(bodyModels({ model: 'a', x: [{ default_model: 'b' }, { deep: { sessionModel: 'c', other: 'd' } }], model2: 'e' })).toEqual(['a', 'b', 'c'])
+    expect(bodyModels(undefined)).toEqual([])
+  })
+
+  test('a forbidden model is denied like a cloud launch, after the gate; a create or run on Solo has no cloud slot', () => {
+    expect(decideRemoteTrigger({ tool: 'RemoteTrigger', action: 'create', body: { model: 'fable' } }, ctx(budget(40)))).toMatchObject({ action: 'deny', reason: expect.stringContaining('never run Fable') })
+    expect(decideRemoteTrigger({ tool: 'RemoteTrigger', action: 'update', body: { job: { model: 'claude-haiku-4-5' } } }, ctx(budget(40))).reason).toContain('Haiku 4.5')
+    expect(decideRemoteTrigger({ tool: 'RemoteTrigger', action: 'create', body: { model: 'claude-haiku-5-5' } }, ctx(budget(40))).action).toBe('allow')
+    const solo = budget(60, planFromOption('Pro'))
+    expect(decideRemoteTrigger({ tool: 'RemoteTrigger', action: 'run', trigger_id: 't' }, ctx(solo)).reason).toContain('no new cloud sessions')
+    expect(decideRemoteTrigger({ tool: 'RemoteTrigger', action: 'update', trigger_id: 't', body: { prompt: 'x' } }, ctx(solo)).action).toBe('allow')
+  })
+})
+
+describe('banked weekly reset: redeem advice only with 2 days left', () => {
+  const at = (hoursToReset: number, used: number) => [
+    { kind: 'seven_day', percentUsed: used, resetsAt: new Date(NOW + hoursToReset * 60 * 60 * 1000).toISOString() },
+    { kind: 'five_hour', percentUsed: 10, resetsAt: new Date(NOW + 60 * 60 * 1000).toISOString() },
+  ]
+  const red = (plan: any, hours: number) => launchGate(ctx(computeBudget({ rateLimits: at(hours, 90), now: NOW, plan, inFlight: 0, readingAt: NOW }))) as any
+  const banked = planFromOption('Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-30')
+
+  test('with less than 2 days to the weekly reset there is no advice; with 2 or more there is', () => {
+    expect(red(banked, 30).deny).not.toContain('redeem')
+    expect(red(banked, 47).deny).not.toContain('redeem')
+    expect(red(banked, 49).deny).toContain('ask the person to redeem it')
+  })
+
+  test('a banked weekly reset with no expiry date also gets the advice', () => {
+    expect(red(planFromOption('Max 5x · reserve 15% · banked: weekly reset, no expiry'), 72).deny).toContain('ask the person to redeem it')
+  })
+})
+
+describe('texts the person sees', () => {
+  test('an out-of-date reading says so, not "no reading yet"', () => {
+    const stale: any = computeBudget({ rateLimits: reading(40), now: NOW, plan: null, inFlight: 0, readingAt: NOW - 11 * 60 * 1000 })
+    expect(stale.color).toBe('unknown')
+    expect((launchGate(ctx(stale)) as any).note).toBe('model-guard: budget reading out of date, launch allowed')
+    expect((launchGate(ctx(budget(null))) as any).note).toBe('model-guard: no budget reading yet, launch allowed')
+  })
+
+  test('an out-of-date reading never loosens the guard: red and yellow keep holding, only green turns unknown', () => {
+    const old = (weekly: number, five = 10) => computeBudget({ rateLimits: reading(weekly, five), now: NOW, plan: null, inFlight: 0, readingAt: NOW - 60 * 60 * 1000 }) as any
+    expect(old(80).color).toBe('red')
+    expect((launchGate(ctx(old(80))) as any).deny).toContain('Budget red')
+    expect(old(60).color).toBe('yellow')
+    expect(old(60).profile.name).toBe('Pro')
+    expect(old(40).color).toBe('unknown')
+    expect(old(40, 95).pausedFiveHour).toBe(true)
+    expect((launchGate(ctx(old(40, 95))) as any).deny).toContain('5-hour window')
+  })
+
+  test('Explore with its own effort is not logged as effort medium', () => {
+    const d: any = decideAgent({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'Explore', effort: 'high' }, ctx(budget(40), { haiku: { ok: true }, lang: 'it' }))
+    expect(d.log).toBe('model-guard: Explore senza modello -> haiku')
+  })
+
+  test('a red over the reserve says so, to the model and to the person', () => {
+    const b = budget(90)
+    const g: any = launchGate(ctx(b, { lang: 'it' }))
+    expect(g.deny).toContain('at or past the 85% reserve line')
+    expect(g.log).toContain('oltre la riserva')
+  })
+
+  test('no tool names, option keys or failure kinds in the lines; the Red profile reads as the color', () => {
+    expect(texts('it').failed).toBe('model-guard: controllo fallito, lancio bloccato')
+    expect(texts('en').agentNoModel).toBe('model-guard: agent without a model -> sonnet')
+    expect(texts('it').wfWidth({ name: 'Red', width: 0 })).toBe('model-guard: workflow oltre la larghezza 0 (rosso), altri agenti bloccati')
+    expect((launchGate(ctx(budget(80), { redPolicy: 'warn', lang: 'it' })) as any).note).toContain('(solo segnalato)')
   })
 })

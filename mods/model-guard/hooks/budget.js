@@ -1,6 +1,6 @@
 // Budget color from a usage reading, as model-mix/budget.md computes it.
-// Pure functions only: no `$`, so both mods can import their own copy.
-// coordinator-lens/hooks/budget.js and model-guard/hooks/budget.js must stay identical.
+// Pure functions only: no `$`. This file is the reference copy: coordinator-lens (a mod kept outside
+// this repository, see mod-ui) carries a copy of it, which follows this one.
 
 const DAY = 24 * 60 * 60 * 1000
 const WEEK = 7 * DAY
@@ -74,6 +74,14 @@ export function countedResets(plan, now) {
     .map(b => ({ ...b, weeks: Math.max(1, (Date.parse(b.expires + 'T00:00:00Z') - now) / WEEK) }))
 }
 
+// Banked weekly resets not yet lost: no expiry date, or one not before today (budget.md: ask to redeem
+// one past 100 - reserve with 2 days left, whether or not it counts in the pace).
+export function bankedWeekly(plan, now) {
+  const today = utcDay(now)
+  return (plan && Array.isArray(plan.banked) ? plan.banked : [])
+    .filter(b => b && b.type === 'weekly' && (!b.expires || b.expires >= today)).length
+}
+
 // input: { rateLimits, now, plan (parsePlanLine result or null), inFlight (weekly points still to come), readingAt }
 export function computeBudget(input) {
   const now = input.now
@@ -89,11 +97,11 @@ export function computeBudget(input) {
     weekly, fiveHour, inFlight,
     pausedFiveHour: !!(fiveHour && fiveHour.used >= 90 && (!fiveHour.resetsAt || fiveHour.resetsAt > now)),
     resets: countedResets(plan, now),
+    bankedWeekly: bankedWeekly(plan, now),
   }
-  const stale = typeof input.readingAt === 'number' && now - input.readingAt > READING_MAX_AGE
-  if (!weekly || !weekly.resetsAt || weekly.resetsAt <= now || stale) {
-    return { ...base, color: 'unknown', reason: !weekly ? 'no-reading' : stale ? 'stale-reading' : 'window-expired', pace: null, margin: null, d: null, lastHours: false, profile: planProfile }
-  }
+  const unknown = reason => ({ ...base, color: 'unknown', reason, pace: null, margin: null, d: null, lastHours: false, profile: planProfile })
+  if (!weekly) return unknown('no-reading')
+  if (!weekly.resetsAt || weekly.resetsAt <= now) return unknown('window-expired')
   const hoursToReset = (weekly.resetsAt - now) / (60 * 60 * 1000)
   const d = Math.min(7, Math.max(0.5, 7 - hoursToReset / 24))
   const boost = base.resets.reduce((sum, r) => sum + 1 / r.weeks, 0)
@@ -110,6 +118,11 @@ export function computeBudget(input) {
   const profile = color === 'red'
     ? { name: 'Red', width: 0, cloud: 0, verify: 'main-session', reserve: null }
     : color === 'yellow' ? PROFILES[stepDown(planProfile.name)] : planProfile
+  // A reading older than 10 minutes (budget.md) never loosens the guard: a red or yellow one keeps holding
+  // (an unchanged usage() reading also means nothing moved), and only a green one turns unknown, which
+  // allows the same launches with one line. The 5-hour pause in base holds either way.
+  const stale = typeof input.readingAt === 'number' && now - input.readingAt > READING_MAX_AGE
+  if (stale && color === 'green') return unknown('stale-reading')
   return { ...base, color, reason: overReserve ? 'over-reserve' : lastHours ? 'last-12-hours' : 'pace', pace, margin, d, lastHours, profile }
 }
 

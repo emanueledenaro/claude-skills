@@ -701,12 +701,17 @@ export function isUnder(path, dir) {
 }
 
 // ---------------------------------------------------------------- shell commands (cloud and merge gates)
-// The tokenizer is model-guard's (rules.js): heredoc bodies and PowerShell here-strings are data,
+// The parser below is model-guard's (rules.js): heredoc bodies and PowerShell here-strings are data,
 // so a brief or commit text that only mentions `claude --cloud` or `gh pr merge` holds nothing.
 
-const SEPARATORS = new Set([';', '|', '&', '(', ')', '\n', '\r'])
-const PREFIX_WORDS = ['exec', 'nohup', 'time', 'command', 'env', 'sudo', 'npx', 'bunx', 'call', 'xargs', 'source', '.']
+// ---------------------------------------------------------------- shell parser (shared with skill-router)
+// From here to the "end of the shared shell parser" line, this block is the same text in model-guard's
+// rules.js and skill-router's routes.js: keep the two identical. Both mods' tests run one corpus through
+// tokenizeFull, so a drift fails a test.
 
+const SEPARATORS = new Set([';', '|', '&', '(', ')', '\n', '\r'])
+
+// Reads a heredoc delimiter word at i (quotes and backslashes stripped). Returns { word, next }.
 function heredocWord(command, i) {
   let word = ''
   while (i < command.length) {
@@ -728,8 +733,9 @@ function heredocWord(command, i) {
   return { word, next: i }
 }
 
-// Index just past the line that ends a heredoc body, or -1 when no line ends it (then the rest is
-// scanned as commands: a missed launch costs more than a false hold).
+// From `from` (the start of a line), where the line that ends a heredoc body starts (`body`) and the
+// index just past it (`next`), or null when no line ends it. Unterminated bodies are scanned as
+// commands: missing a real launch costs more than a false alarm (`$((1<<2))` also looks like a heredoc).
 function heredocEnd(command, from, h) {
   let p = from
   while (p <= command.length) {
@@ -738,14 +744,15 @@ function heredocEnd(command, from, h) {
     let line = command.slice(p, stop)
     if (line.endsWith('\r')) line = line.slice(0, -1)
     if (h.stripTabs) line = line.replace(/^\t+/, '')
-    if (line === h.word) return nl < 0 ? command.length : nl + 1
-    if (nl < 0) return -1
+    if (line === h.word) return { body: p, next: nl < 0 ? command.length : nl + 1 }
+    if (nl < 0) return null
     p = nl + 1
   }
-  return -1
+  return null
 }
 
-// A PowerShell here-string at i (`@'` or `@"` closing its line): { end, body }, else null.
+// A PowerShell here-string opening at i (`@'` or `@"` closing its line): { end, body } with end just
+// past its closing `'@` / `"@` at the start of a line, else null.
 function hereString(command, i) {
   const q = command[i + 1]
   if (command[i] !== '@' || (q !== "'" && q !== '"')) return null
@@ -756,43 +763,91 @@ function hereString(command, i) {
   return { end: close + 3, body: command.slice(nl + 1, close).replace(/\r$/, '') }
 }
 
-// Splits a Bash or PowerShell line into segments of tokens { value, start, end }. Never throws on
-// odd input; heredoc bodies add no tokens; a here-string is one token holding its body. A heredoc
-// inside a `$(...)` inside double quotes (the commit and PR idiom `"$(cat <<'EOF' ... EOF\n)"`) is
-// data too: its body stays in the quoted token, and its quotes never close the string.
-// Keep this tokenizer identical to model-guard's (rules.js).
-export function tokenize(command) {
+// Splits a shell line (Bash or PowerShell) into segments of tokens { value, start, end }, with:
+//   ends    the separator that ended each segment (';', '|', '&&', '\n', '{', ...; '' for the last)
+//   subs    command substitutions that stay inside one token, { value, start, end }: `$(...)` inside
+//           double quotes, and backtick pairs (inside double quotes, or unquoted on one line)
+//   bodies  heredoc bodies, { seg, value } (seg: the segment that opened them)
+// Never throws on odd input: an unclosed quote runs to the end of the line.
+// A line continuation (`\` in Bash, ` in PowerShell, before a newline) joins the next line.
+// `{` and `}` standing alone (a brace group, a loop body, a PowerShell script block, `%{`) end a
+// segment, so the command inside sits at a command position.
+// Heredoc bodies (`<<EOF`, `<<-'EOF'`, several on one line) add no tokens; a PowerShell here-string
+// (`@'` ... `'@`) is one token holding its body, never split into commands. Even an unquoted `<<EOF` or
+// `@"` body, which the shell expands, is skipped: a launch hidden in a `$(...)` there is far rarer than
+// commit, PR and brief texts that only mention `claude --cloud`. Only a body fed to a shell is a script
+// (the callers read `bodies`). A heredoc inside a `$(...)` inside double quotes (Claude Code's commit
+// and PR idiom `"$(cat <<'EOF' ... EOF\n)"`) is data too: its body stays in the quoted token, and its
+// quotes never close the string.
+export function tokenizeFull(command) {
   const segments = [[]]
+  const ends = []
+  const subs = []
+  const bodies = []
   let tok = null
   let heredocs = []
+  const cur = () => segments[segments.length - 1]
   const push = () => {
-    if (tok) { segments[segments.length - 1].push(tok); tok = null }
+    if (tok) { cur().push(tok); tok = null }
+  }
+  const brk = sep => {
+    push()
+    if (cur().length) { ends[segments.length - 1] = sep; segments.push([]) }
   }
   const startTok = i => { if (!tok) tok = { value: '', start: i, end: i } }
   let i = 0
   while (i < command.length) {
     const c = command[i]
+    const next = command[i + 1]
     if (c === ' ' || c === '\t') { push(); i++; continue }
-    if (c === '<' && command[i + 1] === '<' && command[i + 2] !== '<' && command[i - 1] !== '<') {
+    if ((c === '\\' || c === '`') && (next === '\n' || (next === '\r' && command[i + 2] === '\n'))) {
+      push()
+      i += next === '\r' ? 3 : 2
+      continue
+    }
+    if (c === '<' && next === '<' && command[i + 2] !== '<' && command[i - 1] !== '<') {
       push()
       let j = i + 2
       const stripTabs = command[j] === '-'
       if (stripTabs) j++
       while (command[j] === ' ' || command[j] === '\t') j++
-      const { word, next } = heredocWord(command, j)
-      if (word) heredocs.push({ word, stripTabs })
-      i = next
+      const { word, next: after } = heredocWord(command, j)
+      if (word) heredocs.push({ word, stripTabs, seg: cur() })
+      i = after
+      continue
+    }
+    const alone = next === undefined || /\s/.test(next)
+    if ((c === '{' && next !== '}' && (alone || !tok || tok.value === '%')) || (c === '}' && !tok && (alone || /[;|&)]/.test(next)))) {
+      brk(c)
+      i++
+      continue
+    }
+    // An & or | inside a redirection stays in its word, so it splits nothing: `2>&1`, `>&2`, `<&3`,
+    // `>|file`, `&>log`, `&>>log`.
+    if ((c === '&' || c === '|') && tok && tok.end === i && (command[i - 1] === '>' || (c === '&' && command[i - 1] === '<'))) {
+      tok.value += c
+      i++
+      tok.end = i
+      continue
+    }
+    if (c === '&' && next === '>') {
+      push()
+      startTok(i)
+      tok.value += c
+      i++
+      tok.end = i
       continue
     }
     if (SEPARATORS.has(c)) {
-      push()
-      if (segments[segments.length - 1].length) segments.push([])
-      i += (c === '&' || c === '|') && command[i + 1] === c ? 2 : 1
+      const doubled = (c === '&' || c === '|') && next === c
+      brk(doubled ? c + c : c)
+      i += doubled ? 2 : 1
       if (c === '\n' && heredocs.length) {
         for (const h of heredocs) {
           const end = heredocEnd(command, i, h)
-          if (end < 0) break
-          i = end
+          if (!end) break
+          bodies.push({ seg: h.seg, value: command.slice(i, end.body) })
+          i = end.next
         }
         heredocs = []
       }
@@ -813,35 +868,40 @@ export function tokenize(command) {
       tok.value += command.slice(i + 1, stop)
       i = close < 0 ? command.length : close + 1
     } else if (c === '"') {
-      let subs = 0 // open `$(` inside this string
+      let open = 0 // open `$(` inside this string
+      let from = 0 // where the outermost one's text starts
       let inner = [] // heredocs opened inside them, waiting for the end of their line
       i++
       while (i < command.length && command[i] !== '"') {
         const d = command[i]
         if (d === '$' && command[i + 1] === '(') {
-          subs++
+          if (!open) from = i + 2
+          open++
           tok.value += '$('
           i += 2
           continue
         }
-        if (d === ')' && subs > 0) subs--
-        if (subs > 0 && d === '<' && command[i + 1] === '<' && command[i + 2] !== '<' && command[i - 1] !== '<') {
+        if (d === ')' && open > 0) {
+          open--
+          if (!open) subs.push({ value: command.slice(from, i), start: from, end: i })
+        }
+        if (open > 0 && d === '<' && command[i + 1] === '<' && command[i + 2] !== '<' && command[i - 1] !== '<') {
           let j = i + 2
           const stripTabs = command[j] === '-'
           if (stripTabs) j++
           while (command[j] === ' ' || command[j] === '\t') j++
-          const { word, next } = heredocWord(command, j)
+          const { word, next: after } = heredocWord(command, j)
           if (word) inner.push({ word, stripTabs })
-          tok.value += command.slice(i, next)
-          i = next
+          tok.value += command.slice(i, after)
+          i = after
           continue
         }
         if (d === '\n' && inner.length) {
           let p = i + 1
           for (const h of inner) {
             const end = heredocEnd(command, p, h)
-            if (end < 0) { p = -1; break }
-            p = end
+            if (!end) { p = -1; break }
+            p = end.next
           }
           inner = []
           if (p > 0) {
@@ -853,12 +913,36 @@ export function tokenize(command) {
         if ((d === '\\' || d === '`') && (command[i + 1] === '"' || command[i + 1] === '\\' || command[i + 1] === '`')) {
           tok.value += command[i + 1]
           i += 2
-        } else {
-          tok.value += d
-          i++
+          continue
         }
+        if (d === '`') {
+          // A Bash substitution, when it closes before the string does (PowerShell's "`n" escapes
+          // read as one too: their text holds no command).
+          const close = command.indexOf('`', i + 1)
+          const quote = command.indexOf('"', i + 1)
+          if (close > 0 && (quote < 0 || close < quote)) {
+            subs.push({ value: command.slice(i + 1, close), start: i + 1, end: close })
+            tok.value += command.slice(i, close + 1)
+            i = close + 1
+            continue
+          }
+        }
+        tok.value += d
+        i++
       }
+      if (open > 0) subs.push({ value: command.slice(from, i), start: from, end: i })
       i++
+    } else if (c === '`') {
+      const close = command.indexOf('`', i + 1)
+      const nl = command.indexOf('\n', i + 1)
+      if (close > 0 && (nl < 0 || close < nl)) {
+        subs.push({ value: command.slice(i + 1, close), start: i + 1, end: close })
+        tok.value += command.slice(i, close + 1)
+        i = close + 1
+      } else {
+        tok.value += c
+        i++
+      }
     } else {
       tok.value += c
       i++
@@ -866,7 +950,19 @@ export function tokenize(command) {
     tok.end = Math.min(i, command.length)
   }
   push()
-  return segments.filter(s => s.length)
+  // Only the last segment can be empty, so a kept segment keeps its index.
+  const kept = segments.filter(s => s.length)
+  return {
+    segments: kept,
+    ends: kept.map((s, i) => ends[i] || ''),
+    subs,
+    bodies: bodies.map(b => ({ seg: kept.indexOf(b.seg), value: b.value })),
+  }
+}
+
+// tokenizeFull's segments alone.
+export function tokenize(command) {
+  return tokenizeFull(command).segments
 }
 
 function baseName(value) {
@@ -874,60 +970,165 @@ function baseName(value) {
   return parts[parts.length - 1].toLowerCase()
 }
 
+// claude by name or path (`claude.exe`, `/usr/local/bin/claude`), or its npm package (`npx @anthropic-ai/claude-code`).
 function isClaude(value) {
-  return /^claude(\.exe|\.cmd|\.ps1)?$/.test(baseName(value))
+  return /^claude(\.exe|\.cmd|\.ps1)?$/.test(baseName(value)) || /^@anthropic-ai\/claude-code(@\S*)?$/i.test(value)
 }
 
 function isLaunchScript(value) {
   return /^launch\.(exp|ps1)$/.test(baseName(value))
 }
 
-// Index of the segment's command word, past `VAR=value` and prefix words.
+// Words that run the command after them, each with its own options: v lists the options that take the
+// next word as their value (an attached value, `-n5`, `-I{}` or `--signal=KILL`, is one word); n counts
+// the operands before the command (timeout's duration, chrt's priority, taskset's mask). Any other
+// option stands alone (env -S's string is then the command word), and `--` ends the options. Shell
+// keywords (kw) take no options.
+const WRAPPERS = new Map([
+  ...['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', '}'].map(w => [w, { kw: true }]),
+  ['time', { v: ['-o', '-f', '--output', '--format'] }],
+  ['exec', { v: ['-a'] }],
+  ['command', {}], ['nohup', {}], ['setsid', {}], ['call', {}], ['source', {}], ['.', {}],
+  ['env', { v: ['-u', '-C', '--unset', '--chdir'] }],
+  ['sudo', { v: ['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U', '-T', '-R', '--user', '--group', '--host', '--prompt', '--close-from', '--chdir', '--role', '--type', '--other-user', '--command-timeout', '--chroot'] }],
+  ['xargs', { v: ['-I', '-n', '-P', '-L', '-s', '-d', '-E', '-a', '--max-args', '--max-procs', '--max-lines', '--max-chars', '--delimiter', '--eof', '--arg-file', '--replace', '--process-slot-var'] }],
+  ['timeout', { v: ['-s', '-k', '--signal', '--kill-after'], n: 1 }],
+  ['gtimeout', { v: ['-s', '-k', '--signal', '--kill-after'], n: 1 }],
+  ['nice', { v: ['-n', '--adjustment'] }],
+  ['ionice', { v: ['-c', '-n', '--class', '--classdata'] }],
+  ['chrt', { v: ['-T', '-P', '-D', '--sched-runtime', '--sched-period', '--sched-deadline'], n: 1 }],
+  ['taskset', { n: 1 }],
+  ['caffeinate', { v: ['-t', '-w'] }],
+  ['stdbuf', { v: ['-i', '-o', '-e', '--input', '--output', '--error'] }],
+  ['watch', { v: ['-n', '--interval', '-q', '--equexit'] }],
+  ['npx', { v: ['-p', '--package', '--cache', '--registry', '--userconfig'] }],
+  ['bunx', { v: ['-p', '--package'] }],
+])
+
+// Index of the segment's command word, past `VAR=value`, shell keywords and wrappers with their options.
 function commandIndex(seg) {
   let i = 0
-  while (i < seg.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(seg[i].value) || PREFIX_WORDS.includes(seg[i].value))) i++
+  while (i < seg.length) {
+    const word = seg[i].value
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) { i++; continue }
+    const w = WRAPPERS.get(word)
+    if (!w) break
+    i++
+    if (w.kw) continue
+    while (i < seg.length && seg[i].value.startsWith('-')) {
+      const o = seg[i].value
+      i += o !== '--' && w.v && w.v.includes(o) ? 2 : 1
+      if (o === '--') break
+    }
+    i += w.n || 0
+  }
   return i < seg.length ? i : -1
 }
 
 const SHELLS = /^(bash|sh|zsh|dash|pwsh|powershell|cmd)(\.exe)?$/
 const SCRIPT_FLAG = /^(-[a-z]*c|-command|\/c|\/k)$/i
+// Shells whose script flag takes the rest of the line (bash -c takes one word; the rest are $0, $1...).
 const REST_SHELLS = /^(pwsh|powershell|cmd)(\.exe)?$/
 const STARTERS = ['start-process', 'start', 'saps']
 
-// The scripts a nested shell may run (`bash -lc "..."`, `pwsh -Command "..."`, `cmd /c ...`), in the
-// order to try, else null. For cmd and PowerShell the script flag takes the rest of the segment; a
-// quoted script with more words after it is tried as the quoted text first (`cmd /c "gh pr merge 3"
-// 2>&1`), then as the rest of the segment (`cmd /c "claude" --cloud x`), as model-guard does.
+// The scripts a nested shell may run (`bash -lc "..."`, `pwsh -Command "..."`, `cmd /c "..."`), in the
+// order to try, else null. For cmd and PowerShell the script flag takes the rest of the segment: an
+// unquoted script (`cmd /c claude --cloud x`) is that raw text, a synthetic token. A quoted script with
+// more words after it is tried as the quoted text first (`cmd /c "claude --cloud x" 2>&1`, where the
+// rest is the outer shell's redirection), then as the rest of the segment (`cmd /c "claude" --cloud x`).
 function nestedScripts(command, seg, ci) {
   const shell = baseName(seg[ci].value)
   if (!SHELLS.test(shell)) return null
   for (let j = ci + 1; j < seg.length - 1; j++) {
     if (!SCRIPT_FLAG.test(seg[j].value)) continue
-    if (!REST_SHELLS.test(shell) || j + 2 >= seg.length) return [seg[j + 1]]
-    const rest = { value: command.slice(seg[j + 1].start, seg[seg.length - 1].end) }
-    const q = command[seg[j + 1].start]
+    if (!REST_SHELLS.test(shell)) {
+      // A POSIX shell reads all its options before the script: `bash -c -- "..."`, `sh -c -e "..."`,
+      // `bash -c -o pipefail "..."` (-o and -O take a value).
+      let s = j + 1
+      while (s < seg.length && /^[-+]./.test(seg[s].value) && command.slice(seg[s].start, seg[s].end) === seg[s].value) {
+        const o = seg[s].value
+        s += /^[-+][oO]$/.test(o) ? 2 : 1
+        if (o === '--') break
+      }
+      return s < seg.length ? [seg[s]] : null
+    }
+    if (j + 2 >= seg.length) return [seg[j + 1]]
+    const start = seg[j + 1].start
+    const end = seg[seg.length - 1].end
+    const rest = { value: command.slice(start, end), start, end, synthetic: true }
+    const q = command[start]
     return q === '"' || q === "'" || q === '@' ? [seg[j + 1], rest] : [rest]
   }
   return null
+}
+
+const EVALS = ['eval', 'iex', 'invoke-expression']
+// Commands whose arguments may each hold a whole command line they run (`tmux new "..."`, `ssh host "..."`,
+// `find . -exec sh -c "..."`): every argument with a space in it is read as a script.
+const SCRIPT_TAKERS = ['tmux', 'screen', 'ssh', 'su', 'runuser', 'script', 'parallel', 'find']
+const ECHOES = ['echo', 'printf', 'write-output', 'write-host']
+
+// Whether segment k's command reads a script on stdin: a shell, ssh or su, or Invoke-Expression with no argument.
+function readsStdin(seg, ci) {
+  const name = baseName(seg[ci].value)
+  if (EVALS.includes(name)) return seg.length === ci + 1 && name !== 'eval'
+  return SHELLS.test(name) || name === 'ssh' || name === 'su' || name === 'runuser'
+}
+
+// The other scripts segment k runs, as texts to scan (never edited in place): eval's and Invoke-Expression's
+// arguments; the command line `watch` or `env -S` runs; SCRIPT_TAKERS' arguments; AppleScript's
+// `do shell script "..."`; and what a shell reads on stdin: a heredoc or `<<<` it takes, or what the segment
+// before pipes into it (`cat <<'EOF' | bash`, `echo "..." | sh`, `"..." | iex`).
+function extraScripts(full, k, ci) {
+  const seg = full.segments[k]
+  const name = baseName(seg[ci].value)
+  const args = seg.slice(ci + 1).map(t => t.value)
+  const out = []
+  if (EVALS.includes(name)) out.push(args.filter(a => !/^-c(ommand)?$/i.test(a)).join(' '))
+  if (/\s/.test(seg[ci].value) && seg.slice(0, ci).some(t => ['watch', '-S', '--split-string'].includes(t.value))) out.push(seg.slice(ci).map(t => t.value).join(' '))
+  if (SCRIPT_TAKERS.includes(name)) out.push(...args.filter(a => /\s/.test(a)))
+  if (name === 'osascript') {
+    for (const a of args) for (const m of a.matchAll(/do (?:shell )?script\s+"((?:[^"\\]|\\.)*)"/g)) out.push(m[1].replace(/\\(.)/g, '$1'))
+  }
+  if (readsStdin(seg, ci)) {
+    for (let j = 0; j < args.length; j++) if (args[j].startsWith('<<<')) out.push(args[j].length > 3 ? args[j].slice(3) : args[j + 1] || '')
+    for (const b of full.bodies) if (b.seg === k) out.push(b.value)
+    if (k > 0 && full.ends[k - 1] === '|') {
+      const prev = full.segments[k - 1]
+      for (const b of full.bodies) if (b.seg === k - 1) out.push(b.value)
+      const pi = commandIndex(prev)
+      if (pi >= 0 && /\s/.test(prev[pi].value)) out.push(prev[pi].value)
+      else if (pi >= 0 && ECHOES.includes(baseName(prev[pi].value))) out.push(prev.slice(pi + 1).map(t => t.value).join(' '))
+    }
+  }
+  return out.filter(Boolean)
+}
+
+// Where a launch script (coordinator-method's launch.exp, cloud-worker's launch.ps1) sits in segment
+// seg: as the command word (`./launch.exp`, `& "...\launch.ps1"`, `. launch.ps1`), after expect and its
+// flags, or as any argument of powershell or pwsh (`-File`, or the first operand). Else -1.
+function launchScriptAt(seg, ci) {
+  if (isLaunchScript(seg[ci].value)) return ci
+  const name = baseName(seg[ci].value)
+  if (/^expect(\.exe)?$/.test(name)) {
+    let j = ci + 1
+    while (j < seg.length && seg[j].value.startsWith('-')) j++
+    return j < seg.length && isLaunchScript(seg[j].value) ? j : -1
+  }
+  if (REST_SHELLS.test(name)) {
+    for (let j = ci + 1; j < seg.length; j++) if (isLaunchScript(seg[j].value)) return j
+  }
+  return -1
 }
 
 function hasFlag(values, ...names) {
   return values.some(v => names.includes(v) || names.some(n => v.startsWith(n + '=')))
 }
 
-// Whether claude's arguments start a cloud session: `--cloud`, except with `-p`/`--print` and no
-// `--environment`, which only queues a message to an existing session (`claude -p "<msg>" --cloud
-// <session_id|cse_id|url>`): steering open work, never held. Local `-p`/`--bg` runs (a resume of a local
-// session included) are not gated here.
-function cloudLaunch(values) {
-  return hasFlag(values, '--cloud') && !(hasFlag(values, '-p', '--print') && !hasFlag(values, '--environment'))
-}
-
 // ---------------------------------------------------------------- indirect launches (Start-Process, start)
 // What a starter hands claude is a Windows command line, and re-reading its quoting kept letting launches
 // through. So the argument list is never read: only which program the starter runs, from the starter's
-// own parameters, and claude there is held once as a cloud launch whatever its arguments say.
-// Keep this block identical to model-guard's (rules.js).
+// own parameters.
 
 // Start-Process's switches and the parameters that take a value. PowerShell accepts any prefix of a name
 // (`-NoNew`, `-File`) and `-Name:value` as one word; an unknown name is taken to have a value.
@@ -943,25 +1144,22 @@ function startSwitch(name) {
 
 // The words after a starter, as units: a word, or a `( ... )` group with what touches it (`@('a','b')`,
 // `(Get-Command claude).Source`). The statement runs on past breaks made only of parentheses (and of
-// newlines inside them, or after a ` or \ line continuation) and ends at any other separator.
+// newlines inside them; a ` or \ line continuation is a space) and ends at any other separator.
 function starterUnits(command, segments, k, ci) {
   const units = []
   let prev = segments[k][ci]
   let depth = 0
-  let carry = false
   for (let s = k; s < segments.length; s++) {
     for (let j = s === k ? ci + 1 : 0; j < segments[s].length; j++) {
       const tok = segments[s][j]
       let apart = !units.length
-      for (const ch of command.slice(prev.end, tok.start)) {
+      for (const ch of command.slice(prev.end, tok.start).replace(/[`\\]\r?\n/g, ' ')) {
         if (ch === '(') depth++
         else if (ch === ')') depth = Math.max(0, depth - 1)
-        else if (ch === ' ' || ch === '\t' || ((ch === '\n' || ch === '\r') && (depth > 0 || carry))) apart = apart || depth === 0
+        else if (ch === ' ' || ch === '\t' || ((ch === '\n' || ch === '\r') && depth > 0)) apart = apart || depth === 0
         else return units
       }
       prev = tok
-      carry = /^[`\\]$/.test(command.slice(tok.start, tok.end))
-      if (carry) continue
       if (apart) units.push([tok])
       else units[units.length - 1].push(tok)
     }
@@ -1008,14 +1206,16 @@ function startsClaude(command, segments, k, ci) {
   return title && positional.length > 1 && names(positional[1])
 }
 
-// The first argument that is not a flag (`expect -f launch.exp`, `powershell -NoProfile -File x.ps1`).
-function firstOperand(args) {
-  for (let j = 0; j < args.length; j++) {
-    const a = args[j]
-    if (/^-f(ile)?$/i.test(a)) return args[j + 1] || null
-    if (!a.startsWith('-')) return a
-  }
-  return null
+// ---------------------------------------------------------------- end of the shared shell parser
+
+// ---------------------------------------------------------------- cloud and merge gates (skill-router)
+
+// Whether claude's arguments start a cloud session: `--cloud`, except with `-p`/`--print` and no
+// `--environment`, which only queues a message to an existing session (`claude -p "<msg>" --cloud
+// <session_id|cse_id|url>`): steering open work, never held. Local `-p`/`--bg` runs (a resume of a local
+// session included) are not gated here.
+function cloudLaunch(values) {
+  return hasFlag(values, '--cloud') && !(hasFlag(values, '-p', '--print') && !hasFlag(values, '--environment'))
 }
 
 // The gate segment k of a command asks for: 'cloud', 'merge' or null. claude run by Start-Process or
@@ -1026,11 +1226,7 @@ function segmentGate(command, segments, k, ci) {
   const name = baseName(word)
   const args = seg.slice(ci + 1).map(t => t.value)
   if (isClaude(word) && cloudLaunch(args)) return 'cloud'
-  if (isLaunchScript(word)) return 'cloud'
-  if (/^expect(\.exe)?$/.test(name) || REST_SHELLS.test(name)) {
-    const op = firstOperand(args)
-    if (op && isLaunchScript(op)) return 'cloud'
-  }
+  if (launchScriptAt(seg, ci) >= 0) return 'cloud'
   if (STARTERS.includes(name)) {
     if (startsClaude(command, segments, k, ci)) return 'cloud'
     if (args.some(a => isLaunchScript(a) || /launch\.(exp|ps1)(['",]|$)/i.test(a))) return 'cloud'
@@ -1044,14 +1240,35 @@ function segmentGate(command, segments, k, ci) {
   return null
 }
 
+// git's options before its subcommand that take the next word.
+const GIT_VALUED = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env']
+
+// What a git segment does toward a local merge to main: 'merge' (`git merge <branch>`, not --abort or
+// --quit), 'push-main' (`git push` naming main or master: `origin main`, `HEAD:main`, `refs/heads/master`), or null.
+function gitStep(seg, ci) {
+  if (!/^git(\.exe)?$/.test(baseName(seg[ci].value))) return null
+  let j = ci + 1
+  while (j < seg.length && seg[j].value.startsWith('-')) j += GIT_VALUED.includes(seg[j].value) ? 2 : 1
+  if (j >= seg.length) return null
+  const rest = seg.slice(j + 1).map(t => t.value)
+  if (seg[j].value === 'merge') return rest.includes('--abort') || rest.includes('--quit') ? null : 'merge'
+  if (seg[j].value === 'push' && rest.some(a => /^\+?(?:[^:]*:)?(?:refs\/heads\/)?(main|master)$/.test(a))) return 'push-main'
+  return null
+}
+
 // The gates a Bash or PowerShell command asks for: [] | ['cloud'] | ['merge'] | ['cloud', 'merge'].
-// Nested shells (`bash -c "..."`, `pwsh -Command "..."`) are read too, up to 3 levels deep.
+// A local `git merge` followed by a `git push` to main or master in the same command merges a PR too.
+// Nested scripts are read up to 3 levels deep: shells (`bash -c "..."`, `pwsh -Command "..."`), eval and
+// Invoke-Expression, heredocs and pipes into a shell, `$(...)` and backticks inside double quotes.
 export function shellGates(command, depth = 0) {
   if (typeof command !== 'string') throw new TypeError('command is not text')
-  if (!/claude|launch\.(exp|ps1)|gh/i.test(command)) return []
+  if (!/claude|launch\.(exp|ps1)|gh|git/i.test(command)) return []
   const keys = []
   const add = key => { if (key && !keys.includes(key)) keys.push(key) }
-  const segments = tokenize(command)
+  const nested = text => { if (depth < 3) for (const key of shellGates(text, depth + 1)) add(key) }
+  const full = tokenizeFull(command)
+  const segments = full.segments
+  let merged = false
   for (let k = 0; k < segments.length; k++) {
     const seg = segments[k]
     const ci = commandIndex(seg)
@@ -1066,7 +1283,12 @@ export function shellGates(command, depth = 0) {
       }
       continue
     }
+    for (const text of extraScripts(full, k, ci)) nested(text)
     add(segmentGate(command, segments, k, ci))
+    const step = gitStep(seg, ci)
+    if (step === 'merge') merged = true
+    else if (step === 'push-main' && merged) add('merge')
   }
+  for (const s of full.subs) nested(s.value)
   return keys
 }

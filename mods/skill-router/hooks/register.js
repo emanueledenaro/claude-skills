@@ -187,10 +187,10 @@ export function register(on, options) {
   // ------------------------------------------------ prerequisite gates (deny once)
 
   if (config.gate !== 'off') {
-    // These gates are workflow nudges, not security guards: each holds a call at most once per
-    // session per requirement, the retry always passes, and a gate that fails lets the call through
-    // (.catch passes on with next(e) instead of refusing). They read only the main conversation's
-    // calls: a subagent's or workflow agent's (agentId set) passes and spends no gate.
+    // Fail-open on purpose: these gates are nudges, not guards, so .catch(passOn) lets a failing gate's call through.
+    // Each holds a call at most once per session per requirement and the retry always passes. They
+    // read only the main conversation's calls: a subagent's or workflow agent's (agentId set) passes
+    // and spends no gate.
 
     on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
       if (e.agentId !== undefined) return next(e)
