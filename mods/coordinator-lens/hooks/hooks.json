@@ -1,1 +1,0 @@
-{ "description": "coordinator-lens: budget, workers, merges, round, skill flow, night mode and decisions at a glance. Observes only.", "modules": ["./register.js"] }
