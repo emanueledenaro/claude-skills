@@ -25,7 +25,7 @@ Defaults for how commits, branches, PR titles and merge subjects are named when 
 - Form `<type>/<description>`. `main`, `master` and `develop` have no prefix.
 - Types: `feature/`, `bugfix/`, `hotfix/`, `chore/`, `release/`. Prefer `feature/` to `feat/` and `bugfix/` to `fix/`: the spec and the validator accept the short forms, this skill does not recommend them.
 - No agent-name prefix (`claude/`, `codex/`, `ai/`, `copilot/`, `cursor/`) unless the project asks for it, even though the spec allows them.
-- Description in English, lowercase, words separated by single hyphens. Add the issue number: `feature/issue-142-assignment-contract`.
+- Description in English, lowercase, words separated by single hyphens. An issue number is recommended: `feature/issue-142-assignment-contract`.
 - Forbidden: uppercase, underscores, spaces, double hyphens or double dots, a hyphen or a dot at the start or the end. A dot is allowed only in a version under `release/`: `release/v1.2.0`, `release/v0.3.0-beta.1`.
 - `dependabot/...` branches skip the name check, not the commit check.
 
