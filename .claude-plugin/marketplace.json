@@ -16,6 +16,11 @@
       "name": "skill-router",
       "source": "./mods/skill-router",
       "description": "Smart activation of skills with no model cost: suggests the skill a message calls for and asks once for the skills a workflow, agent, cloud launch, merge or mod edit needs; messages sent directly to workers and subagent calls are never held, and a gate that fails lets the call through."
+    },
+    {
+      "name": "coordinator-lens",
+      "source": "./mods/coordinator-lens",
+      "description": "Makes the coordinator's work visible: budget color and pace, workers, merges, the round, the skill flow, night mode and decisions, in a band above the prompt, a /coord pane and card, and a few toasts. It adds one hidden budget line to a prompt when the budget changes (option contextLine) and gives the model a budget_estimate tool; otherwise it only observes, never blocks or changes your work or the model's, and calls no model."
     }
   ]
 }
