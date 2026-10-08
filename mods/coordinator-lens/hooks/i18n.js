@@ -211,6 +211,9 @@ const TEXT = {
     'toast.color': 'Budget is now {color}',
     'toast.stalled': 'No news from {label}',
     'log.color': 'coordinator-lens: budget {from} -> {to}',
+    'log.redeemed': "coordinator-lens: {reset} looks redeemed. You can remove it from the 'Claude plan:' line in CLAUDE.md",
+    'redeemed.dated': 'the weekly reset that expires {date}',
+    'redeemed.undated': 'the weekly reset with no expiry date',
   },
 
   it: {
@@ -411,6 +414,9 @@ const TEXT = {
     'toast.color': 'Il budget ora è {color}',
     'toast.stalled': 'Nessuna notizia da {label}',
     'log.color': 'coordinator-lens: budget {from} -> {to}',
+    'log.redeemed': "coordinator-lens: {reset} sembra già usato. Puoi toglierlo dalla riga 'Claude plan:' in CLAUDE.md",
+    'redeemed.dated': 'il reset settimanale che scade il {date}',
+    'redeemed.undated': 'il reset settimanale senza scadenza',
   },
 }
 

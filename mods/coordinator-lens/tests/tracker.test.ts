@@ -6,7 +6,7 @@ import {
   createState, setPlan, planFromContext, planFromOption, applyUsage, budgetOf, onAgentToolCall, onAgentToolResult,
   onAgentSpawned, onTurnComplete, touch, onWorkflowLaunch, onTaskNotification, onMeasure, onShellCommand, onPrList,
   onSkill, onFileWrite, onQuestion, onQuestionAnswered, onWake, onColorChange, setNight, tick, viewModel, notifications,
-  estimateRun, dump, restore, mergeRunCost, mergeRedeemed, userPlan, MERGE_STEPS, ROUND_ITEMS, STAGES,
+  estimateRun, dump, restore, mergeRunCost, mergeRedeemed, newRedemptions, userPlan, MERGE_STEPS, ROUND_ITEMS, STAGES,
 } from '../hooks/tracker.js'
 import { parsePlanLine } from '../hooks/budget.js'
 import * as budgetModule from '../hooks/budget.js'
@@ -277,7 +277,7 @@ describe('workflow cost', () => {
     expect(vm.workers[0].points).toBe(4)
     expect(vm.runCost.samples).toBe(1)
     expect(near(vm.runCost.unitPoints, 4 / 9)).toBe(true)
-    expect(vm.runCost.last).toEqual({ label: 'deep-review', points: 4, agents: 7 })
+    expect(vm.runCost.last).toEqual({ label: 'deep-review', named: true, kind: 'workflow', points: 4, agents: 7 })
   })
 
   test('the unit is total points over total weight; a run that missed agents is not a sample', () => {
@@ -1143,7 +1143,7 @@ describe('persistence', () => {
     restore(t2, saved, NOW + HOUR)
     setPlan(t2, parsePlanLine(PLAN))
     const vm = vmOf(t2, NOW + HOUR)
-    expect(vm.runCost).toEqual({ unitPoints: 4 / 9, samples: 1, last: { label: 'deep-review', points: 4, agents: 7 } })
+    expect(vm.runCost).toEqual({ unitPoints: 4 / 9, samples: 1, last: { label: 'deep-review', named: true, kind: null, points: 4, agents: 7 } })
     expect(vm.night.on).toBe(true)
     expect(vm.night.since).toBe(NOW)
   })
@@ -1332,7 +1332,7 @@ describe('redeemed resets', () => {
     applyUsage(s, { rateLimits: limits(1), now: NOW + MIN, fresh: true })
     expect(budgetOf(s, NOW + MIN).resets).toHaveLength(0)
     const saved = JSON.parse(JSON.stringify(dump(s)))
-    expect(saved.redeemed).toEqual({ keys: ['weekly:2026-10-21'], had: { 'weekly:2026-10-21': 1 }, mark: { resetsAt: NOW + 144 * HOUR, used: 1 } })
+    expect(saved.redeemed).toEqual({ keys: ['weekly:2026-10-21'], had: { 'weekly:2026-10-21': 1 }, told: [], mark: { resetsAt: NOW + 144 * HOUR, used: 1 } })
     // a reload: a new state, the same plan line, the store, the same reading
     const r = createState()
     setPlan(r, parsePlanLine(ONE))
@@ -1365,7 +1365,7 @@ describe('redeemed resets', () => {
     const two = createState()
     two.redeemedKeys = ['weekly:2026-10-21', 'weekly:2026-10-21']
     expect(mergeRedeemed(two, { keys: ['weekly:2026-10-21'] }, NOW).keys).toEqual(['weekly:2026-10-21', 'weekly:2026-10-21'])
-    expect(mergeRedeemed(createState(), 'junk', NOW)).toEqual({ keys: [], had: {}, mark: null })
+    expect(mergeRedeemed(createState(), 'junk', NOW)).toEqual({ keys: [], had: {}, told: [], mark: null })
   })
 
   test('a redeemed undated reset is forgotten once the plan line has no undated entry', () => {
@@ -1725,5 +1725,142 @@ describe('budget.md boundaries in budget.js', () => {
     const tomorrow = at(10, 84, { plan: 'Claude plan: Max 20x · banked: weekly reset, expires 2026-10-08' })
     expect(tomorrow.resets).toHaveLength(1)
     expect(tomorrow.pace).toBe(100)
+  })
+})
+
+describe('third fix round', () => {
+  const run = (s, command, output = '', extra = {}) => onShellCommand(s, { command, output, isError: false, now: NOW, ...extra })
+  const url = id => 'https://claude.ai/code/session_' + id
+  const launches = s => vmOf(s).workers.filter(w => w.kind === 'cloud').map(w => [w.label, w.model, w.effort, w.status])
+  const PS1 = '"$HOME\\.claude\\skills\\cloud-worker\\launch.ps1"'
+
+  test('in PowerShell a backslash at the end of a line is a path: the next line keeps its merge or launch', () => {
+    const s = fresh()
+    run(s, 'cd C:\\repo\\\ngh pr merge 14 --merge --match-head-commit abc', '✓ Merged', { tool: 'PowerShell' })
+    expect(vmOf(s).merge.pr).toBe(14)
+    expect(steps(vmOf(s))).toMatchObject({ merged: true, headPinned: true })
+    const l = fresh()
+    run(l, 'Set-Location C:\\work\\\r\n& ' + PS1 + ' ps-task.md none w.log opus high', url('p1'), { tool: 'PowerShell' })
+    expect(launches(l)).toEqual([['ps-task', 'opus', 'high', 'launched']])
+    // the backtick is still PowerShell's line continuation
+    const b = fresh()
+    run(b, 'gh pr merge 13 --merge `\r\n  --match-head-commit abc', '✓ Merged', { tool: 'PowerShell' })
+    expect(steps(vmOf(b))).toMatchObject({ merged: true, headPinned: true })
+    // the same inside powershell -Command run from bash
+    const n = fresh()
+    run(n, 'powershell -NoProfile -Command "cd C:\\repo\\\ngh pr merge 17 --merge"', '✓ Merged', { tool: 'Bash' })
+    expect(vmOf(n).merge.pr).toBe(17)
+  })
+
+  test('in bash a backslash at the end of a line continues it, right after a word too', () => {
+    const s = fresh()
+    run(s, 'gh pr merge 12 --merge\\\n  --match-head-commit abc', '✓ Merged', { tool: 'Bash' })
+    expect(vmOf(s).merge.pr).toBe(12)
+    expect(steps(vmOf(s))).toMatchObject({ merged: true, headPinned: true })
+    const c = fresh()
+    run(c, 'claude --model opus --effort high \\\n  --cloud "wrapped task"', url('b1'), { tool: 'Bash' })
+    expect(launches(c)).toEqual([['wrapped task', 'opus', 'high', 'launched']])
+  })
+
+  test('with the shell not known, a backslash continues a line only where it starts a word', () => {
+    const s = fresh()
+    run(s, 'cd C:\\repo\\\ngh pr merge 14 --merge', '✓ Merged')
+    expect(vmOf(s).merge.pr).toBe(14)
+    const l = fresh()
+    run(l, 'cd C:\\work\\\n./launch.exp path-task none /tmp/p.log opus high', url('u1'))
+    expect(launches(l)).toEqual([['path-task', 'opus', 'high', 'launched']])
+    const c = fresh()
+    run(c, 'gh pr merge 12 --merge \\\n  --match-head-commit abc', '✓ Merged')
+    expect(steps(vmOf(c))).toMatchObject({ merged: true, headPinned: true })
+  })
+
+  test('launch.exp and launch.ps1 behind nohup, caffeinate, timeout, time, env or nice are launches', () => {
+    const s = fresh()
+    const cmds = [
+      ['nohup ./launch.exp a rules.md /tmp/a.log > /tmp/a.out 2>&1 &', 'a'],
+      ['caffeinate -i ./launch.exp b none /tmp/b.log opus high', 'b'],
+      ['caffeinate -is -t 36000 expect ~/launch.exp c none /tmp/c.log sonnet max', 'c'],
+      ['timeout 600 ./launch.exp d none /tmp/d.log', 'd'],
+      ['time ./launch.exp e none /tmp/e.log', 'e'],
+      ['env TERM=xterm-256color ./launch.exp f none /tmp/f.log', 'f'],
+      ['nice -n 10 ./launch.exp g none /tmp/g.log', 'g'],
+      ['nohup caffeinate -i timeout -k 5 3600 ./launch.exp h none /tmp/h.log fable xhigh', 'h'],
+      ['caffeinate -i pwsh -NoProfile -File ./launch.ps1 i.md none i.log opus high', 'i'],
+    ]
+    for (const [cmd, id] of cmds) run(s, cmd, url(id))
+    expect(launches(s)).toEqual([
+      ['a', 'sonnet', 'high', 'launched'],
+      ['b', 'opus', 'high', 'launched'],
+      ['c', 'sonnet', 'max', 'launched'],
+      ['d', 'sonnet', 'high', 'launched'],
+      ['e', 'sonnet', 'high', 'launched'],
+      ['f', 'sonnet', 'high', 'launched'],
+      ['g', 'sonnet', 'high', 'launched'],
+      ['h', 'fable', 'xhigh', 'launched'],
+      ['i', 'opus', 'high', 'launched'],
+    ])
+    // a wrapper around a command that only reads the script launches nothing
+    const r = fresh()
+    for (const cmd of ['nohup cat launch.exp', 'timeout 5 head launch.exp', 'env A=1 sed -n 1p launch.ps1']) run(r, cmd, url('r'))
+    expect(launches(r)).toEqual([])
+  })
+
+  test('a heredoc only written to a file launches and merges nothing; one fed to a shell does', () => {
+    const body = './launch.exp x none /tmp/x.log opus high\ngh pr merge 9 --merge\n'
+    const s = fresh()
+    run(s, 'cat <<EOF > run.sh\n' + body + 'EOF\nchmod +x run.sh', url('x'))
+    run(s, "cat > run.sh <<'EOF'\n" + body + 'EOF', url('x'))
+    run(s, 'tee run.sh <<-"END" >/dev/null\n\t' + body + '\tEND', url('x'))
+    expect(launches(s)).toEqual([])
+    expect(vmOf(s).merge.pr).toBe(null)
+    // what follows the body is read again
+    run(s, 'cat <<EOF > notes.txt\nhello\nEOF\ngh pr merge 21 --merge', '✓ Merged')
+    expect(vmOf(s).merge.pr).toBe(21)
+    const b = fresh()
+    run(b, "bash <<'EOF'\n./launch.exp y none /tmp/y.log\nEOF", url('y'))
+    run(b, 'cat <<EOF | bash -s\n./launch.exp z none /tmp/z.log\nEOF', url('z'))
+    expect(launches(b).map(w => w[0])).toEqual(['y', 'z'])
+    // a body no line closes is read as commands: a launch lost is worse than one read twice
+    const u = fresh()
+    run(u, 'cat <<EOF\n./launch.exp w none /tmp/w.log', url('w'))
+    expect(launches(u).map(w => w[0])).toEqual(['w'])
+  })
+
+  test('the last measured run is named in the person\'s language when it has no name of its own', () => {
+    const s = fresh(20)
+    onAgentToolCall(s, { toolUseId: 'r', input: { isolation: 'remote' }, now: NOW })
+    onAgentToolResult(s, { toolUseId: 'r', result: { status: 'remote_launched', taskId: 'rt' }, now: NOW })
+    onTaskNotification(s, '<task-notification>\n<task-id>rt</task-id>\n<status>completed</status>\n</task-notification>', NOW + 5 * MIN)
+    onMeasure(s, { rateLimits: limits(23), now: NOW + 6 * MIN })
+    expect(vmOf(s, NOW + 6 * MIN, 'it').runCost.last).toMatchObject({ label: 'sessione cloud', named: false, kind: 'cloud', points: 3 })
+    expect(vmOf(s, NOW + 6 * MIN, 'en').runCost.last).toMatchObject({ label: 'cloud session', named: false })
+    // one stored with the English word before kinds were kept reads the same
+    const r = createState()
+    restore(r, { runCost: { samples: [], last: { label: 'cloud session', points: 3, agents: null } } }, NOW)
+    expect(vmOf(r, NOW, 'it').runCost.last).toMatchObject({ label: 'sessione cloud', named: false, kind: 'cloud' })
+    // a run with a name keeps it
+    const n = createState()
+    restore(n, { runCost: { samples: [], last: { label: 'deep-review', kind: 'workflow', points: 3, agents: 7 } } }, NOW)
+    expect(vmOf(n, NOW, 'it').runCost.last).toMatchObject({ label: 'deep-review', named: true })
+  })
+
+  test('each redeemed key is handed out once to be told, also when the store already told it', () => {
+    const PLAN2 = 'Claude plan: Max 20x · banked: weekly reset, expires 2026-10-21; weekly reset'
+    const s = createState()
+    setPlan(s, parsePlanLine(PLAN2))
+    applyUsage(s, { rateLimits: limits(80), now: NOW, fresh: true })
+    applyUsage(s, { rateLimits: limits(1), now: NOW + MIN, fresh: true })
+    expect(newRedemptions(s, null, NOW + MIN)).toEqual([{ type: 'weekly', expires: '2026-10-21' }])
+    expect(newRedemptions(s, null, NOW + MIN)).toEqual([])
+    applyUsage(s, { rateLimits: limits(60), now: NOW + 2 * MIN, fresh: true })
+    applyUsage(s, { rateLimits: limits(2), now: NOW + 3 * MIN, fresh: true })
+    expect(newRedemptions(s, null, NOW + 3 * MIN)).toEqual([{ type: 'weekly', expires: null }])
+    expect(dump(s).redeemed.told).toEqual(['weekly:2026-10-21', 'weekly:'])
+    // another session (or this one before a reload) told it already
+    const o = createState()
+    setPlan(o, parsePlanLine(PLAN2))
+    applyUsage(o, { rateLimits: limits(80), now: NOW, fresh: true })
+    applyUsage(o, { rateLimits: limits(1), now: NOW + MIN, fresh: true })
+    expect(newRedemptions(o, { told: ['weekly:2026-10-21'] }, NOW + MIN)).toEqual([])
   })
 })

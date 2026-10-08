@@ -116,6 +116,9 @@ export function createState() {
     redeemedKeys: [],
     // per redeemed key, how many entries of that key the plan line had when it was last seen
     redeemedHad: {},
+    // redeemed keys the person was told about (kept in the store), and those seen here not told yet
+    redeemedTold: [],
+    redeemedNew: [],
     workers: [],
     runs: {},
     tasks: {},
@@ -229,6 +232,7 @@ export function applyUsage(state, { rateLimits, now, fresh }) {
       const key = resetKey(gone)
       state.redeemedKeys.push(key)
       if (state.plan && Array.isArray(state.plan.banked)) state.redeemedHad[key] = planCount(state.plan, key)
+      if (!state.redeemedNew.includes(key)) state.redeemedNew.push(key)
     }
     for (const w of state.workers) if (w.pre && isActiveOrAwaiting(w)) w.pre = null
   }
@@ -363,6 +367,29 @@ export function budgetOf(state, now) {
 // English word.
 function sampleLabel(w) {
   return w.label || t('en', 'label.' + w.kind)
+}
+
+const KINDS = ['agent', 'workflow', 'cloud']
+
+// The last measured run as kept: one with no name of its own keeps an empty label and its kind, so every
+// view says the kind in its own language. One stored before kinds were kept has the English word instead.
+function cleanLast(x) {
+  if (!x || typeof x !== 'object' || !isNum(x.points)) return null
+  let label = fit(x.label, 80)
+  let kind = KINDS.includes(x.kind) ? x.kind : null
+  const old = kind ? null : KINDS.find(k => label === t('en', 'label.' + k))
+  if (old) {
+    kind = old
+    label = ''
+  }
+  return { label, kind, points: x.points, agents: numOrNull(x.agents) }
+}
+
+// `named` is false when the label is the kind's word: the texts for the model then say it in English.
+function lastView(last, lang) {
+  if (!last) return null
+  const named = !!last.label || !last.kind
+  return { label: named ? last.label : t(lang, 'label.' + last.kind), named, kind: last.kind || null, points: last.points, agents: last.agents }
 }
 
 function newWorker(state, o) {
@@ -690,7 +717,7 @@ export function onMeasure(state, { rateLimits, now }) {
       state.runCost.samples.push({ label: sampleLabel(w), points: w.points, weight: wt, agents: w.agents ? w.agents.total : 1, at: now, plan: planKey(state) })
       state.runCost.samples = state.runCost.samples.slice(-MAX_SAMPLES)
     }
-    state.runCost.last = { label: sampleLabel(w), points: w.points, agents: w.agents ? w.agents.total : null }
+    state.runCost.last = { label: w.label || '', kind: w.kind, points: w.points, agents: w.agents ? w.agents.total : null }
   }
   return state
 }
@@ -822,27 +849,85 @@ export function onWake(state, { delaySeconds, stop, now }) {
 // ---------- shell commands ----------
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'wsl', 'powershell', 'pwsh', 'cmd'])
+// Shells that run what they read on stdin when given no script and no -c: a heredoc fed to one runs.
+const STDIN_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+
+// The syntax a command is read with: 'bash', 'powershell', 'cmd', or null when it is not known.
+function shellOf(name) {
+  const n = String(name || '').toLowerCase()
+  if (n === 'bash' || n === 'sh' || n === 'zsh' || n === 'dash' || n === 'ksh' || n === 'wsl') return 'bash'
+  if (n === 'powershell' || n === 'pwsh') return 'powershell'
+  if (n === 'cmd') return 'cmd'
+  return null
+}
+
+// A heredoc opening at `<<` (s[i] is the first `<`): its delimiter, whether `<<-` strips leading tabs, and
+// where the operator ends. Null for no heredoc (`<<<`, `1<<2`) and for one no line closes: a body that
+// never ends is read as commands, since a launch or merge lost is worse than one read twice.
+function heredocAt(s, i) {
+  if (s[i + 1] !== '<' || s[i + 2] === '<') return null
+  const m = /^<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([A-Za-z_][A-Za-z0-9_]*))/.exec(s.slice(i, i + 200))
+  if (!m) return null
+  const delim = m[2] != null ? m[2] : m[3] != null ? m[3] : m[4]
+  const dash = m[1] === '-'
+  const nl = s.indexOf('\n', i)
+  if (!delim || nl < 0) return null
+  const closes = s
+    .slice(nl + 1)
+    .split('\n')
+    .some(line => (dash ? line.replace(/^\t+/, '') : line).replace(/\r$/, '') === delim)
+  return closes ? { delim, dash, end: i + m[0].length } : null
+}
+
+// The heredoc bodies that start at `from`, in the order they were opened. Returns where reading goes on.
+function readDocs(s, from, pending) {
+  let at = from
+  for (const doc of pending) {
+    const lines = []
+    while (at < s.length) {
+      let nl = s.indexOf('\n', at)
+      if (nl < 0) nl = s.length
+      const line = s.slice(at, nl).replace(/\r$/, '')
+      at = nl + 1
+      if ((doc.dash ? line.replace(/^\t+/, '') : line) === doc.delim) break
+      lines.push(line)
+    }
+    doc.holder.text = lines.join('\n')
+  }
+  return Math.min(at, s.length)
+}
 
 // Quote-aware split into commands (on && || ; | & and new lines) and words. A backslash is a path
-// character except for \" inside double quotes. Outside quotes, a line continuation (bash `\` or
-// PowerShell's backtick at the end of a line) joins the next line to the same command.
-function splitCommand(command) {
+// character except for \" inside double quotes. A line continuation joins the next line to the same
+// command: the backtick at the end of a line in PowerShell, the backslash at the end of a line in bash.
+// With the shell not known (`shell` null) the backtick still is one, and a backslash only when it starts a
+// word, never at the end of a path (`cd C:\repo\`). Redirections (`> out.log`, `2>&1`) are no words.
+// Each command is { tokens, docs, pipe }: the bodies of its heredocs ({ text }, never read as commands
+// here) and whether its output goes on to the next command through a pipe.
+function splitCommand(command, shell) {
   const s = String(command == null ? '' : command)
   const segs = []
   let cur = []
+  let docs = []
+  let pending = []
   let tok = ''
   let has = false
   let q = null
+  let dropNext = false
   const pushTok = () => {
-    if (has) cur.push(tok)
+    if (has && dropNext) dropNext = false
+    else if (has) cur.push(tok)
     tok = ''
     has = false
   }
-  const pushSeg = () => {
+  const pushSeg = pipe => {
     pushTok()
-    if (cur.length) segs.push(cur)
+    dropNext = false
+    if (cur.length || docs.length) segs.push({ tokens: cur, docs, pipe: !!pipe })
     cur = []
+    docs = []
   }
+  const atEol = k => s[k] === '\n' || (s[k] === '\r' && s[k + 1] === '\n')
   for (let i = 0; i < s.length; i++) {
     const c = s[i]
     if (q) {
@@ -853,20 +938,50 @@ function splitCommand(command) {
       } else tok += c
       continue
     }
-    if ((c === '\\' || c === '`') && (s[i + 1] === '\n' || (s[i + 1] === '\r' && s[i + 2] === '\n'))) {
+    const doc = c === '<' && shell !== 'powershell' && shell !== 'cmd' ? heredocAt(s, i) : null
+    if (atEol(i + 1) && ((c === '`' && shell !== 'bash' && shell !== 'cmd') || (c === '\\' && (shell === 'bash' || (shell == null && !has))))) {
       pushTok()
       i += s[i + 1] === '\r' ? 2 : 1
+    } else if (doc) {
+      pushTok()
+      const holder = { text: '' }
+      docs.push(holder)
+      pending.push({ ...doc, holder })
+      i = doc.end - 1
     } else if (c === '"' || c === "'") {
       q = c
       has = true
-    } else if (c === '&' || c === '|' || c === ';' || c === '\n' || c === '\r') pushSeg()
+    } else if (c === '>' || c === '<' || (c === '&' && s[i + 1] === '>')) {
+      // a redirection: the descriptor before it (2>, *>) and the file after it are no words
+      if (has && /^(\d+|\*)$/.test(tok)) {
+        tok = ''
+        has = false
+      }
+      pushTok()
+      let k = c === '&' ? i + 2 : i + 1
+      if (s[k] === '>' || s[k] === '|') k += 1
+      if (s[k] === '&') {
+        k += 1
+        while (k < s.length && /[\d-]/.test(s[k])) k += 1
+      } else dropNext = true
+      i = k - 1
+    } else if (c === '\n') {
+      pushSeg(false)
+      if (pending.length) i = readDocs(s, i + 1, pending) - 1
+      pending = []
+    } else if (c === '\r') pushSeg(false)
+    else if (c === '|') {
+      const pipe = s[i + 1] !== '|'
+      pushSeg(pipe)
+      if (!pipe) i += 1
+    } else if (c === '&' || c === ';') pushSeg(false)
     else if (c === ' ' || c === '\t') pushTok()
     else {
       tok += c
       has = true
     }
   }
-  pushSeg()
+  pushSeg(false)
   return segs
 }
 
@@ -881,6 +996,54 @@ function stripPrefix(tokens) {
   let i = 0
   while (i < tokens.length && /^[A-Za-z_]\w*=/.test(tokens[i])) i += 1
   return tokens.slice(i)
+}
+
+// Commands that run the command after them, with the options each takes a value for. `caffeinate -is
+// ./launch.exp ...` (coordinator-method's way to keep a night run awake) is the launch itself.
+const WRAPPERS = {
+  nohup: [],
+  caffeinate: ['-t', '-w'],
+  timeout: ['-s', '-k', '--signal', '--kill-after'],
+  time: ['-f', '-o', '--format', '--output'],
+  env: ['-u', '-C', '-S', '--unset', '--chdir', '--split-string'],
+  nice: ['-n', '--adjustment'],
+}
+
+// The command a wrapper runs, past the wrapper's options (caffeinate -i, -is, -t N; timeout N; env VAR=x;
+// nice -n N; time -p; nohup), wrappers inside wrappers included.
+function unwrap(tokens) {
+  let t = tokens
+  for (let n = 0; n < 6 && t.length; n++) {
+    const exe = exeName(t[0])
+    const values = Object.prototype.hasOwnProperty.call(WRAPPERS, exe) ? WRAPPERS[exe] : null
+    if (!values) break
+    let i = 1
+    while (i < t.length) {
+      const tok = t[i]
+      if (tok === '--') {
+        i += 1
+        break
+      }
+      if (exe === 'env' && (tok === '-' || /^[A-Za-z_]\w*=/.test(tok))) i += 1
+      else if (!tok.startsWith('-') || tok === '-') break
+      else i += values.includes(tok) || (exe === 'caffeinate' && /^-[a-z]*[tw]$/.test(tok)) ? 2 : 1
+    }
+    // timeout's duration comes before the command
+    if (exe === 'timeout' && i < t.length) i += 1
+    t = t.slice(i)
+  }
+  return t
+}
+
+// A shell that runs what it reads on stdin: no -c, and no script file before the arguments (-s or --).
+function readsStdin(tokens) {
+  if (!STDIN_SHELLS.has(exeName(tokens[0]))) return false
+  for (let i = 1; i < tokens.length; i++) {
+    const tok = tokens[i]
+    if (tok === '-s' || tok === '--') return true
+    if (!tok.startsWith('-') || /^-[a-z]*c[a-z]*$/i.test(tok)) return false
+  }
+  return true
 }
 
 function hasFlag(tokens, ...names) {
@@ -919,11 +1082,13 @@ function sessionUrl(output) {
 // `background` is set when the command went on running in the background (run in the background, or
 // moved there on its timeout): its id (backgroundTaskId), or true when it has none. Its outcome is not
 // known yet, so a merge or a close in it waits for the task notification that settles it.
-export function onShellCommand(state, { command, output, isError, now, denied, background }) {
+// `tool` is the tool that ran it ('Bash' or 'PowerShell'): it decides what a line continuation is.
+export function onShellCommand(state, { command, output, isError, now, denied, background, tool }) {
   const out = typeof output === 'string' ? output.slice(0, 20000) : ''
   const bg = typeof background === 'string' && background ? background : background ? true : null
   const ctx = { out, isError: !!isError, denied: !!denied, now, background: bg }
-  handleCommand(state, String(command == null ? '' : command), ctx, 0)
+  const shell = tool === 'Bash' ? 'bash' : tool === 'PowerShell' ? 'powershell' : null
+  handleCommand(state, String(command == null ? '' : command), ctx, 0, shell)
   return state
 }
 
@@ -948,11 +1113,22 @@ function settleShell(state, taskId, ok, now) {
   return true
 }
 
-function handleCommand(state, command, ctx, depth) {
-  for (const raw of splitCommand(command)) handleTokens(state, stripPrefix(raw), ctx, depth)
+// A heredoc body is read as commands only when a shell reads it (`bash <<EOF`, `cat <<EOF | bash`); one
+// that only goes to a file (`cat <<EOF > x.sh`) launches and merges nothing.
+function handleCommand(state, command, ctx, depth, shell) {
+  const segs = splitCommand(command, shell)
+  for (let k = 0; k < segs.length; k++) {
+    const tokens = unwrap(stripPrefix(segs[k].tokens))
+    handleTokens(state, tokens, ctx, depth)
+    if (!segs[k].docs.length || depth >= 2) continue
+    const next = segs[k].pipe && segs[k + 1] ? unwrap(stripPrefix(segs[k + 1].tokens)) : []
+    const reader = tokens.length === 1 && exeName(tokens[0]) === 'cat' ? next : tokens
+    if (readsStdin(reader)) for (const doc of segs[k].docs) handleCommand(state, doc.text, ctx, depth + 1, 'bash')
+  }
 }
 
-function handleTokens(state, tokens, ctx, depth) {
+function handleTokens(state, raw, ctx, depth) {
+  const tokens = unwrap(stripPrefix(raw))
   if (!tokens.length) return
   const exe = exeName(tokens[0])
   const script = launchScript(tokens, exe)
@@ -965,7 +1141,7 @@ function handleTokens(state, tokens, ctx, depth) {
   else if (exe === 'wsl' && depth < 2 && !tokens.some(tok => /^(-c|-lc|-command|\/c)$/i.test(tok))) handleTokens(state, wslInner(tokens), ctx, depth + 1)
   else if (SHELLS.has(exe) && depth < 2) {
     const i = tokens.findIndex((tok, k) => k > 0 && /^(-c|-lc|-command|\/c)$/i.test(tok))
-    if (i > 0 && tokens[i + 1]) handleCommand(state, innerCommand(exe, tokens, i), ctx, depth + 1)
+    if (i > 0 && tokens[i + 1]) handleCommand(state, innerCommand(exe, tokens, i), ctx, depth + 1, shellOf(exe))
   }
 }
 
@@ -1464,7 +1640,7 @@ export function viewModel(state, budget, lang, now) {
     runCost: {
       unitPoints: unitOf(state.runCost.samples, planKey(state)),
       samples: unitSamples(state.runCost.samples, planKey(state)).length,
-      last: state.runCost.last ? { label: state.runCost.last.label, points: state.runCost.last.points, agents: state.runCost.last.agents } : null,
+      last: lastView(state.runCost.last, l),
     },
   }
 }
@@ -1603,14 +1779,42 @@ export function mergeRunCost(state, stored) {
     .sort((a, b) => (a.at || 0) - (b.at || 0))
     .slice(-MAX_SAMPLES)
   state.runCost.samples = samples
-  return { samples, last: state.runCost.last || (rc.last && typeof rc.last === 'object' && isNum(rc.last.points) ? { label: fit(rc.last.label, 80), points: rc.last.points, agents: numOrNull(rc.last.agents) } : null) }
+  return { samples, last: state.runCost.last || cleanLast(rc.last) }
 }
 
 // Redeemed resets and the last weekly reading outlive a reload: a redeemed reset never counts again, and a
 // redemption between a reading before the reload and one after it is still seen.
 function dumpRedeemed(state) {
   const m = state.weeklyMark
-  return { keys: state.redeemedKeys.slice(), had: hadFor(state.redeemedKeys, state.redeemedHad), mark: m && isNum(m.used) ? { resetsAt: numOrNull(m.resetsAt), used: m.used } : null }
+  return {
+    keys: state.redeemedKeys.slice(),
+    had: hadFor(state.redeemedKeys, state.redeemedHad),
+    told: state.redeemedTold.slice(),
+    mark: m && isNum(m.used) ? { resetsAt: numOrNull(m.resetsAt), used: m.used } : null,
+  }
+}
+
+// Keys told about, from here and from the store, each once; gone with their expiry date.
+function toldKeys(a, b, now) {
+  return liveKeys([...new Set([...liveKeys(a, now), ...liveKeys(b, now)])], now)
+}
+
+// budget.md: a redemption seen is told to the person, with the offer to take its entry out of the plan
+// line. Each key is told once, across reloads and sessions too (`stored` is the store's `redeemed`, with
+// the keys told so far). Marks the new ones told and returns them as { type, expires }.
+export function newRedemptions(state, stored, now) {
+  const st = stored && typeof stored === 'object' ? stored : {}
+  const told = toldKeys(state.redeemedTold, st.told, now)
+  const out = []
+  for (const key of state.redeemedNew) {
+    if (told.includes(key)) continue
+    told.push(key)
+    const at = key.indexOf(':')
+    out.push({ type: key.slice(0, at), expires: key.slice(at + 1) || null })
+  }
+  state.redeemedNew = []
+  state.redeemedTold = told.slice(-MAX_REDEEMED)
+  return out
 }
 
 const MAX_REDEEMED = 20
@@ -1653,8 +1857,9 @@ function markOf(x) {
 export function mergeRedeemed(state, stored, now) {
   const st = stored && typeof stored === 'object' ? stored : {}
   keepByPlan(state, liveKeys(unionKeys(liveKeys(state.redeemedKeys, now), liveKeys(st.keys, now)), now), maxHad(state.redeemedHad, st.had))
+  state.redeemedTold = toldKeys(state.redeemedTold, st.told, now).slice(-MAX_REDEEMED)
   const own = dumpRedeemed(state)
-  return { keys: own.keys, had: own.had, mark: own.mark || markOf(st.mark) }
+  return { keys: own.keys, had: own.had, told: own.told, mark: own.mark || markOf(st.mark) }
 }
 
 export function restore(state, saved, now) {
@@ -1662,13 +1867,13 @@ export function restore(state, saved, now) {
   const red = s.redeemed && typeof s.redeemed === 'object' ? s.redeemed : null
   if (red) {
     keepByPlan(state, liveKeys(unionKeys(state.redeemedKeys, liveKeys(red.keys, now)), now), maxHad(state.redeemedHad, red.had))
+    state.redeemedTold = toldKeys(state.redeemedTold, red.told, now).slice(-MAX_REDEEMED)
     if (!state.weeklyMark) state.weeklyMark = markOf(red.mark)
   }
   const rc = s.runCost && typeof s.runCost === 'object' ? s.runCost : null
   if (rc && Array.isArray(rc.samples)) {
     state.runCost.samples = cleanSamples(rc.samples).slice(-MAX_SAMPLES)
-    const last = rc.last
-    state.runCost.last = last && typeof last === 'object' && isNum(last.points) ? { label: fit(last.label, 80), points: last.points, agents: numOrNull(last.agents) } : null
+    state.runCost.last = cleanLast(rc.last)
   }
   const n = s.night && typeof s.night === 'object' ? s.night : null
   if (n && n.on === true && isNum(n.since) && (!isNum(now) || now - n.since < NIGHT_MAX_AGE)) {

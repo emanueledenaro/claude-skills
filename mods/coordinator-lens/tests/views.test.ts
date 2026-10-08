@@ -1859,3 +1859,21 @@ describe('second fix round', () => {
     expect(summaryText(vm).split('\n')[1]).toBe('workers: 1 running (cloud session cloud)')
   })
 })
+
+// ---------- third fix round ----------
+
+describe('third fix round', () => {
+  test('the last run named after its kind: in Italian on the Night tab, in English for the model', () => {
+    const last = { label: 'sessione cloud', named: false, kind: 'cloud', points: 3, agents: null }
+    const vm = fullVm({ lang: 'it', runCost: { unitPoints: 0.22, samples: 5, last } })
+    const night = linesOf(paneView(vm, fakeE('terminal'), { cols: 100, surface: 'terminal', tab: 'night' })).join('\n')
+    expect(night).toContain('ultimo: sessione cloud   3 punti')
+    expect(night).not.toContain('cloud session')
+    const text = summaryText(vm)
+    expect(text).toContain(', last cloud session 3 points')
+    expect(text).not.toContain('sessione')
+    // a run with a name of its own keeps it in both
+    const named = fullVm({ lang: 'it', runCost: { unitPoints: 0.22, samples: 5, last: { label: 'deep-review', named: true, kind: 'workflow', points: 2, agents: 9 } } })
+    expect(summaryText(named)).toContain(', last deep-review 2 points')
+  })
+})

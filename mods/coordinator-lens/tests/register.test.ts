@@ -1614,3 +1614,59 @@ describe('second fix round', () => {
     expect((await coord($)).text).not.toContain('plan assumed')
   })
 })
+
+describe('third fix round', () => {
+  const LINE = 'Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22'
+  const IT = "coordinator-lens: il reset settimanale che scade il 2026-10-22 sembra già usato. Puoi toglierlo dalla riga 'Claude plan:' in CLAUDE.md"
+  const EN_LINE = "coordinator-lens: the weekly reset that expires 2026-10-22 looks redeemed. You can remove it from the 'Claude plan:' line in CLAUDE.md"
+  const redeem = async ($, w) => {
+    await measure($, [weekly(40), five(0)])
+    w.rateLimits = [weekly(2), five(0)]
+    await measure($, [weekly(2), five(0)])
+  }
+
+  test('a redemption seen gets one dim transcript line in Italian, once, with no tool names', async ($, on) => {
+    const w = world(on, { store: { planLine: LINE }, rateLimits: [weekly(40), five(0)] })
+    await start($)
+    await redeem($, w)
+    expect(w.logs).toEqual([{ text: IT, to: 'transcript' }])
+    expect(w.logs[0].text).not.toMatch(/budget_estimate|store|API|tool|\$\./i)
+    // more readings, a second drop of the same reset, a /coord: still one line
+    await measure($, [weekly(2), five(0)])
+    w.rateLimits = [weekly(30), five(0)]
+    await measure($, [weekly(30), five(0)])
+    w.rateLimits = [weekly(3), five(0)]
+    await measure($, [weekly(3), five(0)])
+    await coord($)
+    expect(w.logs.filter(l => l.text.includes('2026-10-22'))).toHaveLength(1)
+    expect(w.store.get('redeemed')).toMatchObject({ told: ['weekly:2026-10-22'] })
+  })
+
+  test('in English with the language option en', { options: EN_NO_PR }, async ($, on) => {
+    const w = world(on, { store: { planLine: LINE }, rateLimits: [weekly(40), five(0)] })
+    await start($)
+    await redeem($, w)
+    expect(w.logs).toEqual([{ text: EN_LINE, to: 'transcript' }])
+  })
+
+  test('a reset told before a reload is not told again after it', async ($, on) => {
+    const w = world(on, {
+      store: { planLine: LINE, redeemed: { keys: [], told: ['weekly:2026-10-22'], mark: { resetsAt: NOW + 144 * HOUR, used: 60 } } },
+      rateLimits: [weekly(3), five(0)],
+    })
+    await start($)
+    expect(w.store.get('redeemed')).toMatchObject({ keys: ['weekly:2026-10-22'], told: ['weekly:2026-10-22'] })
+    expect(w.logs).toEqual([])
+  })
+
+  test('the shell tool decides the line continuation: bash joins after a word, PowerShell keeps a path', { options: EN_NO_PR }, async ($, on) => {
+    const w = world(on)
+    w.answers.Bash = () => ({ result: { stdout: '✓ Merged', stderr: '', interrupted: false } })
+    w.answers.PowerShell = () => ({ result: { stdout: '✓ Merged', stderr: '', interrupted: false } })
+    await start($)
+    await $.tool.call({ tool: 'Bash', command: 'gh pr merge 42 --merge\\\n  --match-head-commit abc' })
+    expect((await coord($)).text).toContain('merge: #42 2/7 steps')
+    await $.tool.call({ tool: 'PowerShell', command: 'cd C:\\repo\\\ngh pr merge 43 --merge' })
+    expect(w.toasts).toEqual(['Merged #42', 'Merged #43'])
+  })
+})

@@ -11,7 +11,7 @@ import {
   createState, setPlan, userPlan, planFromOption, applyUsage, budgetOf, onAgentToolCall, onAgentToolResult,
   onAgentSpawned, onTurnComplete, touch, onWorkflowLaunch, onTaskNotification, onMeasure, onShellCommand, onPrList,
   onSkill, onFileWrite, onQuestion, onQuestionAnswered, onWake, onColorChange, setNight, tick, viewModel,
-  notifications, estimateRun, dump, restore, mergeRunCost, mergeRedeemed,
+  notifications, estimateRun, dump, restore, mergeRunCost, mergeRedeemed, newRedemptions,
 } from './tracker.js'
 import { t, colorWord } from './i18n.js'
 
@@ -170,11 +170,24 @@ async function persist($) {
 
 // Redeemed resets and the weekly mark go to their own key whenever they change, so a reload never counts
 // a redeemed reset again (folded with what other sessions stored: a redemption is account-wide).
+// A redemption seen for the first time gets one transcript line (budget.md: tell the person and offer to
+// take the entry out of the plan line); the keys told are stored too, so no session tells it twice.
 async function persistRedeemed($) {
   try {
     const sig = JSON.stringify(dump(S).redeemed)
-    if (sig === lastRedeemed) return
-    const merged = mergeRedeemed(S, await $.store.get('redeemed'), await nowOf($))
+    if (sig === lastRedeemed && !S.redeemedNew.length) return
+    const now = await nowOf($)
+    let stored = null
+    try {
+      stored = await $.store.get('redeemed')
+    } catch {}
+    for (const r of newRedemptions(S, stored, now)) {
+      try {
+        const reset = r.expires ? t(OPT.lang, 'redeemed.dated', { date: r.expires }) : t(OPT.lang, 'redeemed.undated')
+        await $.ui.log(t(OPT.lang, 'log.redeemed', { reset }), { to: 'transcript' })
+      } catch {}
+    }
+    const merged = mergeRedeemed(S, stored, now)
     await $.store.set('redeemed', merged)
     lastRedeemed = JSON.stringify(dump(S).redeemed)
   } catch {}
@@ -533,6 +546,7 @@ export function register(on, options) {
     const r = await next(e)
     try {
       onShellCommand(S, {
+        tool: e.tool,
         command: e.command,
         output: outputOf(r),
         isError: !!(r && r.isError),

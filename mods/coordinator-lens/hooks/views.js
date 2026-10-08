@@ -1286,6 +1286,11 @@ function nightBody(vm, E, inner, actions) {
   return lines
 }
 
+// The last run's name for the model: a run named after its kind is said in English, whatever the language.
+function lastLabelEn(last) {
+  return last.named === false && has('en', 'label.' + last.kind) ? t('en', 'label.' + last.kind) : last.label
+}
+
 export function paneView(vm, E, opts) {
   if (!vm || !E || !E.Box || !E.Text) return null
   const lang = langOf(vm)
@@ -1533,7 +1538,7 @@ export function summaryText(vm) {
         ' weekly points per Sonnet-sized agent (' +
         (rc.samples || 0) +
         ' samples)' +
-        (rc.last ? ', last ' + fit(rc.last.label, 30) + ' ' + fmtPoints(rc.last.points) + ' points' : ''),
+        (rc.last ? ', last ' + fit(lastLabelEn(rc.last), 30) + ' ' + fmtPoints(rc.last.points) + ' points' : ''),
     )
   } else lines.push('run cost: no sample yet')
 
