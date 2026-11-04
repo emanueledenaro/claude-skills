@@ -39,14 +39,28 @@ A screen map is the reference every builder follows: the app, its menus, the web
   - a link to each screen (`#id`);
   - a platform switch when the screens differ by platform.
 
-## 3. After every change
+## 3. Design checklist
+
+Check every frame against these before it goes on the map, then against the project's own design skill if it has one (for example a taste or brand skill):
+
+1. **Visual hierarchy**: one element catches the eye first, set apart by size, weight and colour.
+2. **Contrast**: light and dark, large and small, clearly apart. Every text tier reaches 4.5:1 on its surface.
+3. **Alignment and grid**: one left edge per surface, one spacing base (4px or 8px), the same padding on surfaces of the same kind.
+4. **White space**: groups are separated by space before lines or boxes, so the screen breathes and the main subject stands out.
+5. **Balance**: visual weight is spread so that the screen is steady, with no side empty and no side crowded.
+6. **Typography**: one text face, a few sizes, nothing under 11px, tabular figures for numbers, readable line length.
+7. **Consistency**: the same button, colour, radius and spacing everywhere, and one meaning per signal.
+
+Native interface parts follow the platform's own materials and controls (system glass, menus, title bars). Mark that as a platform choice, not a style of your own.
+
+## 4. After every change
 
 1. Render the frames you changed and look at them before you publish.
 2. Publish the new version at the same link, so links that were already shared keep working.
 3. Tell whoever tracks status what changed. Send builders the spec of the change.
-4. If the project has a skill made from the map, generate it again (`reference.md` section 4), so the text and the drawing never disagree.
+4. If the project has a skill made from the map, generate it again (`reference.md` section 4; this skill's section 5), so the text and the drawing never disagree.
 
-## 4. Turning a map into a skill
+## 5. Turning a map into a skill
 
 A map becomes a **project skill**. It lives in the project's own repository, for example `.claude/skills/<product>-map/`, and never in a shared or public skills repository. Product facts stay with the product. The skill has:
 
@@ -57,6 +71,6 @@ Before a map's content goes anywhere other people can see, remove prices that ar
 
 ## Done when
 
-- Every screen has a status, real copy and notes, on every platform where it exists.
+- Every screen has a status, real copy and notes, on every platform where it exists, and passes the design checklist.
 - Nothing on the map contradicts the latest decision or the latest test on a real device.
 - Builders have been told what changed, and any skill made from the map has been generated again.
