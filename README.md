@@ -21,6 +21,8 @@ Personal skills for running Claude Code as a coordinator that delegates work to 
 | [mod-ui](mod-ui/SKILL.md) | The visual language of the mods: band, pane, chat card, toasts, theme colors, Desktop and terminal differences. |
 | [clean-code](clean-code/SKILL.md) | Eight code-quality rules for code Claude writes or reviews (names, small functions, few arguments, no hidden side effects, KISS, DRY, YAGNI, SOLID), each blocking or advisory, with per-project overrides. |
 | [git-conventions](git-conventions/SKILL.md) | Default naming for commits, branches, PR titles and merge subjects (Conventional Commits, Conventional Branch), the history and tag rules, and a Node validator with a commit-msg hook for projects with no CI of its own. |
+| [screen-map](screen-map/SKILL.md) | How to build and keep a screen map the whole team follows: lanes per platform, one frame per screen with real copy and a status, arrows for the flow, simulations of real users, and the rule that the map changes before the code. |
+| [mousegeist-map](mousegeist-map/SKILL.md) | The Mousegeist screen map as a build spec: every screen of the app, panel, confirmation card, AI cursor, Windows version and website, with the exact Italian copy, colors, approval modes and decisions. Project-specific: install it only where you build Mousegeist. |
 
 The skills point to each other instead of repeating themselves. A project's own `AGENTS.md`, `CONTRIBUTING.md` and branch protection always win over them; project facts stay in the project.
 
@@ -29,14 +31,14 @@ The skills point to each other instead of repeating themselves. A project's own 
 ```bash
 git clone https://github.com/emanueledenaro/claude-skills.git
 cd claude-skills
-cp -R model-mix smart-ultracode coordinator-method smart-mods cloud-worker merge-gate overnight roadmap-tracker matt-bridge verified-research release-watch skill-audit context-hygiene windows-ops mod-ui clean-code git-conventions ~/.claude/skills/
+cp -R model-mix smart-ultracode coordinator-method smart-mods cloud-worker merge-gate overnight roadmap-tracker matt-bridge verified-research release-watch skill-audit context-hygiene windows-ops mod-ui clean-code git-conventions screen-map ~/.claude/skills/
 ```
 
 Then add a routing block to your global `~/.claude/CLAUDE.md`, so every project reaches them at the right moment:
 
 ```markdown
 Before launching any agent, cloud session, workflow or review, use `model-mix`. Before writing a workflow script, use `smart-ultracode`. When coordinating delegated work (workers, merges, rounds, overnight loops, UI changes), use `coordinator-method`. Before writing, changing, installing or reviewing a Claude Code mod or any plugin, or when asked for a pane, a band above the prompt, a custom command or a tool-call guard, use `smart-mods`; for what a mod draws, also `mod-ui`.
-Launching or steering a cloud worker: `cloud-worker`. Merging a finished PR: `merge-gate`. Going unattended or to sleep: `overnight`. Issues, milestones, the roadmap: `roadmap-tracker`. Running Matt Pocock's skills: `matt-bridge`. Researching facts that change (prices, limits, versions, APIs): `verified-research`. Checking for new releases or models: `release-watch`. Reviewing skills or their cost: `skill-audit`. A heavy or long session: `context-hygiene`. Shell, paths or tools on Windows: `windows-ops`. Writing, refactoring or reviewing code: `clean-code`. Writing a commit message, naming a branch, titling a PR or a merge commit: `git-conventions`.
+Launching or steering a cloud worker: `cloud-worker`. Merging a finished PR: `merge-gate`. Going unattended or to sleep: `overnight`. Issues, milestones, the roadmap: `roadmap-tracker`. Running Matt Pocock's skills: `matt-bridge`. Researching facts that change (prices, limits, versions, APIs): `verified-research`. Checking for new releases or models: `release-watch`. Reviewing skills or their cost: `skill-audit`. A heavy or long session: `context-hygiene`. Shell, paths or tools on Windows: `windows-ops`. Writing, refactoring or reviewing code: `clean-code`. Writing a commit message, naming a branch, titling a PR or a merge commit: `git-conventions`. Mapping screens or keeping design and code aligned: `screen-map`.
 ```
 
 ## Your plan
