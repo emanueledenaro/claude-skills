@@ -73,7 +73,7 @@ rules: <what may start, what is parked, stop conditions>
 Done: <items, one line each>
 Merged: <PR numbers with subjects>
 Needs you: <decision or ok, one line each, most urgent first>
-Weekly points: <before> -> <after> (<n> points), 5-hour peak <n>%
+Weekly points: <before> -> <after> (<n> points), 5-hour peak <n>% (Pro and Max; leave out on Ultra)
 Not done: <item> - <reason: red budget | limit | stalled | parked>
 ```
 

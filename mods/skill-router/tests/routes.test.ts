@@ -9,9 +9,9 @@ import {
 const SAMPLES: Record<string, string[]> = {
   'model-mix': [
     'lancia tre agenti per rivedere i moduli', 'quanto budget ci resta questa settimana?', "com'è il consumo di token oggi?",
-    'siamo vicini al limite settimanale?', 'che effort uso per la review?', 'sono sul piano Max 20x',
+    'siamo vicini al limite settimanale?', 'che effort uso per la review?', 'sono sul piano Max 20x', 'sono sul piano Ultra', 'sono sul piano Max',
     'launch two agents to audit the auth module', 'how much usage is left this week?', 'are we close to the weekly limit?',
-    'should this run with opus or sonnet?',
+    'should this run with opus or sonnet?', 'I am on the Ultra plan',
   ],
   'smart-ultracode': [
     'scrivi un workflow per analizzare tutti i file', 'fai un audit completo del repo', 'usa tanti agenti in parallelo',

@@ -441,7 +441,7 @@ export function decideWorkflow(input, ctx) {
   if (resume) {
     if (b.pausedFiveHour) return denied(pausedGate(b, t, ctx))
     const gate = b.color === 'red' ? { note: t.resumeRed(b) } : launchGate(ctx)
-    const own = b.profile && b.profile.width > 0 ? b.profile : (b.plan && PROFILES[b.plan.name]) || PROFILES['Max 5x']
+    const own = b.profile && b.profile.width > 0 ? b.profile : (b.plan && PROFILES[b.plan.name]) || PROFILES['Max']
     const d = allowWith(gate, 'Workflow resume allowed: it finishes open work.')
     d.startRun = { width: own.width, name: own.name }
     return d

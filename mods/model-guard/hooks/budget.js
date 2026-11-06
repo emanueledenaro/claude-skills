@@ -8,13 +8,13 @@ const WEEK = 7 * DAY
 const READING_MAX_AGE = 10 * 60 * 1000
 
 export const PROFILES = {
-  'Max 20x': { name: 'Max 20x', width: 16, cloud: 3, verify: 'opus-high-per-finding', reserve: 10 },
-  'Max 5x': { name: 'Max 5x', width: 8, cloud: 1, verify: 'opus-high-batched', reserve: 15 },
+  'Ultra': { name: 'Ultra', width: 16, cloud: 3, verify: 'opus-high-per-finding', reserve: 10 },
+  'Max': { name: 'Max', width: 8, cloud: 1, verify: 'opus-high-batched', reserve: 15 },
   'Pro': { name: 'Pro', width: 4, cloud: 1, verify: 'opus-medium-final', reserve: 25 },
   'Solo': { name: 'Solo', width: 0, cloud: 0, verify: 'main-session', reserve: null },
 }
 
-const LADDER = ['Max 20x', 'Max 5x', 'Pro', 'Solo']
+const LADDER = ['Ultra', 'Max', 'Pro', 'Solo']
 
 export function stepDown(name) {
   const i = LADDER.indexOf(name)
@@ -23,13 +23,16 @@ export function stepDown(name) {
 
 export function planName(text) {
   if (!text) return null
-  if (/max\s*20\s*x/i.test(text)) return 'Max 20x'
-  if (/max\s*5\s*x/i.test(text)) return 'Max 5x'
+  // Order matters: the legacy names (Max 20x is Ultra, Max 5x is Max) come before a plain Max.
+  if (/\bultra\b/i.test(text)) return 'Ultra'
+  if (/max\s*20\s*x/i.test(text)) return 'Ultra'
+  if (/max\s*5\s*x/i.test(text)) return 'Max'
+  if (/\bmax\b/i.test(text)) return 'Max'
   if (/\bpro\b/i.test(text)) return 'Pro'
   return null
 }
 
-// Reads `Claude plan: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22`.
+// Reads `Claude plan: Ultra · reserve 10% · banked: weekly reset, expires 2026-10-22`.
 // Returns null when the text has no plan line.
 export function parsePlanLine(text) {
   if (typeof text !== 'string') return null
@@ -88,7 +91,7 @@ export function computeBudget(input) {
   const now = input.now
   const plan = input.plan || null
   const known = !!(plan && plan.name)
-  const planProfile = PROFILES[known ? plan.name : 'Max 5x']
+  const planProfile = PROFILES[known ? plan.name : 'Max']
   const reserve = plan && typeof plan.reserve === 'number' ? plan.reserve : planProfile.reserve
   const weekly = windowOf(input.rateLimits, 'seven_day')
   const fiveHour = windowOf(input.rateLimits, 'five_hour')
@@ -96,6 +99,9 @@ export function computeBudget(input) {
   const base = {
     plan: { name: planProfile.name, known, reserve },
     weekly, fiveHour, inFlight,
+    // Five-hour rule, one for every plan: pause when a five_hour window is in rateLimits and is at 90% or more.
+    // Pro and Max have that window. A verified Ultra account has none, so nothing shows up and nothing pauses;
+    // an unverified Ultra account still gets a temporary five_hour window, and that one keeps pausing.
     pausedFiveHour: !!(fiveHour && fiveHour.used >= 90 && (!fiveHour.resetsAt || fiveHour.resetsAt > now)),
     resets: countedResets(plan, now),
     bankedWeekly: bankedWeekly(plan, now),

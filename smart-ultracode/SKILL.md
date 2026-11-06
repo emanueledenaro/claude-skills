@@ -27,7 +27,7 @@ Phases are understand, design, implement, review. Each one is its own workflow. 
 
 - Pipeline by default: each item moves through its stages as soon as it is ready.
 - Barrier only for a cross-item need: dedup, ranking, early exit.
-- Adversarial verify for every finding: a fresh agent gets the claim and the repo, never the author's reasoning, and tries to refute it with evidence (file and line, command and output). Give it one finding and the cited lines, so the strong model reads little. Below today's Max 20x profile, batch: one verifier per area or file with all its findings, still blind to the authors' reasoning. Security findings keep one Opus high verifier each on every profile, in waves that fit the width; on Solo the main session verifies them.
+- Adversarial verify for every finding: a fresh agent gets the claim and the repo, never the author's reasoning, and tries to refute it with evidence (file and line, command and output). Give it one finding and the cited lines, so the strong model reads little. Below today's Ultra profile, batch: one verifier per area or file with all its findings, still blind to the authors' reasoning. Security findings keep one Opus high verifier each on every profile, in waves that fit the width; on Solo the main session verifies them.
 - Judge panel for a wide design space: independent proposals, scored against criteria you write before any proposal exists.
 - Loop until dry for discovery of unknown size: repeat until a round adds nothing new, with a round cap and dedup per round.
 - Completeness critic last: one agent gets the original goal, the work-list and the results, and names what is missing, skipped or assumed. Its gaps go into one more round or into the report.

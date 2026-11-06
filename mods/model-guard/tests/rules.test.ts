@@ -16,7 +16,7 @@ const reading = (weekly: number, five = 10) => [
 const budget = (weekly: number | null, plan: any = null, five = 10) =>
   computeBudget({ rateLimits: weekly === null ? [] : reading(weekly, five), now: NOW, plan, inFlight: 0, readingAt: NOW })
 const ctx = (b: any, extra: any = {}) => ({ budget: b, redPolicy: 'deny', lang: 'en', unknownLogged: false, ...extra })
-const run = (width: number, admitted: number[] = [], name = 'Max 5x') => ({ admitted: new Set(admitted), width, name })
+const run = (width: number, admitted: number[] = [], name = 'Max') => ({ admitted: new Set(admitted), width, name })
 
 describe('rules', () => {
   test('tokenize keeps quoted text whole and splits on separators', () => {
@@ -73,8 +73,8 @@ describe('rules', () => {
 
   test('plan from CLAUDE.md files (kind user only) and from the option', () => {
     expect(planFromFiles([{ path: 'p', kind: 'project', content: 'Claude plan: Pro' }])).toBeNull()
-    expect(planFromFiles([{ path: 'u', kind: 'user', content: 'x\nClaude plan: Max 20x · reserve 10%' }])).toMatchObject({ name: 'Max 20x', reserve: 10 })
-    expect(planFromOption('Max 5x · reserve 15%')).toMatchObject({ name: 'Max 5x', reserve: 15 })
+    expect(planFromFiles([{ path: 'u', kind: 'user', content: 'x\nClaude plan: Ultra · reserve 10%' }])).toMatchObject({ name: 'Ultra', reserve: 10 })
+    expect(planFromOption('Max · reserve 15%')).toMatchObject({ name: 'Max', reserve: 15 })
     expect(planFromOption('Claude plan: Pro')).toMatchObject({ name: 'Pro' })
     expect(planFromOption('')).toBeNull()
   })
@@ -151,23 +151,23 @@ describe('rules', () => {
     expect(decideWorkflowAgent({ model: 'sonnet', workflow: { runId: 'wf_old', agentIndex: 4 } }, ctx(red), started).startRun).toBeUndefined()
     const full = run(8, [1, 2, 3, 4, 5, 6, 7, 8])
     expect(decideWorkflowAgent({ model: 'sonnet', workflow: { runId: 'wf_old', agentIndex: 9 } }, ctx(red), full))
-      .toMatchObject({ action: 'deny', reason: expect.stringContaining('Max 5x, which applied when the run started, allows 8') })
+      .toMatchObject({ action: 'deny', reason: expect.stringContaining('Max, which applied when the run started, allows 8') })
     // A step down after the run started does not narrow it either.
-    const yellow20 = budget(60, planFromOption('Max 20x'))
-    const wide = run(16, [1, 2, 3, 4, 5, 6, 7, 8], 'Max 20x')
+    const yellow20 = budget(60, planFromOption('Ultra'))
+    const wide = run(16, [1, 2, 3, 4, 5, 6, 7, 8], 'Ultra')
     expect(decideWorkflowAgent({ model: 'sonnet', workflow: { runId: 'wf_w', agentIndex: 9 } }, ctx(yellow20), wide).action).toBe('allow')
   })
 
   test('decideWorkflowAgent records a run first seen through a model refusal, unless its width is 0', () => {
     const green = budget(40)
     expect(decideWorkflowAgent({ model: 'fable', workflow: { runId: 'wf_f', agentIndex: 1 } }, ctx(green), undefined))
-      .toMatchObject({ action: 'deny', startRun: { width: 8, name: 'Max 5x' } })
+      .toMatchObject({ action: 'deny', startRun: { width: 8, name: 'Max' } })
     expect(decideWorkflowAgent({ model: 'fable', workflow: { runId: 'wf_f', agentIndex: 1 } }, ctx(budget(80)), undefined).startRun).toBeUndefined()
   })
 
   test('the width lines name no agent number (they repeat for every refused agent)', () => {
     const d: any = decideWorkflowAgent({ model: 'sonnet', workflow: { runId: 'wf_1', agentIndex: 9 } }, ctx(budget(40)), run(8, [1, 2, 3, 4, 5, 6, 7, 8]))
-    expect(d.log).toBe('model-guard: workflow past width 8 (Max 5x), further agents blocked')
+    expect(d.log).toBe('model-guard: workflow past width 8 (Max), further agents blocked')
   })
 
   test('statusText only while red, in the person\'s language', () => {
@@ -265,7 +265,7 @@ describe('heredocs and here-strings are data', () => {
 })
 
 describe('cloud-session column of the stepped-down profile', () => {
-  test('Pro yellow is Solo: no new cloud session or launch.exp; Max 20x yellow (Max 5x) still allows one', () => {
+  test('Pro yellow is Solo: no new cloud session or launch.exp; Ultra yellow (Max) still allows one', () => {
     const proYellow = budget(60, planFromOption('Pro'))
     expect(proYellow.profile.name).toBe('Solo')
     for (const command of ['claude --model sonnet --cloud "x"', 'claude --cloud "x"', 'expect launch.exp t r l sonnet high']) {
@@ -274,7 +274,7 @@ describe('cloud-session column of the stepped-down profile', () => {
       expect(d.reason).toContain('no new cloud sessions')
       expect(d.log).toContain('Solo')
     }
-    expect(decideShell({ tool: 'Bash', command: 'claude --model sonnet --cloud "x"' }, ctx(budget(60, planFromOption('Max 20x')))).action).toBe('allow')
+    expect(decideShell({ tool: 'Bash', command: 'claude --model sonnet --cloud "x"' }, ctx(budget(60, planFromOption('Ultra')))).action).toBe('allow')
     // Red is the gate's: with redPolicy warn it only flags.
     expect(decideShell({ tool: 'Bash', command: 'claude --model sonnet --cloud "x"' }, ctx(budget(80), { redPolicy: 'warn' })).action).toBe('allow')
   })
@@ -451,8 +451,8 @@ describe('cmd /c and pwsh -Command with more words after a quoted script (D11)',
 })
 
 describe('Agent: Fable, remote isolation (D3, D6)', () => {
-  test('fable becomes opus on Max 20x, green, foreground; the line once, then to debug', () => {
-    const b = budget(30, planFromOption('Max 20x'))
+  test('fable becomes opus on Ultra, green, foreground; the line once, then to debug', () => {
+    const b = budget(30, planFromOption('Ultra'))
     const first: any = decideAgent({ tool: 'Agent', model: 'fable', run_in_background: false }, ctx(b))
     expect(first).toMatchObject({ action: 'rewrite', input: { model: 'opus' }, to: 'transcript', fableNoted: true })
     const later: any = decideAgent({ tool: 'Agent', model: 'fable', run_in_background: false }, ctx(b, { fableLogged: true }))
@@ -460,13 +460,13 @@ describe('Agent: Fable, remote isolation (D3, D6)', () => {
     expect(later.fableNoted).toBeUndefined()
   })
 
-  test('isolation remote needs a cloud slot: denied on Solo, allowed on Max 20x yellow (Max 5x)', () => {
+  test('isolation remote needs a cloud slot: denied on Solo, allowed on Ultra yellow (Max)', () => {
     const remote = { tool: 'Agent', description: 'd', prompt: 'p', model: 'sonnet', isolation: 'remote' }
     const solo: any = decideAgent(remote, ctx(budget(60, planFromOption('Pro'))))
     expect(solo.action).toBe('deny')
     expect(solo.reason).toContain('no new cloud sessions')
     expect(decideAgent({ ...remote, isolation: 'worktree' }, ctx(budget(60, planFromOption('Pro')))).action).toBe('allow')
-    expect(decideAgent(remote, ctx(budget(60, planFromOption('Max 20x')))).action).toBe('allow')
+    expect(decideAgent(remote, ctx(budget(60, planFromOption('Ultra')))).action).toBe('allow')
     expect(decideAgent(remote, ctx(budget(80))).reason).toContain('Budget red')
   })
 })
@@ -614,12 +614,12 @@ describe('Haiku 5.5 (model-mix)', () => {
 
 describe('budget texts (D10, 5-hour banked)', () => {
   test('the red reason names a redemption only with a counted weekly reset and use at or past 100 - reserve', () => {
-    const banked = planFromOption('Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-30')
+    const banked = planFromOption('Max · reserve 15% · banked: weekly reset, expires 2026-10-30')
     expect((launchGate(ctx(budget(80))) as any).deny).not.toContain('redeem')
     // Red by pace (84% used, the banked reset lifts the pace to about 56) but under 100 - reserve.
     expect((launchGate(ctx(budget(84, banked))) as any).deny).not.toContain('redeem')
     expect((launchGate(ctx(budget(90, banked))) as any).deny).toContain('A weekly reset is banked and at least 2 days are left')
-    const expired = planFromOption('Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-01')
+    const expired = planFromOption('Max · reserve 15% · banked: weekly reset, expires 2026-10-01')
     expect((launchGate(ctx(budget(90, expired))) as any).deny).not.toContain('redeem')
   })
 
@@ -627,9 +627,9 @@ describe('budget texts (D10, 5-hour banked)', () => {
     expect((launchGate(ctx(budget(40, null, 95), { fiveHourBanked: true })) as any).deny).toContain('A 5-hour reset is banked')
     expect((launchGate(ctx(budget(40, null, 95))) as any).deny).not.toContain('5-hour reset is banked')
     expect((launchGate(ctx(budget(60, null, 95), { fiveHourBanked: true })) as any).deny).not.toContain('5-hour reset is banked')
-    expect(fiveHourBanked(planFromOption('Max 20x · banked: 5-hour reset, no expiry'), NOW)).toBe(true)
-    expect(fiveHourBanked(planFromOption('Max 20x · banked: 5-hour reset, expires 2026-10-01'), NOW)).toBe(false)
-    expect(fiveHourBanked(planFromOption('Max 20x · banked: weekly reset, expires 2026-10-30'), NOW)).toBe(false)
+    expect(fiveHourBanked(planFromOption('Ultra · banked: 5-hour reset, no expiry'), NOW)).toBe(true)
+    expect(fiveHourBanked(planFromOption('Ultra · banked: 5-hour reset, expires 2026-10-01'), NOW)).toBe(false)
+    expect(fiveHourBanked(planFromOption('Ultra · banked: weekly reset, expires 2026-10-30'), NOW)).toBe(false)
     expect(fiveHourBanked(null, NOW)).toBe(false)
   })
 })
@@ -637,7 +637,7 @@ describe('budget texts (D10, 5-hour banked)', () => {
 describe('workflow runs admitted under redPolicy warn', () => {
   test('record the plan width, not Red\'s 0', () => {
     const d: any = decideWorkflowAgent({ model: 'sonnet', workflow: { runId: 'wf', agentIndex: 1 } }, ctx(budget(80), { redPolicy: 'warn' }), undefined)
-    expect(d).toMatchObject({ action: 'allow', admit: true, startRun: { width: 8, name: 'Max 5x' } })
+    expect(d).toMatchObject({ action: 'allow', admit: true, startRun: { width: 8, name: 'Max' } })
     const pro: any = decideWorkflowAgent({ model: 'sonnet', workflow: { runId: 'wf', agentIndex: 1 } }, ctx(budget(80, planFromOption('Pro')), { redPolicy: 'warn' }), undefined)
     expect(pro.startRun).toEqual({ width: 4, name: 'Pro' })
   })
@@ -1338,10 +1338,10 @@ describe('spawned agents run on the model they inherit', () => {
 describe('a Workflow resume records the run it resumes', () => {
   test('startRun: today\'s profile, or the plan\'s own when today allows no workflow (red, Solo)', () => {
     const resume = { tool: 'Workflow', resumeFromRunId: 'wf_abc' }
-    expect((decideWorkflow(resume, ctx(budget(80))) as any).startRun).toEqual({ width: 8, name: 'Max 5x' })
-    expect((decideWorkflow(resume, ctx(budget(80, planFromOption('Max 20x')))) as any).startRun).toEqual({ width: 16, name: 'Max 20x' })
+    expect((decideWorkflow(resume, ctx(budget(80))) as any).startRun).toEqual({ width: 8, name: 'Max' })
+    expect((decideWorkflow(resume, ctx(budget(80, planFromOption('Ultra')))) as any).startRun).toEqual({ width: 16, name: 'Ultra' })
     expect((decideWorkflow(resume, ctx(budget(60, planFromOption('Pro')))) as any).startRun).toEqual({ width: 4, name: 'Pro' })
-    expect((decideWorkflow(resume, ctx(budget(60, planFromOption('Max 20x')))) as any).startRun).toEqual({ width: 8, name: 'Max 5x' })
+    expect((decideWorkflow(resume, ctx(budget(60, planFromOption('Ultra')))) as any).startRun).toEqual({ width: 8, name: 'Max' })
     expect((decideWorkflow({ tool: 'Workflow', name: 'review' }, ctx(budget(40))) as any).startRun).toBeUndefined()
   })
 })
@@ -1387,7 +1387,7 @@ describe('banked weekly reset: redeem advice only with 2 days left', () => {
     { kind: 'five_hour', percentUsed: 10, resetsAt: new Date(NOW + 60 * 60 * 1000).toISOString() },
   ]
   const red = (plan: any, hours: number) => launchGate(ctx(computeBudget({ rateLimits: at(hours, 90), now: NOW, plan, inFlight: 0, readingAt: NOW }))) as any
-  const banked = planFromOption('Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-30')
+  const banked = planFromOption('Max · reserve 15% · banked: weekly reset, expires 2026-10-30')
 
   test('with less than 2 days to the weekly reset there is no advice; with 2 or more there is', () => {
     expect(red(banked, 30).deny).not.toContain('redeem')
@@ -1396,7 +1396,7 @@ describe('banked weekly reset: redeem advice only with 2 days left', () => {
   })
 
   test('a banked weekly reset with no expiry date also gets the advice', () => {
-    expect(red(planFromOption('Max 5x · reserve 15% · banked: weekly reset, no expiry'), 72).deny).toContain('ask the person to redeem it')
+    expect(red(planFromOption('Max · reserve 15% · banked: weekly reset, no expiry'), 72).deny).toContain('ask the person to redeem it')
   })
 })
 
@@ -1439,13 +1439,78 @@ describe('texts the person sees', () => {
   })
 })
 
+describe('plan names after the Max / Ultra rename', () => {
+  const wk = (used: number) => ({ kind: 'seven_day', percentUsed: used, resetsAt: new Date(NOW + 4 * DAY).toISOString() })
+  const five = (used: number) => ({ kind: 'five_hour', percentUsed: used, resetsAt: new Date(NOW + 60 * 60 * 1000).toISOString() })
+  const at = (line: string, rateLimits: unknown[]) =>
+    computeBudget({ rateLimits, now: NOW, plan: budgetModule.parsePlanLine(line), inFlight: 0, readingAt: NOW }) as any
+
+  test('Claude plan: Ultra reads as the Ultra profile', () => {
+    expect(budgetModule.parsePlanLine('Claude plan: Ultra · reserve 10%')).toMatchObject({ name: 'Ultra', reserve: 10 })
+    expect(budgetModule.PROFILES['Ultra']).toMatchObject({ name: 'Ultra', width: 16, cloud: 3, verify: 'opus-high-per-finding', reserve: 10 })
+  })
+
+  test('the legacy Max 20x reads as Ultra, the legacy Max 5x as Max', () => {
+    expect(budgetModule.parsePlanLine('Claude plan: Max 20x · reserve 10%')).toMatchObject({ name: 'Ultra', reserve: 10 })
+    expect(budgetModule.parsePlanLine('Claude plan: Max 5x · reserve 15%')).toMatchObject({ name: 'Max', reserve: 15 })
+    expect(budgetModule.parsePlanLine('Claude plan: max 20 x')).toMatchObject({ name: 'Ultra' })
+  })
+
+  test('a plain Max (no number) reads as Max, and Max has the old Max 5x profile', () => {
+    expect(budgetModule.parsePlanLine('Claude plan: Max')).toMatchObject({ name: 'Max' })
+    expect(budgetModule.parsePlanLine('Claude plan: Max · reserve 15% · banked: weekly reset, no expiry')).toMatchObject({ name: 'Max', reserve: 15 })
+    expect(budgetModule.PROFILES['Max']).toMatchObject({ name: 'Max', width: 8, cloud: 1, verify: 'opus-high-batched', reserve: 15 })
+    expect(budgetModule.PROFILES['Max 20x']).toBeUndefined()
+    expect(budgetModule.PROFILES['Max 5x']).toBeUndefined()
+  })
+
+  test('Pro still reads as Pro, and a missing or unknown plan falls back to the Max profile', () => {
+    expect(budgetModule.parsePlanLine('Claude plan: Pro')).toMatchObject({ name: 'Pro' })
+    expect(at('Claude plan: Teamish', [wk(10)]).plan).toMatchObject({ name: 'Max', known: false })
+    expect((computeBudget({ rateLimits: [wk(10)], now: NOW, plan: null, inFlight: 0, readingAt: NOW }) as any).plan).toMatchObject({ name: 'Max', known: false })
+  })
+
+  test('the ladder is Ultra, Max, Pro, Solo', () => {
+    expect(['Ultra', 'Max', 'Pro', 'Solo'].map(n => budgetModule.stepDown(n))).toEqual(['Max', 'Pro', 'Solo', 'Solo'])
+    expect(budgetModule.stepDown('nothing')).toBe('Max')
+  })
+
+  test('Ultra yellow steps down to the Max profile (width 8)', () => {
+    const b = at('Claude plan: Ultra', [wk(60)])
+    expect(b).toMatchObject({ color: 'yellow', plan: { name: 'Ultra' }, profile: { name: 'Max', width: 8 } })
+  })
+
+  test('Ultra: no five-hour window means no pause; a five_hour window that still appears keeps pausing', () => {
+    expect(at('Claude plan: Ultra', [wk(40)])).toMatchObject({ plan: { name: 'Ultra' }, fiveHour: null, pausedFiveHour: false })
+    expect(at('Claude plan: Ultra', [wk(40), five(95)])).toMatchObject({ plan: { name: 'Ultra' }, pausedFiveHour: true })
+    expect(at('Claude plan: Ultra', [wk(40), five(50)])).toMatchObject({ plan: { name: 'Ultra' }, pausedFiveHour: false })
+  })
+
+  test('Pro and Max keep pausing at 90% of the five-hour window', () => {
+    expect(at('Claude plan: Max', [wk(40), five(95)])).toMatchObject({ plan: { name: 'Max' }, pausedFiveHour: true })
+    expect(at('Claude plan: Pro', [wk(40), five(95)])).toMatchObject({ plan: { name: 'Pro' }, pausedFiveHour: true })
+    expect(at('Claude plan: Max', [wk(40), five(50)])).toMatchObject({ pausedFiveHour: false })
+  })
+
+  test('a banked 5-hour reset is still read on Pro and Max', () => {
+    expect(fiveHourBanked(planFromOption('Max · banked: 5-hour reset, no expiry'), NOW)).toBe(true)
+    expect(fiveHourBanked(planFromOption('Pro · banked: 5-hour reset, no expiry'), NOW)).toBe(true)
+  })
+
+  test('planFromFiles and planFromOption follow the new names', () => {
+    expect(planFromFiles([{ path: 'u', kind: 'user', content: 'x\nClaude plan: Ultra · reserve 10%' }])).toMatchObject({ name: 'Ultra', reserve: 10 })
+    expect(planFromOption('Max · reserve 15%')).toMatchObject({ name: 'Max', reserve: 15 })
+    expect(planFromOption('Max 20x')).toMatchObject({ name: 'Ultra' })
+  })
+})
+
 // mods/model-guard/hooks/budget.js and mods/coordinator-lens/hooks/budget.js are one file kept in two mods:
 // a mod cannot import outside its own folder, so neither test can read the other copy. Both mods' tests pin
 // the same fingerprint instead: the source of every export, plus what the module computes for a fixed set of
 // readings (which covers its private helpers and constants). After changing budget.js, copy it to the other
 // mod and put the new fingerprint in both tests (the failure prints it).
 describe('budget.js is the same file in model-guard and coordinator-lens', () => {
-  const BUDGET_FINGERPRINT = '8183a090:15979'
+  const BUDGET_FINGERPRINT = 'f124cb00:16384'
   test('the fingerprint of budget.js matches the one pinned in both mods', () => {
     const at = Date.UTC(2026, 9, 7, 12, 0, 0)
     const h = 60 * 60 * 1000
@@ -1453,12 +1518,12 @@ describe('budget.js is the same file in model-guard and coordinator-lens', () =>
       { kind: 'seven_day', percentUsed: weekly, resetsAt: new Date(at + weeklyHours * h).toISOString() },
       { kind: 'five_hour', percentUsed: five, resetsAt: new Date(at + 2 * h).toISOString() },
     ]
-    const plan = budgetModule.parsePlanLine('Claude plan: Max 20x · reserve 10% · banked: weekly reset, expires 2026-10-22; 5-hour reset')
+    const plan = budgetModule.parsePlanLine('Claude plan: Ultra · reserve 10% · banked: weekly reset, expires 2026-10-22; 5-hour reset')
     const probes = [
       ...[[17, 10], [45, 10], [60, 10], [95, 10], [17, 92], [40, 10, 6], [40, 10, -1]].map(([w, f, wh]) =>
         [0, 10, 11].map(ageMin => budgetModule.computeBudget({ rateLimits: limits(w, f, wh), now: at, plan, inFlight: 3, readingAt: at - ageMin * 60 * 1000 }))),
       budgetModule.computeBudget({ rateLimits: [], now: at, plan: null, inFlight: 0 }),
-      ['Max 20x', 'Max 5x', 'Pro', 'Solo', 'x'].map(n => budgetModule.stepDown(n)),
+      ['Ultra', 'Max', 'Pro', 'Solo', 'x'].map(n => budgetModule.stepDown(n)),
       budgetModule.estimatePoints({ haiku: 20, sonnet: 1, opus: 1, fable: 1, other: 1 }, 2),
       ['claude-haiku-5-5', 'sonnet', 'opus', 'claude-fable-5-1', 'x'].map(m => budgetModule.modelFamily(m)),
     ]

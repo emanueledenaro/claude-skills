@@ -43,7 +43,7 @@ Decide how a run without the person is set up, woken, paced and reported. Nothin
 
 ## 5. Usage limits overnight
 
-- 5-hour window at 90% or more: launch nothing until its `resetsAt`: keep the normal fallback wakes (at most 1 hour each) and make the last one land just after the reset (`model-mix`). Work already running continues.
+- 5-hour window at 90% or more (Pro and Max): launch nothing until its `resetsAt`: keep the normal fallback wakes (at most 1 hour each) and make the last one land just after the reset (`model-mix`). Work already running continues. A verified Ultra account has no such window: only the weekly limit and the separate Fable weekly limit pace the night, and the weekly color below decides.
 - Weekly red: start nothing new, finish open PRs, and stop at the first wake that finds nothing to finish.
 - `autoContinueAtUsageLimit` is on by default in interactive claude.ai sessions (v2.1.234+): Claude waits in the open session and continues after the reset. It re-arms at most twice. After a sleep longer than about 30 minutes it asks for Enter and does not resume alone.
 - It never starts when the reset is over 24 hours away (a weekly limit), in Remote Control and teammate sessions, on `-p`, `/bg` and `--bg` runs, or on a model-family limit while running another family. Handing the session to Desktop, background or cloud ends the wait. `/rate-limit-options` starts or cancels it by hand.

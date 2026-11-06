@@ -80,12 +80,13 @@ A fetch error is "not checked", never "unchanged".
 Pages (hash their text; support articles show only a relative "Last Updated", so the date is not a detector):
 
 - `https://support.claude.com/en/articles/11049741-what-is-the-max-plan`
+- `https://support.claude.com/en/articles/17728952-what-is-the-ultra-plan`
 - `https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan`
 - `https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan`
 - `https://support.claude.com/en/articles/12429409-manage-usage-credits`
 - `https://code.claude.com/docs/en/routines` (usage and limits section)
 
-Compare only the numbers the person's skills state: the 5-hour and weekly reset rules, the Max 20x versus Pro ratio, the routine caps (verified on 2026-10-07: minimum schedule interval 1 hour, schedule runs 100 per hour per account, Run now plus API 30 per hour per routine). Plan prices are on these pages too; no skill states them, so a price change needs no edit.
+Compare only the numbers the person's skills state: the 5-hour (Pro and Max; none on a verified Ultra account) and weekly reset rules, the Max (5×) and Ultra (10×) ratios against Pro, the Fable weekly limit, whether the Ultra weekly cap was halved against the old Max 20x (unverified on 2026-11-06), the routine caps (verified on 2026-10-07: minimum schedule interval 1 hour, schedule runs 100 per hour per account, Run now plus API 30 per hour per routine). Plan prices are on these pages too (Max $100/month, Ultra $200/month, read 2026-11-06 on the Max and Ultra pages, renamed from Max 5x and Max 20x on 2026-10-30); `model-mix` states them once in the plan profiles, so a price change needs that one edit.
 
 ## 5. Mods API
 
@@ -121,7 +122,7 @@ Skills named here may not all be installed: skip a row whose skill is missing.
 
 ## 8. Scheduling
 
-Only after the person says yes in chat, one option at a time. Cheapest first. Every option draws from the same 5-hour and weekly budget as interactive use (routines and scheduled tasks: "same as interactive sessions", no per-run figure published), so run the budget check in `model-mix` before adding a frequent schedule, and take a before and after reading of the first run (`budget.md`, Run cost). Cadence: daily is enough for the CLI version, weekly for models, limits, mods and upstream skills.
+Only after the person says yes in chat, one option at a time. Cheapest first. Every option draws from the same weekly budget (and 5-hour window on Pro and Max) as interactive use (routines and scheduled tasks: "same as interactive sessions", no per-run figure published), so run the budget check in `model-mix` before adding a frequent schedule, and take a before and after reading of the first run (`budget.md`, Run cost). Cadence: daily is enough for the CLI version, weekly for models, limits, mods and upstream skills.
 
 - **OS scheduler, no model (Windows Task Scheduler running a probe script):** zero model use when nothing changed, and the script calls `claude -p` only on change. Unverified: it is an inference, not a documented pattern, and Task Scheduler was not inspected on this machine. The script does not exist yet; write it from the commands above and test it by hand first. `claude --bare` needs `ANTHROPIC_API_KEY` and cannot use a Max login, so do not use it here.
 - **Desktop local scheduled task:** runs only while the app is open and the computer awake; a missed run gets one catch-up run within 7 days; minimum interval 1 minute; Name, Description, Instructions with permission mode and model pickers, Schedule, folder, optional worktree; needs Desktop 1.1.5368 or later. It always starts a Claude session (shell-only is not documented). In Manual permission mode it stalls when a tool needs approval, so the shell and fetch commands need allow rules. Model per `model-mix`, own folder, no worktree.

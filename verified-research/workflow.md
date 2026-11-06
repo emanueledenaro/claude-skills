@@ -7,7 +7,7 @@ Schemas, a minimal script and prompt skeletons for `SKILL.md`. Script rules (pla
 The notation for notes and for the report. One claim per line:
 
 ```
-- [c3|confirmed|max5x] <claim, one fact> <source URL ; page date ; read date>
+- [c3|confirmed|max] <claim, one fact> <source URL ; page date ; read date>
 - [c4|refuted|pro] <wrong claim> => CORR: <corrected fact> <source URL ; date>
 - [c5|unverified|all] <claim> => missing: <what is needed> | check: <command or page>
 ```
@@ -70,7 +70,7 @@ const GAPS = {
 
 ## Skeleton
 
-`args`: `{ goal, today, perArea, areas: [{ name, question, sources: [] }] }`. The areas array is the list you scouted and scoped inline, already merged to the profile's width (one reader per area, its verifiers, plus the critic). `perArea` is `true` below Max 20x: one verifier per area with all its claims. On Max 20x it is `false`: one verifier per small group of claims that cite the same source (`model-mix`, `smart-ultracode` section 4). On every profile a claim of kind security, money or consent gets its own verifier.
+`args`: `{ goal, today, perArea, areas: [{ name, question, sources: [] }] }`. The areas array is the list you scouted and scoped inline, already merged to the profile's width (one reader per area, its verifiers, plus the critic). `perArea` is `true` below Ultra: one verifier per area with all its claims. On Ultra it is `false`: one verifier per small group of claims that cite the same source (`model-mix`, `smart-ultracode` section 4). On every profile a claim of kind security, money or consent gets its own verifier.
 
 ```js
 export const meta = {
@@ -140,7 +140,7 @@ Notes on the skeleton:
 
 - Use `pipeline` so a fast area's verifier starts without waiting for the slowest reader. The critic is the one barrier, because it needs every area.
 - A dead reader drops its area (`null`), and `droppedAreas` makes the drop visible. A dead verifier leaves its claims in `unchecked`; if all of an area's verifiers die the area drops. Put both under "not covered" or "unverified" in the answer.
-- Max 5x is the `perArea: true` shape. On Pro (`model-mix`): verifier and critic at `effort: 'medium'`, one final verify stage, workflow only when the person asks.
+- Max is the `perArea: true` shape. On Pro (`model-mix`): verifier and critic at `effort: 'medium'`, one final verify stage, workflow only when the person asks.
 - Add `agentType`, tools and working directory only if all agents of a stage share them: the cache is shared only between identical settings.
 - Rerun a failed run with `resumeFromRunId`: unchanged prefixes come from cache.
 - Read the whole result before writing the answer. Each item holds the reader's `claims` plus the `verdicts`: join them by `id` to get claim, scope, source and date next to the status. A reader's claim is a lead; only a verifier's `confirmed` makes it a fact.
@@ -149,7 +149,7 @@ Notes on the skeleton:
 
 ```
 fleet: 4 readers (Haiku medium) + 4 verifiers (Opus high) + 1 critic (Opus high)
-weekly points: <after> - <before> = N (five-hour: M)
+weekly points: <after> - <before> = N (five-hour: M, Pro and Max only)
 facts read on: <today>
 not covered: <dropped areas, unreadable sources>
 ```

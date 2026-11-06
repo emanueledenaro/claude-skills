@@ -37,7 +37,7 @@ Research that feeds a plan, a skill or a mod is only as good as its weakest clai
 
 ## 5. Verifiers
 
-- Verifier width follows today's profile in `model-mix` and `smart-ultracode` section 4: on Max 20x one verifier per claim, or per small group of claims that cite the same source, grouped only as far as the width needs (`smart-ultracode` section 2); below Max 20x one verifier per area with all its claims. Opus high (Pro: medium), never the reader that wrote the claims. It gets the claims and the sources, never the reader's reasoning.
+- Verifier width follows today's profile in `model-mix` and `smart-ultracode` section 4: on Ultra one verifier per claim, or per small group of claims that cite the same source, grouped only as far as the width needs (`smart-ultracode` section 2); below Ultra one verifier per area with all its claims. Opus high (Pro: medium), never the reader that wrote the claims. It gets the claims and the sources, never the reader's reasoning.
 - It opens every source itself, or reruns the local check. A claim whose source it cannot open is unverified.
 - Verdict per claim: confirmed, refuted (with the corrected fact and its evidence) or unverified (with what is missing). It also adds missed facts it found while reading and keeps the open questions.
 - Security, money and consent claims (who can read what, what costs credits) get their own verifier each, per `smart-ultracode` section 4.
