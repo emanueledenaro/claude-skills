@@ -57,7 +57,7 @@ Run one trivial task (say hi, change nothing) in a terminal tab before the first
 
 - An environment has network access (None, Trusted by default, Custom), env vars, and a setup script. The script is Bash, runs once as root, is cached about 7 days only if it finishes in about 5 minutes, and blocks the session if it exits non-zero. Only the person changes them, in the UI; propose the change and wait for their ok. Never put secrets in env vars or the script: everyone using the environment sees them.
 - The VM is Ubuntu 24.04 with common toolchains and `gh`. Bash defaults to 2 minutes, at most 10. Modes are Accept edits, Plan and Auto, no bypass.
-- Cloud sessions draw from the same 5-hour and weekly limits as everything else. How they are metered is not published: read the weekly percent before and after each session and keep the run-cost line from `model-mix`.
+- Cloud sessions draw from the same limits as everything else: the weekly limit, the Fable weekly limit, and the 5-hour window on Pro and Max (none on a verified Ultra account). How they are metered is not published: read the weekly percent before and after each session and keep the run-cost line from `model-mix`.
 - Parallel sessions: the profile column in `model-mix`, on disjoint areas.
 
 ## 7. Not evaluated

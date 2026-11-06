@@ -39,7 +39,7 @@ How the person wants delegated work run, in every project. The project's own AGE
 - When the person goes to sleep:
   - Compact first, or hand off to a fresh coordinator, because every wakeup sends the whole context again.
   - Wake on events: a background watcher script or a CI monitor. Add a self-paced `/loop` with a 30 minute fallback wakeup, which keeps the 1-hour prompt cache warm.
-  - Each wakeup runs the budget check before launching. With the 5-hour window at 90% or more, sleep until its reset.
+  - Each wakeup runs the budget check before launching. With the 5-hour window at 90% or more (Pro and Max), sleep until its reset. Ultra has no such window; only the weekly and Fable weekly limits apply.
   - Keep the machine awake: ask the person to turn on Keep computer awake in Desktop (Settings → This computer → System) and leave the lid open, or use `caffeinate -is -t 36000` on macOS.
   - Push notifications only for decisions and milestones. Leave a morning summary, with the weekly points spent overnight, in the project's scratch state file.
 
