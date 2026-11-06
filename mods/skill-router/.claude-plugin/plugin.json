@@ -1,6 +1,6 @@
 {
   "name": "skill-router",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Smart skill activation by deterministic rules, no model calls: tells the model which installed skills fit the person's prompt (Italian and English patterns) and are not loaded yet, and holds a workflow, agent or cloud launch, a PR merge or a mod edit once until its prerequisite skills are loaded.",
   "author": { "name": "Emanuele Denaro" },
   "userConfig": {

@@ -17,7 +17,7 @@ const YELLOW = [weekly(60), fiveHour(10)]
 const RED = [weekly(80), fiveHour(10)]
 const PAUSED = [weekly(40), fiveHour(95)]
 
-const MAX20 = { planLine: 'Max 20x · reserve 10%' }
+const ULTRA = { planLine: 'Ultra · reserve 10%' }
 const PRO = { planLine: 'Pro' }
 
 type World = {
@@ -201,11 +201,11 @@ describe('model-guard', () => {
       expect(w.calls[0].model).toBe('opus')
     })
 
-    test('fable becomes opus even on Max 20x, green, foreground, no isolation; the reason reaches the transcript once', async ($, on) => {
+    test('fable becomes opus even on Ultra, green, foreground, no isolation; the reason reaches the transcript once', async ($, on) => {
       const w = world(on)
       await start($)
       await $.prompt.context({ blocks: [], instructionFiles: [
-        { path: 'C:/Users/me/.claude/CLAUDE.md', kind: 'user', content: '# Me\nClaude plan: Max 20x · reserve 10%\n' },
+        { path: 'C:/Users/me/.claude/CLAUDE.md', kind: 'user', content: '# Me\nClaude plan: Ultra · reserve 10%\n' },
       ] } as any)
       await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false } as any)
       await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false } as any)
@@ -221,7 +221,7 @@ describe('model-guard', () => {
       const w = world(on)
       await start($)
       await $.prompt.context({ blocks: [], instructionFiles: [
-        { path: 'C:/Users/me/.claude/CLAUDE.md', kind: 'user', content: 'Claude plan: Max 20x' },
+        { path: 'C:/Users/me/.claude/CLAUDE.md', kind: 'user', content: 'Claude plan: Ultra' },
       ] } as any)
       await $.tool.call({ ...AGENT, model: 'fable' } as any)
       await $.tool.call({ ...AGENT, model: 'fable', run_in_background: false, isolation: 'worktree' } as any)
@@ -552,7 +552,7 @@ describe('model-guard', () => {
     })
 
     test('the redeem advice only with a counted weekly reset and weekly use at or past 100 - reserve',
-      { options: { planLine: 'Max 5x · reserve 15% · banked: weekly reset, expires 2026-10-30' } }, async ($, on) => {
+      { options: { planLine: 'Max · reserve 15% · banked: weekly reset, expires 2026-10-30' } }, async ($, on) => {
         // 84% is red by pace (the banked reset lifts the pace to about 56) but under 100 - reserve.
         const w = world(on, [weekly(84), fiveHour(10)])
         await start($)
@@ -690,7 +690,7 @@ describe('model-guard', () => {
     })
 
     test('with a banked 5-hour reset and a green week, asks to offer the redemption',
-      { options: { planLine: 'Max 5x · banked: 5-hour reset, no expiry' } }, async ($, on) => {
+      { options: { planLine: 'Max · banked: 5-hour reset, no expiry' } }, async ($, on) => {
         world(on, PAUSED)
         await start($)
         const r = await $.tool.call({ ...AGENT, model: 'sonnet' } as any)
@@ -699,7 +699,7 @@ describe('model-guard', () => {
   })
 
   describe('rule 6: workflow width', () => {
-    test('Max 5x green: 8 agents per run, the 9th denied, a re-raised index passes, runs count apart', async ($, on) => {
+    test('Max green: 8 agents per run, the 9th denied, a re-raised index passes, runs count apart', async ($, on) => {
       const w = world(on, GREEN)
       await start($)
       for (let i = 1; i <= 8; i++) {
@@ -715,12 +715,12 @@ describe('model-guard', () => {
       expect(w.spawns.length).toBe(10)
     })
 
-    test('Max 20x yellow steps down to 8', { options: MAX20 }, async ($, on) => {
+    test('Ultra yellow steps down to 8', { options: ULTRA }, async ($, on) => {
       world(on, YELLOW)
       await start($)
       for (let i = 1; i <= 8; i++) await $.agent.spawn(spawnInput('wf_y', i) as any)
       const r: any = await $.agent.spawn(spawnInput('wf_y', 9) as any)
-      expect(r.deny).toContain('Max 5x, which applied when the run started, allows 8')
+      expect(r.deny).toContain('Max, which applied when the run started, allows 8')
     })
 
     test('red: the first agent of a new run is denied (width 0)', async ($, on) => {
@@ -752,7 +752,7 @@ describe('model-guard', () => {
       await start($)
       for (let i = 1; i <= 12; i++) await $.agent.spawn(spawnInput('wf_wide', i) as any)
       const transcript = w.logs.filter(l => l.to === 'transcript')
-      expect(transcript).toEqual([{ text: 'model-guard: workflow oltre la larghezza 8 (Max 5x), altri agenti bloccati', to: 'transcript' }])
+      expect(transcript).toEqual([{ text: 'model-guard: workflow oltre la larghezza 8 (Max), altri agenti bloccati', to: 'transcript' }])
       expect(w.logs.filter(l => l.to === 'debug').length).toBe(3)
       for (let i = 1; i <= 3; i++) await $.agent.spawn(spawnInput('wf_fab', i, { model: 'fable' }) as any)
       expect(w.logs.filter(l => l.to === 'transcript').length).toBe(2)
@@ -776,7 +776,7 @@ describe('model-guard', () => {
         expect(r.deny).toBeUndefined()
       }
       const ninth: any = await $.agent.spawn(spawnInput('wf_warn', 9) as any)
-      expect(ninth.deny).toContain('Max 5x, which applied when the run started, allows 8')
+      expect(ninth.deny).toContain('Max, which applied when the run started, allows 8')
       expect(w.spawns.length).toBe(8)
     })
 
@@ -791,7 +791,7 @@ describe('model-guard', () => {
       expect(w.calls).toEqual([expect.objectContaining({ isolation: 'worktree' })])
     })
 
-    test('an Agent with isolation remote passes the cloud column on Max 5x and is denied while red', async ($, on) => {
+    test('an Agent with isolation remote passes the cloud column on Max and is denied while red', async ($, on) => {
       const w = world(on, GREEN)
       await start($)
       expect(isRefused(await $.tool.call({ ...AGENT, model: 'sonnet', isolation: 'remote' } as any))).toBe(false)
@@ -1210,7 +1210,7 @@ describe('model-guard', () => {
         expect(a.deny, 'agent ' + i).toBeUndefined()
       }
       const ninth: any = await $.agent.spawn(spawnInput('wf_lost', 9) as any)
-      expect(ninth.deny).toContain('Max 5x, which applied when the run started, allows 8')
+      expect(ninth.deny).toContain('Max, which applied when the run started, allows 8')
       // A fresh run while red is still new work.
       expect(((await $.agent.spawn(spawnInput('wf_fresh', 1) as any)) as any).deny).toContain('allows no new workflow runs')
       expect(w.spawns.length).toBe(8)
@@ -1229,7 +1229,7 @@ describe('model-guard', () => {
       on('state.set', async ($: any, e: any, next: any) => { sets.push(e); return next(e) })
       // What a previous load of the module left: run wf_old started at width 8 with three agents.
       on('state.get', async ($: any, e: any, next: any) => (e.key === 'runs' && e.id === 'wf_old'
-        ? { value: { value: { admitted: [1, 2, 3], width: 8, name: 'Max 5x' }, version: 3 } }
+        ? { value: { value: { admitted: [1, 2, 3], width: 8, name: 'Max' }, version: 3 } }
         : next(e)))
       const w = world(on, RED)
       await start($)
@@ -1240,7 +1240,7 @@ describe('model-guard', () => {
       expect(((await $.agent.spawn(spawnInput('wf_old', 9) as any)) as any).deny).toContain('allows 8 per run')
       expect(w.spawns.length).toBe(5)
       const last = sets.filter(e => e.key === 'runs' && e.id === 'wf_old').pop()
-      expect(last.value).toEqual({ admitted: [1, 2, 3, 4, 5, 6, 7, 8], width: 8, name: 'Max 5x' })
+      expect(last.value).toEqual({ admitted: [1, 2, 3, 4, 5, 6, 7, 8], width: 8, name: 'Max' })
     })
 
     test('the plan line is kept in $.state and read back when prompt.context does not run again', async ($, on) => {
@@ -1370,7 +1370,7 @@ describe('model-guard', () => {
       const s = await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true } as any)
       expect(s).toEqual({ cwd: 'C:/repo' })
       const blocks = [{ name: 'currentDate', text: '2026-10-07' }]
-      const c = await $.prompt.context({ blocks, instructionFiles: [{ path: 'C:/u/.claude/CLAUDE.md', kind: 'user', content: 'Claude plan: Max 20x' }] } as any)
+      const c = await $.prompt.context({ blocks, instructionFiles: [{ path: 'C:/u/.claude/CLAUDE.md', kind: 'user', content: 'Claude plan: Ultra' }] } as any)
       expect(c).toMatchObject({ blocks })
       const m = await $.session.measure({ context: { window: 200000 }, rateLimits: GREEN, changed: ['rateLimits'] } as any)
       expect(m).toEqual({ changed: ['rateLimits'] })

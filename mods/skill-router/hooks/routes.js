@@ -80,10 +80,10 @@ export const ROUTES = [
       w(/limit[ei] (settimanal[ei]|delle 5 ore|di 5 ore|di utilizzo|d'uso|del piano|di claude)/,
         /(weekly|5-hour|five-hour|5h|usage|plan) limits?/, /finestra (delle |di )?5 ore/, /5-hour window/),
       // plan tiers and draining the account
-      w(/max (da )?(100|200|5 ?x|20 ?x)/, /(piano|account|abbonamento|plan) (plus|pro|max)/,
+      w(/max (da )?(100|200|5 ?x|20 ?x)/, /(piano|account|abbonamento|plan) (plus|pro|max|ultra)/, /ultra (plan|piano)/,
         /(senza (far )?|non )consumare (tutto|tutti)/, /consumare tutto l'?account/, /(burn|drain)\w* (through )?(the |my )?(account|plan|limits?)/),
-      w(/piano (max|pro|team|enterprise|claude)/, /(mio|nostro|del|sul) piano (claude|max|pro|di abbonamento)/,
-        /max (20x|5x)/, /(my|the|our) (claude |max |pro )?plan (limits?|allows|budget)/),
+      w(/piano (max|ultra|pro|team|enterprise|claude)/, /(mio|nostro|del|sul) piano (claude|max|ultra|pro|di abbonamento)/,
+        /max (20x|5x)/, /(my|the|our) (claude |max |ultra |pro )?plan (limits?|allows|budget)/),
     ],
   },
   {
