@@ -31,6 +31,8 @@ Keeps the tracker true so a restarted coordinator can read it and continue the q
 - Filing: `gh issue create --milestone "<name>"`.
 - Issues made by another skill: add the milestone right after creation, `gh issue edit N --milestone "<name>"`. Issues from Matt's skills: `matt-bridge` §4 (milestone, HITL label, pin).
 - Each round: list open issues with no milestone and fix every one. See `commands.md`.
+- Each round, also list open issues with no label (`commands.md`) and triage every one (section 5).
+- A "follow-up" ticket that is really a new feature is a scope decision for the person, not queue work: label it `needs-triage` and ask.
 
 ## 5. Labels and the queue
 

@@ -1,6 +1,6 @@
 ---
 name: model-mix
-description: "Model, effort and usage budget for delegated work on a Claude plan (Pro, Max, Ultra): which model and effort a subagent, cloud session (claude --cloud), workflow stage, routine or review gets, how wide a run may be, and whether the weekly, Fable and (Pro, Max) 5-hour limits allow launching now. Use before launching any agent, worker, workflow or review, in any project."
+description: "Model, effort and usage budget for delegated work on a Claude plan (Pro, Max, Ultra): which model and effort a subagent, cloud session (claude --cloud), workflow stage, routine or review gets, how wide a run may be, and whether the weekly, Fable and (Pro, Max) 5-hour limits allow launching now. Use before launching any agent, worker, workflow or review, or before setting an advisor, in any project."
 ---
 
 Pick the model for each piece of delegated work from the table, then check the budget before launching. The plan's limits cover the whole account: the person's own chats on claude.ai and Desktop, the CLI, every subagent and workflow agent, cloud sessions and routines.
@@ -42,6 +42,20 @@ Outside the default mix (these can bill usage credits):
 - **Fable 5.1:** off by default. Only on Ultra with a green budget, and only for the single most consequential judgment (the final review of a security-critical diff). Never on Pro, where it is not part of the plan. Never on `-p`, background or cloud workers: past the Fable cap, `-p` runs bill credits without asking when credits are on, background and teammate sessions wait 5 minutes for consent and then drop the turn, and in cloud sessions the consent prompt depends on the app.
 - **Fast mode (`/fast`):** credits only. Never for delegated work.
 - **Ultrareview (`/code-review ultra`):** credits after 3 one-time free runs per account. Only when the person asks for it.
+
+## Advisor
+
+From `code.claude.com/docs/en/advisor.md` and the prompt-caching page, read 2026-11-09. Experimental, Anthropic API only.
+
+- Set it with `/advisor <model>` (saved as `advisorModel`), `/advisor off`, the `advisorModel` setting or `--advisor <model>`. It must rank at or above the main model: Sonnet 5.5 accepts Opus 5 or later and Fable. Subagents inherit it and apply the same check to their own model.
+- Claude decides when to call it and nothing caps the calls. Each call rereads the whole conversation with no cache, on plan usage; a Fable advisor bills to usage credits on plans where Fable does.
+- Toggling it keeps the main prompt cache. A `/model` switch does not: the next request rereads the whole context, so switching a long session's model back and forth pays that each time.
+
+Rules:
+
+- For a strong second opinion at decision points, run workers as Sonnet with an Opus advisor instead of switching the session model.
+- A Fable second opinion, where the Fable rule above allows it, is a foreground subagent with a short brief at agreed moments: before designing a big feature, when a worker is stuck after two attempts and `diagnosing-bugs` built its red loop without finding the cause, for the last review of security work. An advisor's timing cannot be capped, and a long coordinator session makes every call expensive.
+- Run `/advisor off` where workers should not inherit it, such as Haiku readers.
 
 ## Plan profiles
 

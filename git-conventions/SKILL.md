@@ -46,6 +46,8 @@ Before pushing, from the project root (`<skill>` is the installed folder, `~/.cl
 
 Exit 0 is valid, 1 is invalid with a message that names the problem and the expected format, 2 is a usage error. A commit-msg hook (`check/hooks/commit-msg`) checks each message as it is written.
 
+Lint every commit header before the first push. The validator checks the format, not a length: if the project's commitlint or CI caps the header (for example at 72 characters), check that too. After a push the branch is never amended or force-pushed, so a bad header costs a new branch and a new PR.
+
 ## Out of this skill
 
 - Rules of a single project (allowed scopes, ticket keys, changelog tooling) stay in that project's files.
