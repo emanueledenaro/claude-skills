@@ -30,6 +30,7 @@ Matt Pocock's skills give the flow from idea to shipped PR. `coordinator-method`
 - `to-prd` and `to-spec` publish the parent issue; `to-issues` and `to-tickets` publish the children. Show the breakdown and wait for the person's ok, as his text says.
 - Every issue they create gets a milestone, added right after creation: `gh issue edit N --milestone "<name>"`. The milestone is the current feature's; create it first with `roadmap-tracker`'s commands. Do not hook or rewrite his `gh issue create`.
 - When the parent is the feature in progress, and a pin slot is free (`roadmap-tracker` §2), pin it: `gh issue pin N`; unpin it when its milestone closes: `gh issue unpin N`.
+- Acceptance criteria are as wide as the requirement: when the description says "every" or "all", the checkbox says "every" too and names the check that proves it (lint, test, inventory table). Examples go in the description, never as the criterion's whole list. Workers and reviewers work from the checkboxes: in one run "every visible element" became a checkbox listing four controls, and the loading and error states slipped through.
 - His text labels every slice for an AFK agent unless told otherwise. Tell it: HITL slices get `ready-for-human`.
 - Blocked-by may also become real links (optional, `roadmap-tracker` §6). Check the round: `gh issue list --search "no:milestone" --state open` is empty.
 
@@ -44,7 +45,7 @@ Matt Pocock's skills give the flow from idea to shipped PR. `coordinator-method`
 ## 6. Review, PR, merge
 
 - `code-review` (upstream, inside `implement`) is the implementer's pre-PR check: its reviewers run on Opus high per `model-mix`. It does not replace `merge-gate`: the gate still reviews the PR head sha, sized by the diff. Its Standards axis takes `clean-code` as a standards source: block rules are hard violations there, over its smell baseline.
-- `pr` writes the body. Title in the `git-conventions` commit format; `Closes #N` in the body for tickets the PR completes; UI PRs carry before/after screenshots and wait for the person's ok.
+- `pr` writes the body. Title in the `git-conventions` commit format; `Closes #N` in the body for tickets the PR completes; UI PRs carry before/after screenshots of every view and state, taken from the PR head sha (sha in the file names, by a committed command when the project has one), and wait for the person's ok on that sha.
 - The coordinator merges, with `coordinator-method`'s rule (`gh pr merge N --merge --match-head-commit <sha> --subject ...`), after `merge-gate`. No merger subagent merges into main, and no auto-merge. After the merge: close the tickets, update the roadmap.
 
 ## 7. On the side
