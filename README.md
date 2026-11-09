@@ -23,6 +23,7 @@ Personal skills for running Claude Code as a coordinator that delegates work to 
 | [git-conventions](git-conventions/SKILL.md) | Default naming for commits, branches, PR titles and merge subjects (Conventional Commits, Conventional Branch), the history and tag rules, and a Node validator with a commit-msg hook for projects with no CI of its own. |
 | [shared-machine-checks](shared-machine-checks/SKILL.md) | Running heavy checks from many agents on one machine: one shared lock, memory and disk preflight, a compose project and ports per run, cleanup traps, stopping processes by recorded PID, demos tied to a commit, waiters for background jobs. |
 | [assertions-go-red](assertions-go-red/SKILL.md) | Proving each new or changed test assertion can fail: mutate the code, record the red run, restore, and map every mutation to its red line in the PR. |
+| [project-setup](project-setup/SKILL.md) | One-time setup of a repository for Claude Code and these skills: inspect first, then a committed `.claude/settings.json` with allow and deny rules, a `CLAUDE.md` that imports `AGENTS.md`, the four project facts, optionally Matt Pocock's skills, shipped as a chore PR. Run again, it reports drift. |
 | [screen-map](screen-map/SKILL.md) | Building and keeping a screen map that every builder follows: lanes per platform, one frame per screen with real copy and a status, arrows for the flow, simulations of real users, the handoff spec to builders, and a project skill generated from the map. |
 
 The skills point to each other instead of repeating themselves. A project's own `AGENTS.md`, `CONTRIBUTING.md` and branch protection always win over them; project facts stay in the project.
@@ -32,14 +33,14 @@ The skills point to each other instead of repeating themselves. A project's own 
 ```bash
 git clone https://github.com/emanueledenaro/claude-skills.git
 cd claude-skills
-cp -R model-mix smart-ultracode coordinator-method smart-mods cloud-worker merge-gate overnight roadmap-tracker matt-bridge verified-research release-watch skill-audit context-hygiene windows-ops mod-ui clean-code git-conventions screen-map shared-machine-checks assertions-go-red ~/.claude/skills/
+cp -R model-mix smart-ultracode coordinator-method smart-mods cloud-worker merge-gate overnight roadmap-tracker matt-bridge verified-research release-watch skill-audit context-hygiene windows-ops mod-ui clean-code git-conventions screen-map shared-machine-checks assertions-go-red project-setup ~/.claude/skills/
 ```
 
 Then add a routing block to your global `~/.claude/CLAUDE.md`, so every project reaches them at the right moment:
 
 ```markdown
 Before launching any agent, cloud session, workflow or review, use `model-mix`. Before writing a workflow script, use `smart-ultracode`. When coordinating delegated work (workers, merges, rounds, overnight loops, UI changes), use `coordinator-method`. Before writing, changing, installing or reviewing a Claude Code mod or any plugin, or when asked for a pane, a band above the prompt, a custom command or a tool-call guard, use `smart-mods`; for what a mod draws, also `mod-ui`.
-Launching or steering a cloud worker: `cloud-worker`. Merging a finished PR: `merge-gate`. Going unattended or to sleep: `overnight`. Issues, milestones, the roadmap: `roadmap-tracker`. Running Matt Pocock's skills: `matt-bridge`. Researching facts that change (prices, limits, versions, APIs): `verified-research`. Checking for new releases or models: `release-watch`. Reviewing skills or their cost: `skill-audit`. A heavy or long session: `context-hygiene`. Shell, paths or tools on Windows: `windows-ops`. Writing, refactoring or reviewing code: `clean-code`. Writing a commit message, naming a branch, titling a PR or a merge commit: `git-conventions`. Mapping screens or keeping design and code aligned: `screen-map`. Several agents running tests, e2e or containers on one machine: `shared-machine-checks`. Adding or changing test assertions: `assertions-go-red`.
+Launching or steering a cloud worker: `cloud-worker`. Merging a finished PR: `merge-gate`. Going unattended or to sleep: `overnight`. Issues, milestones, the roadmap: `roadmap-tracker`. Running Matt Pocock's skills: `matt-bridge`. Researching facts that change (prices, limits, versions, APIs): `verified-research`. Checking for new releases or models: `release-watch`. Reviewing skills or their cost: `skill-audit`. A heavy or long session: `context-hygiene`. Shell, paths or tools on Windows: `windows-ops`. Writing, refactoring or reviewing code: `clean-code`. Writing a commit message, naming a branch, titling a PR or a merge commit: `git-conventions`. Mapping screens or keeping design and code aligned: `screen-map`. Several agents running tests, e2e or containers on one machine: `shared-machine-checks`. Adding or changing test assertions: `assertions-go-red`. Setting up or auditing a repository for Claude Code: `project-setup`.
 ```
 
 ## In a new project
