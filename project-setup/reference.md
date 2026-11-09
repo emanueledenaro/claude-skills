@@ -2,6 +2,8 @@
 
 Read by `project-setup` before step 2. Checked 2026-11-09 against Claude Code 2.1.321 and the pages below, all under `https://code.claude.com/docs/en/`. Settings, permissions and memory change between releases: when this date is old, read the page again before writing a file.
 
+Contents: Doc facts, Not confirmed, settings.json template, .gitignore lines, CLAUDE.md that imports AGENTS.md, Inspect commands, Branch ruleset.
+
 ## Doc facts
 
 Settings, `settings.md`:
@@ -24,6 +26,9 @@ Permissions, `permissions.md`:
 - PowerShell rules have the same shape: `PowerShell(Remove-Item *)`. Cmdlet aliases are matched too, and matching is case-insensitive.
 - On Windows, `Read`/`Edit` paths are normalised to POSIX form before matching (`C:\Users\x` becomes `/c/Users/x`); `//c/**/.env` matches `.env` files on that drive.
 - Edits to permissions apply without a restart.
+- Bare file names follow gitignore semantics: `Read(.env)` and `Read(**/.env)` are the same and match at any depth under the current directory. A deny or ask pattern that starts with `!` carves paths out of the rules listed before it, in the same settings file (`Read(*.env)` then `Read(!sample.env)`). A `!` listed first carves nothing out.
+- Mods (`permissions.md`, "Precedence among rules, hooks, and mods"): with no managed settings and no Team or Enterprise `/login`, a mod that handles `tool.check` can approve a call that a deny rule refuses or a PreToolUse hook blocked. With managed settings or such a login, a deny stays a deny. A session on an API key or a long-lived `CLAUDE_CODE_OAUTH_TOKEN` counts as having no such login.
+- Mods, `plugins/mods/overview.md` and `plugins/mods/admin.md`: `claude plugin validate <plugin dir>` prints `hooks:` and `calls:` lines for a mod without running it. `hooks:` lists the events it handles (look for `tool.check`).
 
 Memory, `memory.md` and `claude-directory.md`:
 - Project instructions live in `./CLAUDE.md` or `./.claude/CLAUDE.md`. `CLAUDE.local.md` is personal and is added to `.gitignore` by hand. The page advises keeping a file under 200 lines.
@@ -43,13 +48,18 @@ Hooks, `hooks-guide.md` and `debug-your-config.md`: hooks go under the `hooks` k
 
 MCP, `mcp.md`: project servers live under `mcpServers` in `.mcp.json` at the repo root, committed. A server from `.mcp.json` stays at "Pending approval" until the person runs `claude` interactively and approves it. `enableAllProjectMcpServers` or `enabledMcpjsonServers` committed in `.claude/settings.json` is ignored in an untrusted folder.
 
+Skills installed by the `npx skills` CLI (`https://github.com/vercel-labs/skills`, README read through a search result 2026-11-09, version 1.7.6 found in the local npx cache): `npx skills list`, `npx skills update [skills]` with `-g` for global ones, `npx skills remove`. Its `update` reinstalls without asking again. On the machine this was written on, the directories sit in `~/.agents/skills`, symlinks in `~/.claude/skills` point to them, and `~/.agents/.skill-lock.json` holds `skills.<name>.source`. The lock file layout is observed, not documented.
+
+GitHub rulesets, `https://docs.github.com/en/rest/repos/rules` (read 2026-11-09): `GET repos/{owner}/{repo}/rules/branches/{branch}` returns the rules that apply to a branch (an empty list means none). `POST repos/{owner}/{repo}/rulesets` creates a ruleset; rule types include `non_fast_forward`, `deletion` and `pull_request` (with the parameters shown below), and `~DEFAULT_BRANCH` is a valid ref pattern. Creating one needs admin on the repo.
+
 Plugins, from `claude plugin --help` on 2.1.321 (not from a docs page): `install`, `update <plugin>`, `list`, `details <name>` (component inventory), `validate <path> --strict`, `marketplace add`.
 
 ## Not confirmed, left out
 
 - No documented command checks a settings file against the schema. `claude doctor` is the closest; the schema URL is for editors.
-- The docs give no example for `pkill`, `killall` or force-push deny rules. The rules below follow the confirmed syntax, but I did not run them against a live session, and the force-push forms are not exhaustive (`git push origin +main`, `git -C . push -f` and aliases get through).
+- The docs give no example for `pkill`, `killall` or force-push deny rules. The rules below follow the confirmed syntax, but Not run against a live session. The force-push forms are not exhaustive (`git push origin +main`, `git -C . push -f` and aliases get through); the ruleset is the real guard.
 - The settings-reference "Exclude sensitive files" section: the link is cited by `permissions.md`, but the saved settings-reference page has no section by that name. The `Read(./.env)` examples come from `settings.md` and `permissions.md`.
+- The ruleset JSON below follows the GitHub docs page but was not sent to a repo. `installed_plugins.json` (`.plugins.<id>[0].installPath`) is observed on 2.1.321, not documented.
 - Whether `.claude/settings.json` is read when Claude Code starts in a subfolder of the repo: `settings.md` says it reads from the session's primary working directory, so start at the root.
 
 ## settings.json template
@@ -71,18 +81,20 @@ Replace the allow list with the project's own commands from step 1; keep every d
       "Bash(git push -f *)",
       "Bash(git push * --force*)",
       "Bash(git push * -f)",
-      "Read(./.env)",
-      "Read(./.env.*)",
-      "Read(./secrets/**)"
+      "Bash(git push * -f *)",
+      "Read(**/.env)",
+      "Read(**/.env.*)"
     ]
   }
 }
 ```
 
 Notes for the diff:
-- `Bash(pkill *)` also covers `pkill -f`. `--force*` also blocks `--force-with-lease`; if the person wants that allowed, add an ask rule instead.
+- `Bash(pkill *)` also covers `pkill -f`. `--force*` also blocks `--force-with-lease`, which git-conventions forbids anyway.
 - On Windows, add `PowerShell(Stop-Process *)` and `PowerShell(git push --force*)` only if the project's agents run PowerShell; the person decides.
-- Add `Read` denies for the key and credential files the project really has (`*.pem`, `credentials.json`). Do not guess names.
+- Add `Read` denies for the key and credential files the project really has (`**/*.pem`, `credentials.json`). Do not guess names.
+- If the project has `.env.example` or `.env.sample`, offer `Read(!**/.env.example)` as the last entry of `deny`. It loosens a deny, so it is the person's call and goes in only with their ok.
+- `Bash` rules above are the Unix shell form. The Windows allow and deny forms use `PowerShell(...)` (see Permissions above).
 - Show the diff against the existing file. A new file is shown whole.
 
 ## .gitignore lines
@@ -109,10 +121,55 @@ From the repo root. All read-only.
 git status -sb && git remote -v && git symbolic-ref --short refs/remotes/origin/HEAD
 ls -a CLAUDE.md CLAUDE.local.md AGENTS.md .mcp.json .gitignore 2>&1
 ls -a .claude .claude/skills .claude/agents .claude/commands 2>&1
-cat .claude/settings.json 2>/dev/null
+jq 'if .env then .env |= map_values("<redacted>") else . end' .claude/settings.json 2>/dev/null
+jq '.mcpServers|keys' .mcp.json 2>/dev/null
+gh api repos/{owner}/{repo}/rules/branches/<default>
 git check-ignore -v .claude/settings.local.json CLAUDE.local.md
 ls package.json pnpm-lock.yaml yarn.lock package-lock.json bun.lockb pyproject.toml uv.lock Cargo.toml go.mod Gemfile Makefile justfile docker-compose*.yml compose*.y*ml .github/workflows .gitlab-ci.yml 2>&1
 claude doctor
 ```
 
-On Windows PowerShell use `Get-ChildItem -Force`, `Get-Content` and `Test-Path` for the same checks; shell traps are in `windows-ops`. Read the check command from the `scripts` block of `package.json`, the `Makefile`, the `justfile` or the CI workflow. Never run an unfamiliar script just to learn what it does.
+Installed mods that handle `tool.check` (paths from the plugin install record; read-only):
+
+```bash
+jq -r '.plugins[][].installPath' ~/.claude/plugins/installed_plugins.json | while read -r p; do
+  claude plugin validate "$p" 2>&1 | grep -q 'hooks:.*tool\.check' && echo "tool.check: $p"
+done
+```
+
+Matt Pocock's skills, in the order of `project-setup` step 4 (read-only; `<name>` is a skill from `matt-bridge/flow.md`):
+
+```bash
+ls .claude/skills/<name>/SKILL.md ~/.claude/skills/<name>/SKILL.md ~/.agents/skills/<name>/SKILL.md 2>&1
+jq -r '.skills|to_entries[]|select(.value.source=="mattpocock/skills")|.key' ~/.agents/.skill-lock.json
+claude plugin list
+```
+
+## Branch ruleset for the default branch
+
+Offer it when `rules/branches/<default>` returns `[]`. It blocks force pushes and deletion and requires a pull request. Change the repo only on the person's explicit ok, and tell them it needs admin.
+
+```json
+{
+  "name": "protect-default",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "non_fast_forward" },
+    { "type": "deletion" },
+    { "type": "pull_request", "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false } }
+  ]
+}
+```
+
+```bash
+gh api repos/{owner}/{repo}/rulesets -X POST --input ruleset.json
+```
+
+On Windows PowerShell use `Get-ChildItem -Force`, `Get-Content` and `Test-Path` for the same checks; shell traps are in `windows-ops`. Read the check command from the `scripts` block of `package.json`, the `Makefile`, the `justfile` or the CI workflow. Never run an unfamiliar script just to learn what it does. The `jq` lines need `jq` installed; without it, read the file by eye and skip every `env` and `headers` value.
