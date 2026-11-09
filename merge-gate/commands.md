@@ -41,6 +41,17 @@ Before the merge, with a fresh fetch, this exits 0 when main is already inside t
 git fetch origin && git merge-base --is-ancestor origin/main <sha>
 ```
 
+## Pairwise conflicts
+
+For each pair of open PR heads (git 2.38 or later), after a fetch of both. It exits 1 and lists the conflicted files when the pair conflicts:
+
+```
+git fetch origin pull/N/head:pr-N pull/M/head:pr-M
+git merge-tree --write-tree --name-only pr-N pr-M
+```
+
+Order the merges so each shared file is resolved once: the PR with the largest change to a shared file goes first, and the others realign on the new main.
+
 ## Watch checks
 
 Run in the `Monitor` tool, so each line arrives as an event:
