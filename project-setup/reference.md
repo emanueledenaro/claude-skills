@@ -1,6 +1,6 @@
 # project-setup reference
 
-Read by `project-setup` before step 2. Checked 2026-11-09 against Claude Code 2.1.321 and the pages below, all under `https://code.claude.com/docs/en/`. Settings, permissions and memory change between releases: when this date is old, read the page again before writing a file.
+Read by `project-setup` before step 1. Checked 2026-11-09 against Claude Code 2.1.321 and the pages below, all under `https://code.claude.com/docs/en/`. Settings, permissions and memory change between releases: when this date is old, read the page again before writing a file.
 
 Contents: Doc facts, Not confirmed, settings.json template, .gitignore lines, CLAUDE.md that imports AGENTS.md, Inspect commands, Branch ruleset.
 
@@ -57,7 +57,7 @@ Plugins, from `claude plugin --help` on 2.1.321 (not from a docs page): `install
 ## Not confirmed, left out
 
 - No documented command checks a settings file against the schema. `claude doctor` is the closest; the schema URL is for editors.
-- The docs give no example for `pkill`, `killall` or force-push deny rules. The rules below follow the confirmed syntax, but Not run against a live session. The force-push forms are not exhaustive (`git push origin +main`, `git -C . push -f` and aliases get through); the ruleset is the real guard.
+- The docs give no example for `pkill`, `killall` or force-push deny rules. The rules below follow the confirmed syntax, but they were not run against a live session. The force-push forms are not exhaustive (`git push origin +main`, `git -C . push -f` and aliases get through); the ruleset is the real guard.
 - The settings-reference "Exclude sensitive files" section: the link is cited by `permissions.md`, but the saved settings-reference page has no section by that name. The `Read(./.env)` examples come from `settings.md` and `permissions.md`.
 - The ruleset JSON below follows the GitHub docs page but was not sent to a repo. `installed_plugins.json` (`.plugins.<id>[0].installPath`) is observed on 2.1.321, not documented.
 - Whether `.claude/settings.json` is read when Claude Code starts in a subfolder of the repo: `settings.md` says it reads from the session's primary working directory, so start at the root.
@@ -71,8 +71,8 @@ Replace the allow list with the project's own commands from step 1; keep every d
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(<package-manager> run test *)",
-      "Bash(<package-manager> run lint *)"
+      "Bash(<package-manager> run test)",
+      "Bash(<package-manager> run lint)"
     ],
     "deny": [
       "Bash(pkill *)",
