@@ -42,6 +42,20 @@ Before launching any agent, cloud session, workflow or review, use `model-mix`. 
 Launching or steering a cloud worker: `cloud-worker`. Merging a finished PR: `merge-gate`. Going unattended or to sleep: `overnight`. Issues, milestones, the roadmap: `roadmap-tracker`. Running Matt Pocock's skills: `matt-bridge`. Researching facts that change (prices, limits, versions, APIs): `verified-research`. Checking for new releases or models: `release-watch`. Reviewing skills or their cost: `skill-audit`. A heavy or long session: `context-hygiene`. Shell, paths or tools on Windows: `windows-ops`. Writing, refactoring or reviewing code: `clean-code`. Writing a commit message, naming a branch, titling a PR or a merge commit: `git-conventions`. Mapping screens or keeping design and code aligned: `screen-map`. Several agents running tests, e2e or containers on one machine: `shared-machine-checks`. Adding or changing test assertions: `assertions-go-red`.
 ```
 
+## In a new project
+
+Skills hold no project facts. Paste this into the project's `AGENTS.md` and fill the four lines; the project's own rules always win over the skills:
+
+```markdown
+## Checks and queue
+- Check command: <the one command that runs the full local check>
+- Shared lock file: <path of the lock every heavy check runs under>
+- Hot files: <agent rules files, shared config, lockfiles that many PRs touch>
+- Label strings: <state labels (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix) and category labels (bug, enhancement), as this project spells them>
+```
+
+Without Matt Pocock's skills the other skills work alone; `matt-bridge` applies only while one of his skills runs.
+
 ## Your plan
 
 Claude Code can tell Pro from Max, but not Max from Ultra (formerly Max 5x and Max 20x). Add one line to the same `~/.claude/CLAUDE.md` and keep it current:
