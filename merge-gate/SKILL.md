@@ -23,6 +23,7 @@ Run the budget check in `model-mix` first. Size by the diff, not by the worker's
 
 ## 3. Run the review
 
+- If `code-review` already ran, read its PR comment first and review only what it does not cover (`matt-bridge` §6).
 - The reviewer gets the repo at the PR head sha in a short-path worktree, the diff, the ticket's acceptance criteria, the project rules and the `clean-code` rules. The PR body and the worker's report are claims to test. Brief, lenses and finding format: `review.md`.
 - A finding counts only after a verifier, who sees the claim and the cited lines but not the author's reasoning, failed to refute it with evidence (file and line, command and output), small path included (`review.md`).
 - Post each review round as one PR comment: head sha, verdict, what was fixed, which finding went to which follow-up ticket, checks read. The trail then survives the machine, and the next steps and a later reader cite it.
@@ -31,7 +32,7 @@ Run the budget check in `model-mix` first. Size by the diff, not by the worker's
 ## 4. Apply findings
 
 - Send verified findings to the worker that owns the PR as one message: file and line, evidence, expected change. If the worker is gone, start a fix thread. Fixes are new commits: no amend, no force.
-- A serious finding (wrong behavior, security, data loss, removed or weakened tests, a broken project rule, a `clean-code` block rule) must be fixed before the merge. After the first review only blockers (serious findings) and hard-rule matters go back to the worker; every minor finding goes to one follow-up ticket with a milestone. Each extra round costs a new head and a new gate.
+- A serious finding (wrong behavior, security, data loss, removed or weakened tests, a broken project rule, a `clean-code` block rule) must be fixed before the merge. After the first review only blockers (serious findings) and hard-rule matters go back to the worker; every minor finding goes to one follow-up ticket with a milestone and a state label (`roadmap-tracker` §5). Each extra round costs a new head and a new gate.
 - After fixes, one delta review of the new commits only (one Opus high agent, same brief). Two fix rounds at most; if serious findings remain after the second, stop and tell the person.
 - Refuted and unverified findings are not sent to the worker. Note them in the PR comment.
 
