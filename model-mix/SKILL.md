@@ -54,7 +54,7 @@ From `code.claude.com/docs/en/advisor.md` and the prompt-caching page, read 2026
 Rules:
 
 - For a strong second opinion at decision points, run workers as Sonnet with an Opus advisor instead of switching the session model.
-- A Fable second opinion, where the Fable rule above allows it, is a foreground subagent with a short brief at agreed moments: before designing a big feature, when a worker is stuck after two attempts, for the last review of security work. An advisor's timing cannot be capped, and a long coordinator session makes every call expensive.
+- A Fable second opinion, where the Fable rule above allows it, is a foreground subagent with a short brief at agreed moments: before designing a big feature, when a worker is stuck after two attempts and `diagnosing-bugs` built its red loop without finding the cause, for the last review of security work. An advisor's timing cannot be capped, and a long coordinator session makes every call expensive.
 - Run `/advisor off` where workers should not inherit it, such as Haiku readers.
 
 ## Plan profiles
