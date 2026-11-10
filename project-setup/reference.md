@@ -78,7 +78,7 @@ Policies, `policies`:
 - Other actions: `provider.use`, `integration.connect`, `integration.use`, `mcp.use`, `skill.use`, `plugin.use`, `websearch.use`. The top-level `policies` key replaces `experimental.policies`.
 
 Instructions, `instructions`:
-- V2 reads `AGENTS.md` only and never falls back to `CLAUDE.md`. It loads `~/.config/opencode/AGENTS.md`, then every `AGENTS.md` from the workspace up to the project root. Nested ones load when that area is read. Changes to a loaded file are picked up before the next request.
+- V2 reads `AGENTS.md` only and never falls back to `CLAUDE.md`. It loads `~/.config/opencode/AGENTS.md`, then every `AGENTS.md` from the workspace up toward the home directory; a workspace outside the home directory stops at the project root. Nested ones load when that area is read. Changes to a loaded file are picked up before the next request.
 
 Skills, `skills`:
 - Discovery: global `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills`; project `.opencode/skills`, `.claude/skills`, `.agents/skills`, searched from the working directory up to the project root.
@@ -252,7 +252,16 @@ Pass: the first command lists `<repo>/opencode.jsonc` and the last prints nothin
 
 ## These skills
 
-Run from any directory. It finds the clone of `emanueledenaro/claude-skills` (through the symlinks of installed skills, else `~/.agents/repos/claude-skills`), clones it if absent, fast-forwards it when clean and on the default branch, links every missing skill (`~/.agents/skills/<id>` to the clone, `~/.claude/skills/<id>` to that), then compares every copy OpenCode or Claude Code can load against the repo's current commit and updates the stale ones: a marketplace clone through `claude plugin marketplace update`, another clone through `git pull --ff-only`. It never overwrites a real directory; it reports it. `DRY=1` prints the changes only. Tested on macOS with a clean home, a plain stale copy and a stale marketplace clone (dry run for the last); not run on Windows or Linux.
+One script, run from any directory. The repo is public, so it writes only when `~/.claude/CLAUDE.md` has the line `claude-skills: auto-sync` on a line of its own (the README documents it). Without that line it is a dry run: it prints `would:` lines for the exact actions, you ask the person once, and after the ok you rerun it with `APPLY=1`. Then offer to add the line, so later runs need no question; add it only after their ok. The only write of a dry run is `git fetch` in the clone.
+
+What it does:
+1. Finds the clone of `emanueledenaro/claude-skills` (through the symlinks of installed skills, else `~/.agents/repos/claude-skills`, which it clones if absent). A clone may be a worktree, where `.git` is a file.
+2. Fast-forwards a clone, any clone, only when it is clean and on its default branch; otherwise it prints a `report:` line and leaves it, since it may be the person's working copy.
+3. Links every skill in the clone's `HEAD` that has no `~/.claude/skills/<id>/SKILL.md` (`~/.agents/skills/<id>` to the clone, `~/.claude/skills/<id>` to that). A dangling symlink is replaced; a real directory is reported, never overwritten.
+4. Compares every copy OpenCode or Claude Code can load (`~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills`) with `origin`'s default branch, and updates a stale one: a marketplace clone through `claude plugin marketplace update`, another clone through the same clean-and-default-branch fast-forward. A plain copy that differs is reported.
+5. Adds the README's routing block to `~/.claude/CLAUDE.md` and links `~/.config/opencode/AGENTS.md` to it (appending the block instead when that is a different file). It never rewrites a line.
+
+Tested on macOS in throwaway homes: a clean install, a second run, a plain stale copy, a stale marketplace clone (dry run), a home path with a space, a clone that is a worktree, a second clone on a work branch, and a home with no `auto-sync` line. Not run on Windows or Linux.
 
 Why every location: OpenCode ranks `~/.config/opencode/skills` above `~/.claude/skills` and `~/.agents/skills`. A symlink there into a marketplace clone that is behind makes OpenCode load the old text without any warning, while Claude Code loads the new one. `claude plugin marketplace update <name>` fixed it in practice.
 
@@ -260,8 +269,19 @@ Why every location: OpenCode ranks `~/.config/opencode/skills` above `~/.claude/
 #!/usr/bin/env bash
 set -u
 slug=emanueledenaro/claude-skills
+if [ "${APPLY:-}" != 1 ] && ! grep -qxF 'claude-skills: auto-sync' "$HOME/.claude/CLAUDE.md" 2>/dev/null; then
+  DRY=1; echo "note: no 'claude-skills: auto-sync' line in ~/.claude/CLAUDE.md, dry run (APPLY=1 after the person's ok)"
+fi
 run() { if [ "${DRY:-}" = 1 ]; then echo "would: $*"; else "$@" && echo "did: $*"; fi; }
-same_repo() { git -C "$1" remote get-url origin 2>/dev/null | grep -q "$slug"; }
+same_repo() { git -C "$1" remote get-url origin 2>/dev/null | grep -Eq "[/:]$slug(\.git)?\$"; }
+ff() { # fast-forward a clone only when it is clean and on its default branch
+  local r; r=$(git -C "$1" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) || { echo "report: $1 has no origin/HEAD, not pulled"; return; }
+  if [ "$(git -C "$1" branch --show-current)" = "${r#origin/}" ] && [ -z "$(git -C "$1" status --porcelain)" ]; then
+    run git -C "$1" pull --ff-only --quiet
+  else echo "report: $1 is dirty or off the default branch, not pulled"; fi
+}
+mkd() { [ "${DRY:-}" = 1 ] && echo "would: mkdir -p $*" || mkdir -p "$@"; }
+ids_of() { git -C "$clone" ls-tree -r --name-only "$1" | sed -n 's|^\([^/]*\)/SKILL\.md$|\1|p'; }
 
 # 1. Find the clone: through the symlinks of installed skills, else the default place.
 clone=
@@ -273,24 +293,20 @@ for l in "$HOME"/.agents/skills/* "$HOME"/.claude/skills/* "$HOME"/.config/openc
   same_repo "$top" && { clone=$top; break; }
 done
 clone=${clone:-$HOME/.agents/repos/claude-skills}
-[ -d "$clone/.git" ] || run git clone "https://github.com/$slug.git" "$clone"
-[ -d "$clone/.git" ] || exit 0
-echo "clone: $clone"
+git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 || run git clone "https://github.com/$slug.git" "$clone"
+git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 || { echo "then: link every skill and add the routing block"; exit 0; }
+clone=$(cd "$clone" && pwd -P); echo "clone: $clone"
 
-# 2. Fast-forward it when it is clean and on the default branch.
+# 2. Fast-forward it.
 git -C "$clone" fetch --quiet origin
-ref=$(git -C "$clone" symbolic-ref --short refs/remotes/origin/HEAD)
-if [ "$(git -C "$clone" rev-parse HEAD)" != "$(git -C "$clone" rev-parse "$ref")" ]; then
-  if [ "$(git -C "$clone" branch --show-current)" = "${ref#origin/}" ] && [ -z "$(git -C "$clone" status --porcelain)" ]; then
-    run git -C "$clone" pull --ff-only --quiet
-  else echo "report: $clone is dirty or off the default branch, not pulled"; fi
-fi
-ids=$(git -C "$clone" ls-tree -r --name-only "$ref" | sed -n 's|^\([^/]*\)/SKILL\.md$|\1|p')
+ref=$(git -C "$clone" symbolic-ref --short refs/remotes/origin/HEAD) || { echo "report: $clone has no origin/HEAD"; exit 1; }
+[ "$(git -C "$clone" rev-parse HEAD)" = "$(git -C "$clone" rev-parse "$ref")" ] || ff "$clone"
 
-# 3. Link every missing skill. A dangling symlink is replaced; anything else is reported.
-mkdir -p "$HOME/.agents/skills" "$HOME/.claude/skills"
-for id in $ids; do
+# 3. Link every missing skill of HEAD. A dangling symlink is replaced; anything else is reported.
+mkd "$HOME/.agents/skills" "$HOME/.claude/skills"
+for id in $(ids_of HEAD); do
   [ -e "$HOME/.claude/skills/$id/SKILL.md" ] && continue
+  [ -d "$clone/$id" ] || continue
   for pair in "$HOME/.agents/skills/$id|$clone/$id" "$HOME/.claude/skills/$id|../../.agents/skills/$id"; do
     link=${pair%%|*}; target=${pair#*|}
     { [ -L "$link" ] && [ ! -e "$link" ]; } && run rm "$link"
@@ -299,13 +315,14 @@ for id in $ids; do
   done
 done
 
-# 4. Every copy either tool can load must match the repo's current commit.
+# 4. Every copy either tool can load must match origin's default branch.
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 git -C "$clone" archive "$ref" | tar -x -C "$tmp"
-copies() { for id in $ids; do for d in "$HOME/.config/opencode/skills/$id" "$HOME/.claude/skills/$id" "$HOME/.agents/skills/$id"; do
+rids=$(ids_of "$ref")
+copies() { for id in $rids; do for d in "$HOME/.config/opencode/skills/$id" "$HOME/.claude/skills/$id" "$HOME/.agents/skills/$id"; do
   [ -e "$d" ] && ! diff -rq "$tmp/$id" "$d/" >/dev/null 2>&1 && echo "$d"; done; done; }
 seen=" "
-for d in $(copies); do
+while IFS= read -r d; do
   top=$(git -C "$(realpath "$d")" rev-parse --show-toplevel 2>/dev/null)
   case $seen in *" $top "*) continue ;; esac
   if [ -z "$top" ] || ! same_repo "$top"; then echo "report: $d differs and is a plain copy, left alone"; continue; fi
@@ -313,35 +330,37 @@ for d in $(copies); do
   case $top in
     "$clone") ;;
     */.claude/plugins/marketplaces/*) run claude plugin marketplace update "$(basename "$top")" ;;
-    *) run git -C "$top" pull --ff-only --quiet ;;
+    *) ff "$top" ;;
   esac
-done
-[ "${DRY:-}" = 1 ] || for d in $(copies); do echo "still differs: $d"; done
-```
+done < <(copies)
+[ "${DRY:-}" = 1 ] || while IFS= read -r d; do echo "still differs: $d"; done < <(copies)
 
-Report each `did:`, `report:` and `still differs:` line to the person in one short list. A copy inside the clone itself that still differs means the clone is on a work branch: say so, do not switch it. This skills folder may be edited by hand, so a plain copy that differs is also reported, never replaced.
-
-Global routing block and plan line. The block is the first fenced block after "Then add a routing block" in the clone's README. `ensure_block` creates a missing file, appends the whole block when the file lacks it, and appends only the README sentences for skills the file does not name. It never rewrites a line. Tested on a copy of a real file that lacked three skills.
-
-```bash
-README="$clone/README.md"
-block=$(awk '/^Then add a routing block/{f=1} f&&/^```markdown/{g=1;next} g&&/^```/{exit} g' "$README")
-ensure_block() {
-  f=$1; [ -e "$f" ] || { printf '%s\n' "$block" > "$f"; echo "created: $f"; return; }
-  grep -qF 'use `model-mix`' "$f" || { printf '\n%s\n' "$block" >> "$f"; echo "appended block: $f"; return; }
-  miss=; for id in $(printf '%s' "$block" | grep -o '`[a-z-]*`' | tr -d '`' | sort -u); do
-    grep -qF "\`$id\`" "$f" || miss="$miss $(printf '%s' "$block" | grep -oE "[A-Z][^.]*\`$id\`[^.]*\." | head -1)"
-  done
-  [ -z "${miss# }" ] || { printf '\n%s\n' "${miss# }" >> "$f"; echo "appended missing lines: $f"; }
+# 5. Routing block: from the clone's README, appended, never rewritten.
+block=$(git -C "$clone" show HEAD:README.md 2>/dev/null | awk '/^Then add a routing block/{f=1} f&&/^```markdown/{g=1;next} g&&/^```/{exit} g')
+[ -n "$block" ] || { echo "report: no routing block found"; exit 1; }
+emit() { # file, label, text
+  if [ "${DRY:-}" = 1 ]; then echo "would $2: $1"; printf '%s\n' "$3" | cut -c1-100 | sed 's/^/  | /'
+  else { [ -s "$1" ] && printf '\n'; printf '%s\n' "$3"; } >> "$1"; echo "did $2: $1"; fi
 }
-ensure_block ~/.claude/CLAUDE.md
-if [ -L ~/.config/opencode/AGENTS.md ] && [ "$(realpath ~/.config/opencode/AGENTS.md)" = "$(realpath ~/.claude/CLAUDE.md)" ]; then :
-elif [ -e ~/.config/opencode/AGENTS.md ]; then ensure_block ~/.config/opencode/AGENTS.md
-else mkdir -p ~/.config/opencode && ln -s ~/.claude/CLAUDE.md ~/.config/opencode/AGENTS.md; fi
-grep -q '^Claude plan:' ~/.claude/CLAUDE.md || echo "ask: Claude plan line"
+ensure_block() {
+  grep -qF 'use `model-mix`' "$1" 2>/dev/null || { emit "$1" "add the routing block to" "$block"; return; }
+  miss=$(for id in $(printf '%s\n' "$block" | grep -o '`[a-z-]*`' | tr -d '`' | sort -u); do
+    grep -qF "\`$id\`" "$1" || printf '%s\n' "$block" | grep -oE "[A-Z][^.]*\`$id\`[^.]*\." | head -1
+  done | awk 'NF && !seen[$0]++' | paste -sd' ' -)
+  [ -z "$miss" ] || emit "$1" "add the missing routing lines to" "$miss"
+}
+mkd "$HOME/.claude"
+ensure_block "$HOME/.claude/CLAUDE.md"
+oc=$HOME/.config/opencode/AGENTS.md
+if [ -L "$oc" ] && [ "$(realpath "$oc")" = "$(realpath "$HOME/.claude/CLAUDE.md" 2>/dev/null)" ]; then :
+elif [ -e "$oc" ]; then ensure_block "$oc"
+else { [ -L "$oc" ] && run rm "$oc"; }; mkd "$HOME/.config/opencode"; run ln -s "$HOME/.claude/CLAUDE.md" "$oc"; fi
+grep -q '^Claude plan:' "$HOME/.claude/CLAUDE.md" 2>/dev/null || echo "ask: Claude plan line"
 ```
 
-The plan line is the one thing to ask: `Claude plan: <Pro|Max|Ultra> · reserve 10%`, written to `~/.claude/CLAUDE.md` after the answer. Recommend from what `/status` shows (Claude Code tells Pro from Max, not Max from Ultra). If `~/.config/opencode/AGENTS.md` is its own file, append the plan line there too, so OpenCode sessions see it. On Windows the links were not checked: use `windows-ops` and report instead of fixing.
+Report each `did:`, `would:`, `report:` and `still differs:` line to the person in one short list. A copy inside the clone itself that still differs means the clone is on a work branch: say so, do not switch it.
+
+The plan line is the one thing to ask: `Claude plan: <Pro|Max|Ultra> · reserve 10%`, written to `~/.claude/CLAUDE.md` after the answer. Recommend from what `/status` shows (Claude Code tells Pro from Max, not Max from Ultra). If `~/.config/opencode/AGENTS.md` is its own file, append the plan line there too, so OpenCode sessions see it. A link from `~/.config/opencode/AGENTS.md` to `CLAUDE.md` also hands OpenCode the Claude-only lines and the `@` imports, which it does not follow: a person who keeps those in the global file may prefer a separate file with the block. On Windows the links were not checked: use `windows-ops` and report instead of fixing.
 
 ## Stack skills
 

@@ -34,21 +34,23 @@ Propose each file, show the exact diff, write after the person's ok. Permission 
 - Mods: on a personal login with no managed settings, a Claude Code mod that handles `tool.check` can approve a call a deny rule refuses. List the installed ones with the loop in `reference.md` and name them in the diff message.
 - Force pushes are stopped on the remote, not by a local rule. If step 1 found no rule on the default branch, tell the person to add a ruleset (block force pushes, restrict deletions, require a pull request). Show the ruleset JSON and the `gh api` call from `reference.md`; change the repo only on their explicit ok.
 - `.gitignore`: add `.claude/settings.local.json` and `CLAUDE.local.md` if missing.
-- Project skills go in `.claude/skills/<name>/SKILL.md`: OpenCode reads that folder too. Create it only when there is a skill for it.
+- Project skills go in `.claude/skills/<name>/SKILL.md`: OpenCode reads that folder too. Create it only when there is a skill for it. In OpenCode a skill with the same ID in `~/.agents/skills` or `~/.config/opencode/skills` beats the project one, so check the ID against both before adding it.
 - MCP: `.mcp.json` is Claude Code's, `mcp.servers` in `opencode.jsonc` is OpenCode's. Report both. Add no server.
 
 ## 3. Instruction files
 
-OpenCode reads `AGENTS.md` only; Claude Code reads `CLAUDE.md`. So `AGENTS.md` is required and holds the project text; `CLAUDE.md` is `@AGENTS.md` plus Claude-only lines. Cases (only `CLAUDE.md`, both, neither) are in `reference.md`; the move from `CLAUDE.md` is one commit and shown as a diff first.
+OpenCode reads `AGENTS.md` only; Claude Code reads `CLAUDE.md`. So `AGENTS.md` is required and holds the project text; `CLAUDE.md` is `@AGENTS.md` plus Claude-only lines. Cases (only `CLAUDE.md`, both, neither) are in `reference.md`; the move from `CLAUDE.md` is one commit and shown as a diff first. Like every project write, it waits for the person's ok.
 
-## 4. These skills, global, automatic
+- `AGENTS.md` gets the "Checks and queue" block from the README ("In a new project"). Fill the check command from step 1, the lock file from `shared-machine-checks` if the project runs heavy checks, hot files from `git log` (the files most PRs touch), and label strings from `docs/agents/triage-labels.md` or `gh label list`. Ask one question at a time, with a recommendation, for what is still blank.
 
-The person's decision: this part runs without asking, then reports. Never overwrite a real directory.
+## 4. These skills, global
 
-- Run the sync script in `reference.md` ("These skills"). It clones this repo if absent (reusing a clone found by `git remote`), fast-forwards it, links every missing skill into `~/.agents/skills` and `~/.claude/skills`, and updates every copy that differs from the repo's current commit in `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` and plugin marketplace clones. OpenCode ranks `~/.config/opencode/skills` first, so a stale copy there hides the current one without a warning.
-- Routing block: make sure `~/.claude/CLAUDE.md` has the README's routing block, and that `~/.config/opencode/AGENTS.md` reaches the same text (a symlink to the first file; if it is a different file, append, never replace). Add what is missing without asking.
+This repo is public, so the automatic part is opt-in. The script in `reference.md` ("These skills") writes without asking only when `~/.claude/CLAUDE.md` has the line `claude-skills: auto-sync`. Without it the script is a dry run: show its `would:` lines, ask once, rerun with `APPLY=1` after the ok, and offer to add the line so later runs need no question. Never overwrite a real directory.
+
+- The script clones this repo if absent (reusing a clone found by `git remote`), links every missing skill into `~/.agents/skills` and `~/.claude/skills`, and updates every copy that differs from the repo's default branch in `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` and plugin marketplace clones. A clone is fast-forwarded only when clean and on its default branch; otherwise it prints a `report:` line, because it may be the person's working copy.
+- OpenCode ranks `~/.config/opencode/skills` first, so a stale copy there hides the current one without a warning.
+- Routing block: the same script makes sure `~/.claude/CLAUDE.md` has the README's routing block, and that `~/.config/opencode/AGENTS.md` reaches the same text (a link to the first file; a different file gets the block appended, never replaced).
 - Ask only for the `Claude plan:` line if absent (`model-mix` needs it): one question, with a recommendation.
-- AGENTS.md of the project gets the "Checks and queue" block from the README ("In a new project"). Fill the check command from step 1, the lock file from `shared-machine-checks` if the project runs heavy checks, hot files from `git log` (the files most PRs touch), and label strings from `docs/agents/triage-labels.md` or `gh label list`. Ask one question at a time, with a recommendation, for what is still blank.
 - Point, do not repeat: `git-conventions` (offer its commit-msg hook only when the project has no CI of its own), `roadmap-tracker`, `shared-machine-checks` and `model-mix`.
 
 ## 5. Stack skills
