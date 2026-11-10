@@ -7,7 +7,7 @@ Pick the model for each piece of delegated work from the table, then check the b
 
 ## Models
 
-Three models carry the work: **Haiku 5.5** for short reading and small mechanical work, **Sonnet 5.5** for implementation, **Opus 5.5** where a mistake costs the most. Plan metering ratios are unpublished, so API list prices are the proxy. For output and uncached input, Haiku costs about 1/20 of Sonnet while its prompt stays under 100K tokens and about 1/4 above, Opus about 2× Sonnet and Fable 5.1 about 5× Sonnet. Cached re-reads cost about the same on Sonnet, Opus and Fable; on Haiku they cost 1/20 of that under 100K tokens.
+Three models carry the work: **Haiku 5.5** for short reading and small mechanical work, **Sonnet 5.5** for implementation, **Opus 5.5** where a mistake costs the most. Plan metering ratios are unpublished, so API list prices (read 2026-11-10 on the pricing page) are the proxy. For output and uncached input, Haiku costs 1/20 of Sonnet while its prompt stays under 100K tokens and 1/4 above, Opus 2× Sonnet and Fable 5.2 4× Sonnet. For cached re-reads, Opus and Fable 5.2 cost 2× Sonnet and Haiku 1/10 under 100K tokens. Only Haiku has a long-context price step.
 
 | Work | Model | Effort |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ Three models carry the work: **Haiku 5.5** for short reading and small mechanica
 How to apply it:
 
 - **Always name the model.** Unpinned workflow agents and subagents, built-in Explore and Plan included, inherit the session model, which is Opus 5.5 by default on every plan. In a Fable session, Explore runs on Opus.
-- **Agent tool:** `model` (`"haiku"`, `"sonnet"` or `"opus"`) and, from Claude Code v2.1.292, `effort` from the table: `model: "haiku", effort: "medium"`.
+- **Agent tool:** `model` (`"haiku"`, `"sonnet"` or `"opus"`) and, from Claude Code v2.1.292, `effort` from the table: `model: "haiku", effort: "medium"`. In OpenCode the same rows are `claude-agent/haiku#medium`, `claude-agent/sonnet#high`, `claude-agent/opus#high` and, only under the Fable rule below, `claude-agent/fable#high`.
 - **Workflow script:** `agent(prompt, { model: 'haiku', effort: 'medium' })` on reading fan-out stages, `{ model: 'sonnet', effort: 'high' }` on implementation stages, `{ model: 'opus', effort: 'high' }` on verify and judge stages. Give every agent of one stage the same model, effort, agent type, tools, schema and working directory: the shared prompt prefix is cached only between identical settings.
 - **Cloud session:** `claude --model sonnet --effort high --cloud "<task>"`, `--model claude-haiku-5-5 --effort medium` for a small mechanical ticket, or `--model opus` for the security-critical rows. The docs do not say these flags reach the cloud session: check the model shown in the first cloud session on each machine, and if it differs, start the task with `/model` and `/effort` lines.
 - **Routines and scheduled tasks:** set their model selector to Sonnet; Haiku when the routine only reads and reports; Opus when it runs a verify or judge row.
@@ -39,7 +39,9 @@ Haiku 5.5 (`claude-haiku-5-5`, released 2026-10-07):
 
 Outside the default mix (these can bill usage credits):
 
-- **Fable 5.1:** off by default. Only on Ultra with a green budget, and only for the single most consequential judgment (the final review of a security-critical diff). Never on Pro, where it is not part of the plan. Never on `-p`, background or cloud workers: past the Fable cap, `-p` runs bill credits without asking when credits are on, background and teammate sessions wait 5 minutes for consent and then drop the turn, and in cloud sessions the consent prompt depends on the app.
+- **Fable 5.2** (`claude-fable-5-2`, released 2026-11-09, the `fable` alias from Claude Code v2.1.321; Fable 5.1 stays active until at least 2027-09-01): off by default. Three uses only: (1) a product decision the person explicitly delegated ("if in doubt ask Fable"), recorded where decisions are recorded; (2) reviewing UI screenshots in place of the person, when they delegated that; (3) the last review of a security-critical or sign-in diff. Only on Max or Ultra, with a green budget and the Fable weekly limit readable and under 80% (`budget.md`). Pro runs Fable on usage credits, so never there, except inside a launch offer (Fable 5.2: included through 2026-11-16).
+- **Fable in Claude Code:** the main session or a short foreground subagent. Never `-p`, background, teammate or cloud workers: past the Fable cap, `-p` and an SDK app that shows no consent prompt bill credits without asking, background, teammate and Remote Control sessions wait 5 minutes (`dialogExpiry`) for consent and then drop the turn, and in cloud sessions the prompt depends on the app.
+- **Fable in OpenCode:** a `claude-agent/fable#high` subagent runs through the Agent SDK on the Claude Code subscription login and shows no consent prompt, so past the Fable cap it can bill credits silently (inferred from the SDK rule above; OpenCode's provider code was not read). Use it only under the 80% rule, as a short foreground-style brief. Check which Fable ran: OpenCode 2.2.6 contains `claude-fable-5` and `claude-fable-5-1` but not `claude-fable-5-2`, so `fable` may still map to Fable 5.1.
 - **Fast mode (`/fast`):** credits only. Never for delegated work.
 - **Ultrareview (`/code-review ultra`):** credits after 3 one-time free runs per account. Only when the person asks for it.
 
@@ -54,7 +56,7 @@ From `code.claude.com/docs/en/advisor.md` and the prompt-caching page, read 2026
 Rules:
 
 - For a strong second opinion at decision points, run workers as Sonnet with an Opus advisor instead of switching the session model.
-- A Fable second opinion, where the Fable rule above allows it, is a foreground subagent with a short brief at agreed moments: before designing a big feature, when a worker is stuck after two attempts and `diagnosing-bugs` built its red loop without finding the cause, for the last review of security work. An advisor's timing cannot be capped, and a long coordinator session makes every call expensive.
+- A Fable second opinion is one of the three uses in the Fable rule above, run as a foreground subagent with a short brief. An advisor's timing cannot be capped, and a long coordinator session makes every call expensive.
 - Run `/advisor off` where workers should not inherit it, such as Haiku readers.
 
 ## Plan profiles
@@ -78,7 +80,7 @@ Claude plan: Ultra · reserve 10% · banked: weekly reset, expires 2026-10-22
 - Widths and reserves are starting defaults, not published limits. The run-cost notes in `budget.md` narrow them.
 - The reserve is the share of the weekly limit kept for the person's own use. It belongs to the plan (the row above, or the CLAUDE.md line), never to today's profile, so a step down does not change it.
 - On Pro, dynamic workflows must be switched on in `/config`, and the default size guideline there is small (under 5 agents).
-- Limits, from the plan pages (read 2026-11-06, sources in `budget.md`): Max gives 5× Pro usage every five hours and every week. Ultra gives 10× Pro usage every week and, on a verified account, has no five-hour limit: only the weekly limit applies. An unverified Ultra account has a temporary limit until it is verified. Max and Ultra both have a weekly limit across all models plus a separate weekly limit for Fable. Anthropic may add other limits. Whether the Ultra weekly cap is lower than the old Max 20x one is unverified: sources disagree, so trust the run-cost notes.
+- Limits, from the plan pages (read 2026-11-06, Fable read 2026-11-10, sources in `budget.md`): Max gives 5× Pro usage every five hours and every week. Ultra gives 10× Pro usage every week and, on a verified account, has no five-hour limit: only the weekly limit applies. An unverified Ultra account has a temporary limit until it is verified. Max and Ultra both have a weekly limit across all models plus a separate weekly limit for Fable, up to 50% of the weekly limits; past it, Fable needs usage credits. Anthropic may add other limits. Whether the Ultra weekly cap is lower than the old Max 20x one is unverified: sources disagree, so trust the run-cost notes.
 
 ## Budget check
 
