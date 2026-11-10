@@ -1,10 +1,10 @@
 # project-setup reference
 
-Read by `project-setup` before step 1. Checked 2026-11-09 against Claude Code 2.1.321 and the pages below, all under `https://code.claude.com/docs/en/`. Settings, permissions and memory change between releases: when this date is old, read the page again before writing a file.
+Read by `project-setup` before step 1. Checked 2026-11-10: Claude Code facts against 2.1.321 and the pages under `https://code.claude.com/docs/en/`; OpenCode facts against OpenCode 2.2.6 (V2) and the pages under `https://opencode.ai/docs/`. Settings, permissions, policies and memory change between releases: when this date is old, read the page again before writing a file.
 
-Contents: Doc facts, Not confirmed, settings.json template, .gitignore lines, CLAUDE.md that imports AGENTS.md, Inspect commands, Branch ruleset.
+Contents: Claude Code doc facts, OpenCode doc facts, Not confirmed, settings.json template, opencode.jsonc template, .gitignore lines, Instruction files, Inspect commands, Config load check, These skills (sync script, global block), Stack skills, Branch ruleset.
 
-## Doc facts
+## Claude Code doc facts
 
 Settings, `settings.md`:
 - Project file `.claude/settings.json` is shared and committed. `.claude/settings.local.json` is personal. When Claude Code writes the local file it adds `**/.claude/settings.local.json` to the global git excludes; a file made by hand must be added to `.gitignore` by you.
@@ -54,6 +54,39 @@ GitHub rulesets, `https://docs.github.com/en/rest/repos/rules` (read 2026-11-09)
 
 Plugins, from `claude plugin --help` on 2.1.321 (not from a docs page): `install`, `update <plugin>`, `list`, `details <name>` (component inventory), `validate <path> --strict`, `marketplace add`.
 
+## OpenCode doc facts
+
+V2 only. V1 names (`permission`, `bash`, `task`, `enabled_providers`) are never written. Read 2026-11-10 from `https://opencode.ai/docs/<page>`; `opencode --version` gave v2.2.6.
+
+Config, `config`:
+- Project file is `opencode.jsonc` or `opencode.json` at the repo root, or the same name inside `.opencode/`. JSONC allows comments and trailing commas. `$schema` is `https://opencode.ai/config.json`.
+- Precedence, lowest to highest: global `~/.config/opencode/opencode.json(c)`, project files, system directory (`/Library/Application Support/opencode` on macOS, `/etc/opencode` on Linux). Files inside `.opencode/` override direct files, so use one form per tree.
+- MCP servers are `mcp.servers.<name>` in the config. Skill directories can be added with a `skills` array; extra instruction files with an `instructions` array.
+
+Permissions, `permissions`:
+- `permissions` is an ordered array of `{ "action", "resource", "effect" }`. Effect is `allow`, `deny` or `ask`. The last matching rule wins; no match means `ask`.
+- Actions include `shell`, `read`, `edit`, `glob`, `grep`, `skill`, `subagent`, `webfetch`, `external_directory`, and `<server>_<tool>` for MCP tools.
+- Wildcards: `*` matches zero or more characters including `/`, `?` one character, whole value. A shell pattern ending in ` *` also matches the bare command.
+- Base policy of every agent: allow everything, ask for `*.env` and `*.env.*` reads, allow `*.env.example`. So an allow rule changes nothing until a broader `ask` stands before it.
+- The shell scanner checks every subcommand of a compound command and fails closed on syntax it cannot analyse. The page says directory inference is best effort and to prefer a narrow allowlist.
+- "Allow always" saves a project-scoped allow; a saved approval never overrides a configured `deny`.
+
+Policies, `policies`:
+- `policies` is an ordered array of `{ "action", "resource", "effect" }` with effect `allow` or `deny`. The last match wins; no match allows. A statement that fails validation is dropped with a warning in the server log.
+- `tool.use` with resource `<action>:<value>` hard-denies a permission check after agent rules and saved approvals (`shell:pkill *`, `edit:*.env`, `read:*/.ssh/*`). A denied call fails with `Blocked by configuration policy`. An `allow` there never grants access; it only lifts an earlier broader `deny`.
+- Policies reverse the usual precedence: global and managed statements outrank project ones, so a project policy cannot re-allow what the user's global file denies.
+- Other actions: `provider.use`, `integration.connect`, `integration.use`, `mcp.use`, `skill.use`, `plugin.use`, `websearch.use`. The top-level `policies` key replaces `experimental.policies`.
+
+Instructions, `instructions`:
+- V2 reads `AGENTS.md` only and never falls back to `CLAUDE.md`. It loads `~/.config/opencode/AGENTS.md`, then every `AGENTS.md` from the workspace up to the project root. Nested ones load when that area is read. Changes to a loaded file are picked up before the next request.
+
+Skills, `skills`:
+- Discovery: global `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills`; project `.opencode/skills`, `.claude/skills`, `.agents/skills`, searched from the working directory up to the project root.
+- The ID is the path, case-sensitive; the same ID in two places is loaded from the one registered later. Order, lowest to highest: built-in, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`, project `.opencode/skills`, `skills` config entries. So a copy in `~/.config/opencode/skills` hides the same ID in `~/.claude/skills` and `~/.agents/skills`.
+- A skill without `description` is not advertised. `skill` permissions use the skill ID as the resource.
+
+Observed, not documented: on 2.2.6 `opencode debug config --standalone` prints the config sources as JSON (see Config load check); the log is `~/.local/share/opencode/log/opencode.log` (troubleshooting page, macOS and Linux).
+
 ## Not confirmed, left out
 
 - No documented command checks a settings file against the schema. `claude doctor` is the closest; the schema URL is for editors.
@@ -61,6 +94,10 @@ Plugins, from `claude plugin --help` on 2.1.321 (not from a docs page): `install
 - The settings-reference "Exclude sensitive files" section: the link is cited by `permissions.md`, but the saved settings-reference page has no section by that name. The `Read(./.env)` examples come from `settings.md` and `permissions.md`.
 - The ruleset JSON below follows the GitHub docs page but was not sent to a repo. `installed_plugins.json` (`.plugins.<id>[0].installPath`) is observed on 2.1.321, not documented.
 - Whether `.claude/settings.json` is read when Claude Code starts in a subfolder of the repo: `settings.md` says it reads from the session's primary working directory, so start at the root.
+- OpenCode: the policy templates below follow the `policies` and `permissions` pages and were loaded without a warning by `opencode debug config --standalone` on 2.2.6 (a bogus statement did produce one), but no deny was exercised by a live agent call. Whether a `read:` policy stops `cat .env` run through `shell` is not documented: assume it does not. The pages give no resource examples for `git push --force` variants beyond `shell:git push *`.
+- OpenCode on Windows: the log path, symlink behaviour and the sync script were not checked. Use `windows-ops` and report instead of fixing.
+- No documented OpenCode command validates a config file. `opencode debug config` is the closest, and it exits 0 and silently omits a file it rejected: see Config load check.
+- Whether OpenCode reads `.mcp.json`: the config page lists only `mcp.servers`, and nothing about `.mcp.json` was found.
 
 ## settings.json template
 
@@ -97,6 +134,45 @@ Notes for the diff:
 - `Bash` rules above are the Unix shell form. The Windows allow and deny forms use `PowerShell(...)` (see Permissions above).
 - Show the diff against the existing file. A new file is shown whole.
 
+## opencode.jsonc template
+
+Same deny set as the settings.json template, mirrored 1:1. The deny rules are `policies`, so a saved approval or a later rule cannot lift them. JSONC, so comments are fine. Keep every statement the project already has.
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "policies": [
+    { "action": "tool.use", "resource": "shell:pkill *", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:killall *", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git push --force*", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git push -f *", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git push * --force*", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git push * -f", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git push * -f *", "effect": "deny" },
+    { "action": "tool.use", "resource": "read:*.env", "effect": "deny" },
+    { "action": "tool.use", "resource": "read:*.env.*", "effect": "deny" }
+  ]
+}
+```
+
+Optional, only with the person's ok and only as a pair, because the default policy already allows every action:
+
+```jsonc
+  "permissions": [
+    { "action": "shell", "resource": "*", "effect": "ask" },
+    { "action": "shell", "resource": "<package-manager> run test", "effect": "allow" },
+    { "action": "shell", "resource": "<package-manager> run lint", "effect": "allow" }
+  ]
+```
+
+Notes for the diff:
+- The `shell` ask rule first, then one allow per exact script name from step 1: the last match wins, so the allows must come after it. It makes every other command prompt, which changes how the person works: their call.
+- `read:*.env.*` also denies `.env.example`. If the project has one, offer `{ "action": "tool.use", "resource": "read:*.env.example", "effect": "allow" }` right after it (a policy allow lifts the earlier deny, then the default rule allows the read). It loosens a deny, so it goes in only with their ok.
+- Add `read:` denies for the key and credential files the project really has (`read:*.pem`, `read:*credentials.json`). Do not guess names.
+- Reach, to say once: a policy blocks the tool check, not the OS. The `read` policy covers the read tool; a shell command that opens the file is a `shell` check, so say that `cat .env` is not blocked by it. The shell scanner expands compound commands, but `git -C . push` and `/bin/rm` differ from the pattern text, as in Claude Code. The `policies` page says nothing about a sandbox.
+- A user's global policies outrank the project's, so this file can only add denies, never lift a global one.
+- MCP: report `mcp.servers` names from the global and project files (never `headers`, `environment` or token values). `.mcp.json` is Claude Code's; do not copy servers between them.
+
 ## .gitignore lines
 
 ```
@@ -104,7 +180,9 @@ Notes for the diff:
 CLAUDE.local.md
 ```
 
-## CLAUDE.md that imports AGENTS.md
+## Instruction files
+
+OpenCode V2 reads `AGENTS.md` only; Claude Code reads `CLAUDE.md` first and takes `AGENTS.md` only through an import. So the project text lives in `AGENTS.md` and `CLAUDE.md` is a thin file:
 
 ```markdown
 @AGENTS.md
@@ -113,16 +191,27 @@ CLAUDE.local.md
 <lines only Claude Code needs, or nothing>
 ```
 
+Cases, with the diff shown first and written after the person's ok:
+- Only `AGENTS.md`: add the `CLAUDE.md` above.
+- Both: check `CLAUDE.md` starts with `@AGENTS.md`. If both carry the same text, show the overlap and propose keeping it in `AGENTS.md` only.
+- Only `CLAUDE.md`: `git mv CLAUDE.md AGENTS.md`, then create the `CLAUDE.md` above. Lines that name Claude Code features (hooks, `/commands`, plugin names) stay under `## Claude Code`; the rest goes to `AGENTS.md`. `@path` imports move with their file, so check each still resolves from the new place. One commit, so the move shows as a rename.
+- Neither: create `AGENTS.md` with the Checks and queue block (step 4), then the `CLAUDE.md` above.
+- Global: OpenCode reads `~/.config/opencode/AGENTS.md` and Claude Code reads `~/.claude/CLAUDE.md`. See These skills below.
+
 ## Inspect commands
 
 From the repo root. All read-only.
 
 ```bash
 git status -sb && git remote -v && git symbolic-ref --short refs/remotes/origin/HEAD
-ls -a CLAUDE.md CLAUDE.local.md AGENTS.md .mcp.json .gitignore 2>&1
+ls -a CLAUDE.md CLAUDE.local.md AGENTS.md .mcp.json opencode.json opencode.jsonc .opencode .gitignore 2>&1
 ls -a .claude .claude/skills .claude/agents .claude/commands 2>&1
+ls ~/.claude/skills ~/.agents/skills ~/.config/opencode/skills 2>&1 | head -200
+claude plugin list 2>&1 | head -40
 jq 'if .env then .env |= map_values("<redacted>") else . end' .claude/settings.json 2>/dev/null
 jq '.mcpServers|keys' .mcp.json 2>/dev/null
+opencode --version 2>&1 | head -1
+grep -nE '"(policies|permissions|skills|instructions|servers)"' opencode.jsonc .opencode/opencode.jsonc 2>/dev/null
 gh api repos/{owner}/{repo}/rules/branches/<default>
 git check-ignore -v .claude/settings.local.json CLAUDE.local.md
 ls package.json pnpm-lock.yaml yarn.lock package-lock.json bun.lockb pyproject.toml uv.lock Cargo.toml go.mod Gemfile Makefile justfile docker-compose*.yml compose*.y*ml .github/workflows .gitlab-ci.yml 2>&1
@@ -144,6 +233,138 @@ ls .claude/skills/<name>/SKILL.md ~/.claude/skills/<name>/SKILL.md ~/.agents/ski
 jq -r '.skills|to_entries[]|select(.value.source=="mattpocock/skills")|.key' ~/.agents/.skill-lock.json
 claude plugin list
 ```
+
+## Config load check
+
+From the repo root, after writing `opencode.jsonc`. `--standalone` starts a private server, so it does not touch the shared one. The `jq` filter keeps paths only: the full output also holds the user's global config, with server URLs and headers.
+
+```bash
+log=~/.local/share/opencode/log/opencode.log
+n=$(wc -l < "$log" 2>/dev/null || echo 0)
+opencode debug config --standalone | jq -r '.[] | select(.type=="document") | .path'
+tail -n +$((n+1)) "$log" | grep 'configuration normalization diagnostic' | grep -F "$(pwd -P)/opencode.jsonc"
+```
+
+Pass: the first command lists `<repo>/opencode.jsonc` and the last prints nothing. Tested on 2.2.6:
+- A file with a trailing comma loads. A file with broken JSON is left out of the list, exit code 0, and the log says `rejected malformed JSON or JSONC document`. So a missing path in the list is the failure signal, not the exit code.
+- A statement with an unknown action (`bogus.use`) loads the file but logs `skipped malformed recognized value` with its path (`$.policies.0`). That is how a `deny` that did not take effect shows up.
+- The log line carries the file path and a JSON path only, no values.
+
+## These skills
+
+Run from any directory. It finds the clone of `emanueledenaro/claude-skills` (through the symlinks of installed skills, else `~/.agents/repos/claude-skills`), clones it if absent, fast-forwards it when clean and on the default branch, links every missing skill (`~/.agents/skills/<id>` to the clone, `~/.claude/skills/<id>` to that), then compares every copy OpenCode or Claude Code can load against the repo's current commit and updates the stale ones: a marketplace clone through `claude plugin marketplace update`, another clone through `git pull --ff-only`. It never overwrites a real directory; it reports it. `DRY=1` prints the changes only. Tested on macOS with a clean home, a plain stale copy and a stale marketplace clone (dry run for the last); not run on Windows or Linux.
+
+Why every location: OpenCode ranks `~/.config/opencode/skills` above `~/.claude/skills` and `~/.agents/skills`. A symlink there into a marketplace clone that is behind makes OpenCode load the old text without any warning, while Claude Code loads the new one. `claude plugin marketplace update <name>` fixed it in practice.
+
+```bash
+#!/usr/bin/env bash
+set -u
+slug=emanueledenaro/claude-skills
+run() { if [ "${DRY:-}" = 1 ]; then echo "would: $*"; else "$@" && echo "did: $*"; fi; }
+same_repo() { git -C "$1" remote get-url origin 2>/dev/null | grep -q "$slug"; }
+
+# 1. Find the clone: through the symlinks of installed skills, else the default place.
+clone=
+for l in "$HOME"/.agents/skills/* "$HOME"/.claude/skills/* "$HOME"/.config/opencode/skills/*; do
+  [ -L "$l" ] || continue
+  p=$(realpath "$l" 2>/dev/null) || continue
+  top=$(git -C "$(dirname "$p")" rev-parse --show-toplevel 2>/dev/null) || continue
+  case $top in */.claude/plugins/marketplaces/*) continue ;; esac
+  same_repo "$top" && { clone=$top; break; }
+done
+clone=${clone:-$HOME/.agents/repos/claude-skills}
+[ -d "$clone/.git" ] || run git clone "https://github.com/$slug.git" "$clone"
+[ -d "$clone/.git" ] || exit 0
+echo "clone: $clone"
+
+# 2. Fast-forward it when it is clean and on the default branch.
+git -C "$clone" fetch --quiet origin
+ref=$(git -C "$clone" symbolic-ref --short refs/remotes/origin/HEAD)
+if [ "$(git -C "$clone" rev-parse HEAD)" != "$(git -C "$clone" rev-parse "$ref")" ]; then
+  if [ "$(git -C "$clone" branch --show-current)" = "${ref#origin/}" ] && [ -z "$(git -C "$clone" status --porcelain)" ]; then
+    run git -C "$clone" pull --ff-only --quiet
+  else echo "report: $clone is dirty or off the default branch, not pulled"; fi
+fi
+ids=$(git -C "$clone" ls-tree -r --name-only "$ref" | sed -n 's|^\([^/]*\)/SKILL\.md$|\1|p')
+
+# 3. Link every missing skill. A dangling symlink is replaced; anything else is reported.
+mkdir -p "$HOME/.agents/skills" "$HOME/.claude/skills"
+for id in $ids; do
+  [ -e "$HOME/.claude/skills/$id/SKILL.md" ] && continue
+  for pair in "$HOME/.agents/skills/$id|$clone/$id" "$HOME/.claude/skills/$id|../../.agents/skills/$id"; do
+    link=${pair%%|*}; target=${pair#*|}
+    { [ -L "$link" ] && [ ! -e "$link" ]; } && run rm "$link"
+    if [ -e "$link" ] || [ -L "$link" ]; then echo "report: $link exists, left alone"; continue; fi
+    run ln -s "$target" "$link"
+  done
+done
+
+# 4. Every copy either tool can load must match the repo's current commit.
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+git -C "$clone" archive "$ref" | tar -x -C "$tmp"
+copies() { for id in $ids; do for d in "$HOME/.config/opencode/skills/$id" "$HOME/.claude/skills/$id" "$HOME/.agents/skills/$id"; do
+  [ -e "$d" ] && ! diff -rq "$tmp/$id" "$d/" >/dev/null 2>&1 && echo "$d"; done; done; }
+seen=" "
+for d in $(copies); do
+  top=$(git -C "$(realpath "$d")" rev-parse --show-toplevel 2>/dev/null)
+  case $seen in *" $top "*) continue ;; esac
+  if [ -z "$top" ] || ! same_repo "$top"; then echo "report: $d differs and is a plain copy, left alone"; continue; fi
+  seen="$seen$top "
+  case $top in
+    "$clone") ;;
+    */.claude/plugins/marketplaces/*) run claude plugin marketplace update "$(basename "$top")" ;;
+    *) run git -C "$top" pull --ff-only --quiet ;;
+  esac
+done
+[ "${DRY:-}" = 1 ] || for d in $(copies); do echo "still differs: $d"; done
+```
+
+Report each `did:`, `report:` and `still differs:` line to the person in one short list. A copy inside the clone itself that still differs means the clone is on a work branch: say so, do not switch it. This skills folder may be edited by hand, so a plain copy that differs is also reported, never replaced.
+
+Global routing block and plan line. The block is the first fenced block after "Then add a routing block" in the clone's README. `ensure_block` creates a missing file, appends the whole block when the file lacks it, and appends only the README sentences for skills the file does not name. It never rewrites a line. Tested on a copy of a real file that lacked three skills.
+
+```bash
+README="$clone/README.md"
+block=$(awk '/^Then add a routing block/{f=1} f&&/^```markdown/{g=1;next} g&&/^```/{exit} g' "$README")
+ensure_block() {
+  f=$1; [ -e "$f" ] || { printf '%s\n' "$block" > "$f"; echo "created: $f"; return; }
+  grep -qF 'use `model-mix`' "$f" || { printf '\n%s\n' "$block" >> "$f"; echo "appended block: $f"; return; }
+  miss=; for id in $(printf '%s' "$block" | grep -o '`[a-z-]*`' | tr -d '`' | sort -u); do
+    grep -qF "\`$id\`" "$f" || miss="$miss $(printf '%s' "$block" | grep -oE "[A-Z][^.]*\`$id\`[^.]*\." | head -1)"
+  done
+  [ -z "${miss# }" ] || { printf '\n%s\n' "${miss# }" >> "$f"; echo "appended missing lines: $f"; }
+}
+ensure_block ~/.claude/CLAUDE.md
+if [ -L ~/.config/opencode/AGENTS.md ] && [ "$(realpath ~/.config/opencode/AGENTS.md)" = "$(realpath ~/.claude/CLAUDE.md)" ]; then :
+elif [ -e ~/.config/opencode/AGENTS.md ]; then ensure_block ~/.config/opencode/AGENTS.md
+else mkdir -p ~/.config/opencode && ln -s ~/.claude/CLAUDE.md ~/.config/opencode/AGENTS.md; fi
+grep -q '^Claude plan:' ~/.claude/CLAUDE.md || echo "ask: Claude plan line"
+```
+
+The plan line is the one thing to ask: `Claude plan: <Pro|Max|Ultra> · reserve 10%`, written to `~/.claude/CLAUDE.md` after the answer. Recommend from what `/status` shows (Claude Code tells Pro from Max, not Max from Ultra). If `~/.config/opencode/AGENTS.md` is its own file, append the plan line there too, so OpenCode sessions see it. On Windows the links were not checked: use `windows-ops` and report instead of fixing.
+
+## Stack skills
+
+From the stack of step 1 (`package.json` dependencies, `supabase/`, `vercel.json`, `.vercel/`, `pyproject.toml`, `Cargo.toml`). Official vendor skills only: the repo owner is the vendor's own GitHub organisation (`gh api repos/<owner>/<repo> --jq .owner.login`) and the vendor's docs name that repo. A skill from a community directory (skills.sh, a personal repo) is not suggested.
+
+Checked 2026-11-10:
+
+| Signal | Source | Skills | Evidence |
+| --- | --- | --- | --- |
+| `supabase/`, `@supabase/*`, `SUPABASE_URL` | `supabase/agent-skills` | `supabase`, `supabase-postgres-best-practices` | Supabase docs, "Agent Skills" (`supabase.com/docs/guides/getting-started/ai-skills`) |
+| `next`, `vercel.json`, `.vercel/` | `vercel-labs/agent-skills` | `react-best-practices`, `vercel-optimize`, `deploy-to-vercel`, `web-design-guidelines` and others | The repo README says "from Vercel Engineering"; the Vercel docs page was not read |
+
+Another vendor goes in this table only after its own docs name the repo.
+
+Duplicates first: a skill is installed if its ID is a directory or link in `~/.claude/skills`, `~/.agents/skills`, `~/.config/opencode/skills` or `.claude/skills`, or comes from `claude plugin list`. A plugin skill with the same job counts as installed (a Vercel plugin may already ship `react-best-practices`): report it and suggest nothing. Compare descriptions, not only names.
+
+Vet, then ask. Fetch the vendor repo into a new empty directory (`git clone --depth 1`), run `skill-audit` on the skills to install (scripts, dangerous instructions, size), and show the verdict with the exact command. The install is at user level, never in the project: the `skills` CLI defaults to project scope, so `-g` is not optional.
+
+```bash
+npx skills add supabase/agent-skills --skill supabase --skill supabase-postgres-best-practices -g
+```
+
+`add` options read from `npx skills add --help` on skills 1.7.6: `-g/--global`, `-s/--skill`, `-a/--agent`, `-l/--list`, `-y`. Run it only after the person's ok on that exact line. Then check `~/.agents/skills/<id>/SKILL.md` exists and `~/.claude/skills/<id>` resolves to it. If the CLI left the link out, create it: `ln -s ../../.agents/skills/<id> ~/.claude/skills/<id>`. OpenCode reads both folders, so no third link. Updates are `npx skills update -g <id>`, again after an ok.
 
 ## Branch ruleset for the default branch
 
