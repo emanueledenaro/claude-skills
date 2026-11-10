@@ -329,7 +329,7 @@ while IFS= read -r d; do
   seen="$seen$top "
   case $top in
     "$clone") ;;
-    */.claude/plugins/marketplaces/*) run claude plugin marketplace update "$(basename "$top")" ;;
+    */.claude/plugins/marketplaces/*) run claude plugin marketplace update "$(basename "$top")" </dev/null ;;
     *) ff "$top" ;;
   esac
 done < <(copies)
