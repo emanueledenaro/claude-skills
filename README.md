@@ -1,6 +1,6 @@
 # Claude Code skills
 
-Personal skills for running Claude Code as a coordinator that delegates work to subagents, cloud sessions and workflows, plus the tools around it. They work in any project.
+Personal skills for running Claude Code as a coordinator that delegates work to subagents, cloud sessions and workflows, plus the tools around it. They work in any project, and OpenCode (V2) loads the same skill folders.
 
 | Skill | What it decides |
 | --- | --- |
@@ -23,29 +23,38 @@ Personal skills for running Claude Code as a coordinator that delegates work to 
 | [git-conventions](git-conventions/SKILL.md) | Default naming for commits, branches, PR titles and merge subjects (Conventional Commits, Conventional Branch), the history and tag rules, and a Node validator with a commit-msg hook for projects with no CI of its own. |
 | [shared-machine-checks](shared-machine-checks/SKILL.md) | Running heavy checks from many agents on one machine: one shared lock, memory and disk preflight, a compose project and ports per run, cleanup traps, stopping processes by recorded PID, demos tied to a commit, waiters for background jobs. |
 | [assertions-go-red](assertions-go-red/SKILL.md) | Proving each new or changed test assertion can fail: mutate the code, record the red run, restore, and map every mutation to its red line in the PR. |
-| [project-setup](project-setup/SKILL.md) | One-time setup of a repository for Claude Code and these skills: inspect first, then a committed `.claude/settings.json` with allow and deny rules, a `CLAUDE.md` that imports `AGENTS.md`, the four project facts, optionally Matt Pocock's skills, shipped as a chore PR. Run again, it reports drift. |
+| [project-setup](project-setup/SKILL.md) | One-time setup of a repository for Claude Code and OpenCode: inspect first, then a committed `.claude/settings.json` and `opencode.jsonc` with matching deny rules, `AGENTS.md` as the one instruction file with a `CLAUDE.md` that imports it, the four project facts, official stack skills, these skills kept installed and current for both tools, optionally Matt Pocock's skills, shipped as a chore PR. Run again, it reports drift. |
 | [screen-map](screen-map/SKILL.md) | Building and keeping a screen map that every builder follows: lanes per platform, one frame per screen with real copy and a status, arrows for the flow, simulations of real users, the handoff spec to builders, and a project skill generated from the map. |
 
 The skills point to each other instead of repeating themselves. A project's own `AGENTS.md`, `CONTRIBUTING.md` and branch protection always win over them; project facts stay in the project.
 
 ## Install
 
+Clone once and link every skill, so a `git pull` updates them. Claude Code reads `~/.claude/skills`; OpenCode reads `~/.claude/skills`, `~/.agents/skills` and `~/.config/opencode/skills`, so the two links below serve both. The loop installs every skill in this repo (all of them are in the table above) and skips a name that already exists:
+
 ```bash
-git clone https://github.com/emanueledenaro/claude-skills.git
-cd claude-skills
-cp -R model-mix smart-ultracode coordinator-method smart-mods cloud-worker merge-gate overnight roadmap-tracker matt-bridge verified-research release-watch skill-audit context-hygiene windows-ops mod-ui clean-code git-conventions screen-map shared-machine-checks assertions-go-red project-setup ~/.claude/skills/
+git clone https://github.com/emanueledenaro/claude-skills.git ~/.agents/repos/claude-skills
+cd ~/.agents/repos/claude-skills
+mkdir -p ~/.agents/skills ~/.claude/skills
+for f in */SKILL.md; do
+  id=${f%/SKILL.md}
+  [ -e ~/.agents/skills/$id ] || [ -L ~/.agents/skills/$id ] || ln -s "$PWD/$id" ~/.agents/skills/$id
+  [ -e ~/.claude/skills/$id ] || [ -L ~/.claude/skills/$id ] || ln -s ../../.agents/skills/$id ~/.claude/skills/$id
+done
 ```
 
-Then add a routing block to your global `~/.claude/CLAUDE.md`, so every project reaches them at the right moment:
+Update with `git -C ~/.agents/repos/claude-skills pull --ff-only`. Check that no other copy shadows the repo: OpenCode ranks `~/.config/opencode/skills` above the other two folders, so an old copy or a link into a stale plugin marketplace clone there hides the current skill without a warning. The `project-setup` skill runs this check and fixes it. On Windows, use `windows-ops` for links.
+
+Then add a routing block to your global `~/.claude/CLAUDE.md`, so every project reaches them at the right moment. OpenCode reads `~/.config/opencode/AGENTS.md` and never `CLAUDE.md`, so link it to the same file (`ln -s ~/.claude/CLAUDE.md ~/.config/opencode/AGENTS.md`) or paste the block there too:
 
 ```markdown
 Before launching any agent, cloud session, workflow or review, use `model-mix`. Before writing a workflow script, use `smart-ultracode`. When coordinating delegated work (workers, merges, rounds, overnight loops, UI changes), use `coordinator-method`. Before writing, changing, installing or reviewing a Claude Code mod or any plugin, or when asked for a pane, a band above the prompt, a custom command or a tool-call guard, use `smart-mods`; for what a mod draws, also `mod-ui`.
-Launching or steering a cloud worker: `cloud-worker`. Merging a finished PR: `merge-gate`. Going unattended or to sleep: `overnight`. Issues, milestones, the roadmap: `roadmap-tracker`. Running Matt Pocock's skills: `matt-bridge`. Researching facts that change (prices, limits, versions, APIs): `verified-research`. Checking for new releases or models: `release-watch`. Reviewing skills or their cost: `skill-audit`. A heavy or long session: `context-hygiene`. Shell, paths or tools on Windows: `windows-ops`. Writing, refactoring or reviewing code: `clean-code`. Writing a commit message, naming a branch, titling a PR or a merge commit: `git-conventions`. Mapping screens or keeping design and code aligned: `screen-map`. Several agents running tests, e2e or containers on one machine: `shared-machine-checks`. Adding or changing test assertions: `assertions-go-red`. Setting up or auditing a repository for Claude Code: `project-setup`.
+Launching or steering a cloud worker: `cloud-worker`. Merging a finished PR: `merge-gate`. Going unattended or to sleep: `overnight`. Issues, milestones, the roadmap: `roadmap-tracker`. Running Matt Pocock's skills: `matt-bridge`. Researching facts that change (prices, limits, versions, APIs): `verified-research`. Checking for new releases or models: `release-watch`. Reviewing skills or their cost: `skill-audit`. A heavy or long session: `context-hygiene`. Shell, paths or tools on Windows: `windows-ops`. Writing, refactoring or reviewing code: `clean-code`. Writing a commit message, naming a branch, titling a PR or a merge commit: `git-conventions`. Mapping screens or keeping design and code aligned: `screen-map`. Several agents running tests, e2e or containers on one machine: `shared-machine-checks`. Adding or changing test assertions: `assertions-go-red`. Setting up or auditing a repository for Claude Code or OpenCode: `project-setup`.
 ```
 
 ## In a new project
 
-Skills hold no project facts. Paste this into the project's `AGENTS.md` and fill the four lines; the project's own rules always win over the skills:
+Skills hold no project facts. Paste this into the project's `AGENTS.md` (the one file both Claude Code, through an `@AGENTS.md` import in `CLAUDE.md`, and OpenCode read) and fill the four lines; the project's own rules always win over the skills:
 
 ```markdown
 ## Checks and queue
