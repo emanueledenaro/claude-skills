@@ -10,7 +10,7 @@ Read by `release-watch` (section 3) and by `routine.md` when the probe reports a
   - readers: `claude-haiku-5-5` at medium effort, one per changed area, read-only;
   - verifiers: Sonnet at high effort, a different agent from the reader, given the claims and the sources but not the reader's reasoning, told to refute. This is the owner's call: Opus is spent only on the review in section 4. The Opus review re-opens every source, so each claim is checked by two models.
   - Pass `model` and `effort` on every Agent call. If the call rejects `effort`, drop it and say so in the PR body.
-- A claim counts only when a verifier confirmed it. Refuted claims are dropped. An unverified or contested claim is not written into any skill: it goes into the PR body under "Not applied", and the PR waits for the owner (section 3).
+- A claim counts only when a verifier confirmed it. A refuted claim is never dropped silently: it goes into the PR body under "Refuted" with the corrected fact and its evidence, and the PR waits for the owner (section 3). An unverified or contested claim is not written into any skill either: it goes under "Not applied", and the PR waits too. A correction from a verifier is written into a skill only if a second verifier confirms it.
 
 ## 2. Write the edits
 
@@ -26,33 +26,34 @@ Read by `release-watch` (section 3) and by `routine.md` when the probe reports a
 
 Run `node release-watch/rw.mjs classify origin/main HEAD`. It prints `FACT` (exit 0) or `RULE` (exit 10) with the reasons. It is mechanical on purpose: no judgment call, and when in doubt it says `RULE`.
 
-A diff is FACT only if every changed file is a `.md` file or `release-watch/state.json`, and every changed line is replaced by a line that differs only in these tokens:
+A diff is FACT only if every changed file is a `.md` file or a well-formed `release-watch/state.json`, and every changed line is replaced by a line that differs only in these tokens:
 
-- version numbers (`2.1.293`, `v2.1.293`, `Haiku 5.5` as the version after a family name);
+- version numbers (`2.1.293`, `v2.1.293`, `Haiku 5.5` as the version after a family name), when none goes down: `Haiku 5.5` to `Haiku 4.5`, or `claude-opus-5-5` to `claude-opus-4-1-...`, is a rule;
 - dates (`2026-11-09`), including release, retirement and "read on" dates;
 - model ids (`claude-haiku-5-5`), with the family kept visible, so swapping Haiku for Sonnet is never a fact;
 - prices (`$100`), price ratios (`5×`, `1/20`) and rate numbers with a unit (`100 per hour`, `5-hour`, `72 hours`);
-- URLs, and, on a line that holds a source URL, a double-quoted quote of that source.
+- URLs on the same host (a path may change, a host may not), and, on a line that holds a source URL, a double-quoted quote of that source.
 
-Everything else is RULE: a line added or removed, a changed table cell outside those tokens, any percentage or bare number (reserves, margins, widths, `100K tokens`), a changed `always`, `never`, `only`, `must` or `at most`, a swapped model family or effort, a new or removed step or row, a moved line, a new or deleted file, any file that is not `.md` or the state file, and the four protected files above. If you believe a RULE verdict is really a fact, it is still a RULE.
+The number and quote tokens count only on a line that states no rule. A line with `always`, `never`, `only`, `must`, `at most`, `at least`, `unless`, `until`, `stop`, `budget`, `limit`, `reserve`, `cap`, `threshold`, `under`, `over`, `above`, `below`, `more than`, `less than`, `within`, `up to`, `maximum`, `minimum` or `exceed` is compared as written: only its dates and URL paths may change. `state.json` is judged by shape: it must parse, hold only the known keys, hashes of the right form, and a `cli` that did not go down.
 
-A PR is also owner-only, whatever `classify` says, when any of these is true: it touches the `upstream` area (Matt's skills: `matt-bridge` adapts around his text, so the owner decides), it has anything under "Not applied" (unverified, contested), or the Opus review left a finding open.
+Everything else is RULE: a line added or removed, a changed table cell outside those tokens, any percentage or bare number (reserves, margins, widths, `100K tokens`), a swapped model family or effort, a new or removed step or row, a moved line, a new or deleted file, any file that is not `.md` or the state file, and the protected files `release-watch/SKILL.md`, `routine.md`, `apply.md`, `rw.mjs` and `rw.test.mjs`. If you believe a RULE verdict is really a fact, it is still a RULE.
+
+A PR is also owner-only, whatever `classify` says, when any of these is true: it touches the `upstream` area (Matt's skills: `matt-bridge` adapts around his text, so the owner decides), it has anything under "Refuted" or "Not applied", or the Opus review did not end in `PASS` for the head.
 
 Splitting. Keep one commit per area. If the run produced both fact and rule commits, try to split: make two branches from `origin/main`, `chore/release-watch-<date>` for the FACT commits and `chore/release-watch-<date>-rule` for the RULE commits, and `git cherry-pick` each commit onto its branch. If any cherry-pick conflicts, or a commit is itself mixed, do not split: one PR, labelled owner-only. Run `classify` again on each branch; the branch decides, not the commit message.
 
 ## 4. Pull request and Opus review
 
-- Push the branch, never `main`, never with force. Open the PR against `main` with title `docs(release-watch): <what changed>` (a valid `git-conventions` title) and a body of four parts: what changed in the sources (old to new, one line each, with the URL and the day read); the edits (file and line); "Not applied" (unverified or refuted, with the check that would settle it); the `classify` output. State-only PRs (only `state.json` changed) say so.
+- Push the branch, never `main`, never with force. Open the PR against `main` with title `docs(release-watch): <what changed>` (a valid `git-conventions` title) and a body of these parts: what changed in the sources (old to new, one line each, with the URL and the day read); the edits (file and line); "Refuted" (the wrong claim, the corrected fact, the evidence) and "Not applied" (unverified, with the check that would settle it); the `classify` output. State-only PRs (only `state.json` changed) say so.
 - A PR that is owner-only gets the label `needs-owner` (create it if missing: `gh label create needs-owner --color D93F0B` locally, or the REST call in `routine.md` in the cloud) and a first body line `NEEDS OWNER: rule change` or `NEEDS OWNER: <reason>`, followed by one plain paragraph that says what rule changes and what the old and new behavior are. No jargon, no diff.
-- Review: one Agent call, `model: "opus"`, `effort: "high"`, read-only, per `model-mix`. It gets the diff, the claims and their sources. Its brief: re-open every cited source, confirm each changed line against it, check that no edit changed a rule while claiming to be a fact, check that no line outside the claims moved, and check the commit headers. Post its verdict as one PR comment with the head sha.
-- State-only PRs skip the Opus review; `classify` and the probe check are enough.
-- Apply the review's findings as new commits (no amend, no force), then run the review once more on the new commits only. Two fix rounds at most. If a serious finding remains, the PR becomes owner-only.
+- Review: one Agent call, `model: "opus"`, `effort: "high"`, read-only, per `model-mix`. It gets the diff, the claims and their sources. Its brief: re-open every cited source, confirm each changed line against it, check that no edit changed a rule while claiming to be a fact, check that no line outside the claims moved, and check the commit headers. A state-only PR gets the same review: the reviewer re-runs `node release-watch/rw.mjs probe` and checks that the new state matches what it reports. Post the verdict as one PR comment whose first line is `PASS <head sha>` or `FAIL <head sha>` (the full 40-character sha, nothing else on that line), followed by the findings.
+- Apply the review's findings as new commits (no amend, no force), then run the review again on the new head: a new head needs a new `PASS <sha>`. Two fix rounds at most. If a serious finding remains, the PR becomes owner-only.
 - Before merging, re-run `node release-watch/rw.mjs classify origin/main HEAD` on the final head. The verdict on the final head is the one that counts.
 
 ## 5. Merge or wait
 
-- FACT, not owner-only, review passed, final-head `classify` is FACT: merge it yourself. Squash, pinned to the reviewed head, subject = the PR title followed by the PR number. Locally: `gh pr merge N --squash --match-head-commit <sha> --subject "<title> (#N)"`. In a cloud session use the REST call from `routine.md`. Squash is the owner's choice for these PRs; `git-conventions` otherwise defaults to a merge commit. The merge is not blocked on a person.
-- Owner-only: do not merge, do not ask. Leave it open with the label and the summary paragraph. The next run sees its state in `chore/release-watch-*` and opens nothing for the same change.
+- FACT, not owner-only, final-head `classify` is FACT, and a comment on the PR whose first line is `PASS <sha>` with `<sha>` equal to the PR's current head: merge it yourself. Read the comments and the head again just before merging (`routine.md` has the calls). No matching `PASS`, no merge. Squash, pinned to the reviewed head, subject = the PR title followed by the PR number. Locally: `gh pr merge N --squash --match-head-commit <sha> --subject "<title> (#N)"`. In a cloud session use the REST call from `routine.md`. Squash is the owner's choice for these PRs; `git-conventions` otherwise defaults to a merge commit. The merge is not blocked on a person.
+- Owner-only: do not merge, do not ask. Leave it open with the label and the summary paragraph. The next run sees its state on the open PR's branch and opens nothing for the same change. A closed, unmerged PR no longer counts as covering: the change comes back on the next run unless the owner merges or the upstream value moves again.
 - A merge that is refused (head moved, a classifier, a permission): apply `merge-gate` section 8: retry once after a fresh review of anything new, then label the PR `ready-to-merge` and leave it for the owner. Never work around a refusal.
 - After the merge, confirm with the PR state and read `release-watch/state.json` on `main`.
 

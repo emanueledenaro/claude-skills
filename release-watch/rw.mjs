@@ -18,16 +18,22 @@ const sha = (s) => createHash('sha256').update(s).digest('hex')
 
 // ---------- classify ----------
 
+const STATE_FILE = 'release-watch/state.json'
 // A changed file may be FACT only if it is prose or the state file.
-const FACT_FILE = /(^|\/)[^/]+\.md$|^release-watch\/state\.json$/
+const FACT_FILE = /(^|\/)[^/]+\.md$/
 // The routine never rewrites its own instructions or tools: a change there is always a rule change.
 const PROTECTED = /^release-watch\/(SKILL\.md|routine\.md|apply\.md|rw\.mjs|rw\.test\.mjs)$/
 
-// Each token class is replaced by a placeholder; the family name of a model stays visible,
-// so swapping Haiku for Sonnet is never hidden. Anything not listed here is not a fact token.
-const MASKS = [
-  [/https?:\/\/[^\s)>\]"'`]+/g, '§U'],
-  [/\b\d{4}-\d{2}-\d{2}\b/g, '§D'],
+// A line that holds one of these words states a rule or a threshold, so on it only dates and URL hosts are
+// masked: its numbers, quotes and words are compared as they are, and any change is a rule change.
+const RULE_CONTEXT = /\b(always|never|only|must|at most|at least|unless|until|stop|budget|limit|reserve|cap|threshold|under|over|above|below|more than|less than|within|up to|maximum|minimum|exceed)\b/i
+
+const URL_RE = /https?:\/\/([^/\s)>\]"'`]+)[^\s)>\]"'`]*/g
+const DATE = [/\b\d{4}-\d{2}-\d{2}\b/g, '§D']
+// Each token class becomes a placeholder; the family name of a model stays visible, so swapping Haiku
+// for Sonnet is never hidden, and a URL keeps its host. Anything not listed is not a fact token.
+const FACT_MASKS = [
+  DATE,
   [/claude-(haiku|sonnet|opus|fable|mythos)-[0-9][0-9a-z-]*/gi, 'claude-$1-§V'],
   [/\b(Haiku|Sonnet|Opus|Fable|Mythos) \d+(\.\d+)*/g, '$1 §V'],
   [/\bv?\d+\.\d+(\.\d+)+\b/g, '§V'],
@@ -42,14 +48,49 @@ const MASKS = [
 const QUOTE = /"[^"]{1,160}"/g
 
 export function normalize(line) {
+  const ruleLine = RULE_CONTEXT.test(line)
   let s = line
-  if (/https?:\/\//.test(s)) s = s.replace(QUOTE, '"§Q"')
-  for (const [re, to] of MASKS) s = s.replace(re, to)
+  if (!ruleLine && /https?:\/\//.test(s)) s = s.replace(QUOTE, '"§Q"')
+  s = s.replace(URL_RE, 'https://$1/§P')
+  for (const [re, to] of ruleLine ? [DATE] : FACT_MASKS) s = s.replace(re, to)
   return s.replace(/\s+/g, ' ').trim()
 }
 
+// Version-like tokens in order, as number lists, to catch a version going down.
+const VERSION_RE = /claude-(?:haiku|sonnet|opus|fable|mythos)-(\d[\da-z-]*)|\b(?:Haiku|Sonnet|Opus|Fable|Mythos) (\d+(?:\.\d+)*)|\bv?(\d+\.\d+(?:\.\d+)+)\b|\bv(\d+\.\d+)\b/gi
+export function versions(line) {
+  return [...line.matchAll(VERSION_RE)].map((m) => (m[1] ?? m[2] ?? m[3] ?? m[4]).split(/[.-]/).filter((p) => /^\d+$/.test(p)).map(Number))
+}
+const lower = (a, b) => {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0)
+  return false
+}
+
+const KNOWN_KEYS = ['checkedAt', 'cli', 'npmTags', 'models', 'modsTypes', 'pageHashes', 'upstreamSkills']
+const HEX64 = /^[0-9a-f]{64}$/
+const VER = /^\d+\.\d+\.\d+$/
+// The state file is judged by its shape, not by its lines: every change to it is a fact if it is well formed.
+export function checkState(headText, baseText) {
+  const bad = []
+  let h, b = null
+  try { h = JSON.parse(headText) } catch { return ['state.json does not parse'] }
+  if (baseText) try { b = JSON.parse(baseText) } catch { /* a broken base is replaced */ }
+  for (const k of Object.keys(h)) if (!KNOWN_KEYS.includes(k)) bad.push(`unknown key ${k}`)
+  if (h.checkedAt !== undefined && !/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(h.checkedAt)) bad.push('checkedAt')
+  if (h.cli !== undefined && !VER.test(h.cli)) bad.push('cli')
+  if (h.npmTags !== undefined && !(h.npmTags && Object.values(h.npmTags).every((v) => VER.test(v)))) bad.push('npmTags')
+  if (h.models !== undefined && !(Array.isArray(h.models) && h.models.every((m) => /^claude-[a-z0-9-]+$/.test(m)))) bad.push('models')
+  if (h.modsTypes !== undefined && !HEX64.test(h.modsTypes)) bad.push('modsTypes')
+  const pageIds = PAGES.map((p) => p.id)
+  for (const [k, v] of Object.entries(h.pageHashes ?? {})) if (!pageIds.includes(k) || !HEX64.test(v)) bad.push(`pageHashes.${k}`)
+  for (const [k, v] of Object.entries(h.upstreamSkills ?? {})) if (!['.claude-plugin/plugin.json', 'CHANGELOG.md'].includes(k) || !HEX64.test(v)) bad.push(`upstreamSkills.${k}`)
+  if (b?.cli && VER.test(h.cli ?? '') && lower(h.cli.split('.').map(Number), b.cli.split('.').map(Number))) bad.push('cli went down')
+  return bad
+}
+
 // Returns { verdict: 'FACT'|'RULE', reasons: [...] } for a unified diff (git diff -U0 output).
-export function classifyDiff(diff) {
+// opts.state = { head, base }: the text of release-watch/state.json on both sides, for checkState.
+export function classifyDiff(diff, opts = {}) {
   const reasons = []
   let file = null
   let removed = []
@@ -57,17 +98,27 @@ export function classifyDiff(diff) {
   let inHunk = false
   const flush = () => {
     if (!removed.length && !added.length) return
+    if (file === STATE_FILE) { removed = []; added = []; return }
     const a = removed.map(normalize)
     const b = added.map(normalize)
     const same = a.length === b.length && a.every((x, i) => x === b[i])
     if (!same) reasons.push(`${file}: ${removed.length} removed, ${added.length} added, not a pure fact substitution: ${(added[0] ?? removed[0]).slice(0, 80)}`)
+    else {
+      removed.forEach((r, i) => {
+        const v = versions(r), w = versions(added[i])
+        if (v.some((x, j) => w[j] && lower(w[j], x))) reasons.push(`${file}: a version went down: ${added[i].slice(0, 80)}`)
+      })
+    }
     removed = []
     added = []
   }
   for (const line of diff.split('\n')) {
     if (line.startsWith('diff --git')) {
       flush(); inHunk = false; file = line.split(' b/')[1]
-      if (PROTECTED.test(file)) reasons.push(`${file}: release-watch's own instructions or tools`)
+      if (file === STATE_FILE) {
+        const bad = opts.state ? checkState(opts.state.head ?? '', opts.state.base) : ['state.json text not supplied']
+        if (bad.length) reasons.push(`${file}: ${bad.join(', ')}`)
+      } else if (PROTECTED.test(file)) reasons.push(`${file}: release-watch's own instructions or tools`)
       else if (!FACT_FILE.test(file)) reasons.push(`${file}: not a prose or state file`)
       continue
     }
@@ -81,6 +132,14 @@ export function classifyDiff(diff) {
   }
   flush()
   return { verdict: reasons.length ? 'RULE' : 'FACT', reasons }
+}
+
+// Diff two git revisions in a repository and classify it.
+export function classifyGit(base, head, cwd = process.cwd()) {
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] })
+  const show = (rev) => { try { return git('show', `${rev}:${STATE_FILE}`) } catch { return null } }
+  const diff = git('diff', '-U0', '--no-color', '--no-renames', `${base}...${head}`)
+  return classifyDiff(diff, { state: { head: show(head), base: show(git('merge-base', base, head).trim()) } })
 }
 
 // ---------- probe ----------
@@ -191,18 +250,18 @@ export async function probe({ local }) {
     notChecked.push({ area: 'local', why: 'cloud run: installed CLI, Desktop bundle and installed skill copies are not visible' })
   }
 
-  // A change already held by an open release-watch PR is covered: do not open a second one.
+  // A change already held by an OPEN release-watch PR is covered: do not open a second one.
+  // Branches alone are not enough: a closed, unmerged branch stays on the remote and must not hide a change.
   const covered = []
-  const heads = sh('git', ['ls-remote', '--heads', 'origin', 'chore/release-watch-*'])
-  if (heads === null) notChecked.push({ area: 'covered-by-open-pr', why: 'git ls-remote failed' })
-  if (heads) {
-    for (const ln of heads.split('\n')) {
-      const ref = ln.split('\t')[1]
-      const day = ref.match(/release-watch-(\d{4}-\d{2}-\d{2})/)?.[1]
-      if (!day || Date.now() - Date.parse(day) > 30 * 864e5) continue
-      sh('git', ['fetch', '-q', 'origin', `${ref}:refs/remotes/rw-check/${ref.replace('refs/heads/', '')}`])
-      const txt = sh('git', ['show', `refs/remotes/rw-check/${ref.replace('refs/heads/', '')}:release-watch/state.json`])
-      if (!txt) continue
+  const origin = sh('git', ['remote', 'get-url', 'origin'])
+  const repo = origin?.replace(/\.git$/, '').match(/([^/:]+\/[^/]+)$/)?.[1]
+  const refs = repo ? sh('gh', ['api', `repos/${repo}/pulls?state=open&per_page=100`, '--jq', '.[].head.ref']) : null
+  if (refs === null) notChecked.push({ area: 'covered-by-open-pr', why: 'could not list open PRs (gh api failed)' })
+  else {
+    for (const ref of refs.split('\n').filter((r) => r.startsWith('chore/release-watch-'))) {
+      const fetched = sh('git', ['fetch', '-q', 'origin', `${ref}:refs/remotes/rw-check/${ref}`])
+      const txt = fetched === null ? null : sh('git', ['show', `refs/remotes/rw-check/${ref}:release-watch/state.json`])
+      if (!txt) { notChecked.push({ area: 'covered-by-open-pr', why: `could not read state.json of open PR branch ${ref}` }); continue }
       const s = JSON.parse(txt)
       covered.push({ ref, cli: s.cli, models: s.models, modsTypes: s.modsTypes, pageHashes: s.pageHashes, upstreamSkills: s.upstreamSkills })
     }
@@ -233,13 +292,13 @@ const AREAS = {
 }
 const sortDeep = (v) => Array.isArray(v) ? v : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortDeep(v[k])])) : v
 
-function applyState(areas) {
-  if (!existsSync(OBSERVED)) throw new Error('run probe first')
-  const obs = JSON.parse(readFileSync(OBSERVED, 'utf8'))
-  const s = existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : {}
+export function applyState(areas, { statePath = STATE, observedPath = OBSERVED } = {}) {
+  if (!existsSync(observedPath)) throw new Error('run probe first')
+  const obs = JSON.parse(readFileSync(observedPath, 'utf8'))
+  const s = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {}
   for (const a of areas) { if (!AREAS[a]) throw new Error(`unknown area ${a}`); AREAS[a](s, obs) }
   s.checkedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z')
-  writeFileSync(STATE, JSON.stringify(sortDeep(s), null, 2) + '\n')
+  writeFileSync(statePath, JSON.stringify(sortDeep(s), null, 2) + '\n')
 }
 
 // ---------- cli ----------
@@ -253,8 +312,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       process.exit(r.changed.length || r.baseline.length ? 10 : 0)
     } else if (cmd === 'classify') {
       const [base, head] = rest
-      const diff = execFileSync('git', ['diff', '-U0', '--no-color', '--no-renames', `${base}...${head}`], { encoding: 'utf8', maxBuffer: 1 << 28 })
-      const r = classifyDiff(diff)
+      const r = classifyGit(base, head)
       console.log(JSON.stringify(r, null, 2))
       process.exit(r.verdict === 'FACT' ? 0 : 10)
     } else if (cmd === 'apply-state') {

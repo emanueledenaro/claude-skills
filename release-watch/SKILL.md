@@ -1,6 +1,6 @@
 ---
 name: release-watch
-description: "Watches upstream for changes that make the person's skills stale, then fixes them: new Claude Code releases and changelog entries, new or retiring models and aliases (the Haiku, Sonnet and Opus rows of model-mix), prices, plan and limit changes, the mods API, Matt Pocock's skills. A shell probe with no model runs first; on a change the facts are verified, written to the skills on a branch, reviewed by Opus and merged when only facts changed, or left for the owner when a rule changed. Runs every morning as a cloud routine and on request. Use when asked whether anything new shipped, 'novità di Claude', 'nuovo modello', 'aggiorna le skill', after a Claude Code update, when a model release, price or limit may touch a skill, when a version or model fact looks wrong, or to set up or repair the daily routine, in any project."
+description: "Watches upstream for changes that make the person's skills stale and fixes them: Claude Code releases, new or retiring models and aliases, prices, plan limits, the mods API, Matt Pocock's skills. A no-model shell probe runs first; on a change the facts are verified, written to the skills on a branch, reviewed by Opus, and merged when only facts changed or left for the owner when a rule changed. Runs every morning as a cloud routine. Use for 'novità di Claude', 'nuovo modello', 'aggiorna le skill', whether anything new shipped, after a Claude Code update, when a model, price, limit or version fact looks stale, or to set up or repair the routine, in any project."
 ---
 
 Decide whether anything outside the repo changed, and when it did, update the skills that state it. The probe is `rw.mjs`: shell only, no model. A model starts only when the probe reports a change. Sources, exact commands and the edit map are in `sources.md`; the flow after a change is `apply.md`; the cloud routine's prompt is `routine.md`. Memory between runs is `state.json` in this folder, changed only by the PR that processed it.
@@ -32,10 +32,10 @@ node release-watch/rw.mjs probe --local    # adds the installed CLI version
 1. Group the changes by area and verify every statement the skills make about the area (`verified-research`, official sources, a Sonnet verifier that did not write the claim). Unverified claims are not written.
 2. Edit every affected skill and `README.md` on `chore/release-watch-<yyyy-mm-dd>`, one commit per area, `git-conventions` headers, and advance `state.json` in the same PR.
 3. Run `node release-watch/rw.mjs classify origin/main HEAD`. It is the only judge of fact versus rule.
-4. Open the PR, get an Opus high review of the diff against the sources, apply its fixes as new commits.
-5. FACT: squash-merge it yourself on the reviewed head. RULE: leave it open, label `needs-owner`, first line `NEEDS OWNER`, one plain paragraph on the rule change.
+4. Open the PR, get an Opus high review of the diff against the sources (state-only PRs too), apply its fixes as new commits.
+5. FACT, with a review comment `PASS <sha>` for the exact head: squash-merge it yourself on that head. RULE: leave it open, label `needs-owner`, first line `NEEDS OWNER`, one plain paragraph on the rule change.
 
-Fact means only version numbers, dates, model ids, prices and ratios, rate numbers with a unit, URLs and quotes of a source line, changed one for one. A rule is anything else: which model or effort a role gets, any always, never or only sentence, a new or removed step or row, a budget threshold, a new model slot. A mixed run splits into two PRs when clean, else waits as one. Upstream skills (Matt's) and unverified claims also wait.
+What counts as a fact and what as a rule is defined once, in `apply.md` section 3, and decided by `classify`. A mixed run splits into two PRs when clean, else waits as one. Upstream skills (Matt's), refuted and unverified claims also wait.
 
 ## 4. The daily routine
 
@@ -46,7 +46,7 @@ Set up once, after this PR is merged (the routine clones the default branch). Do
 3. Repository: this one. Environment: **Default** (Trusted network access reaches every watched domain).
 4. Model **Sonnet**, effort **high**, in the prompt box selector.
 5. Connectors tab: remove all.
-6. Trigger **Schedule**, daily. For exactly 08:00 Rome time use **Custom** with `CRON_TZ=Europe/Rome 0 8 * * *`; a plain cron is in UTC and would drift by an hour with daylight saving. A run on the hour can start several minutes late; `7 8` starts closer.
+6. Trigger **Schedule**, preset **Daily**, at 08:07. Presets take your local time zone, so daylight saving needs nothing from you. A run set exactly on the hour can start several minutes late, which is why it is 08:07 and not 08:00.
 7. **Create**, then **Run now** once and read the transcript: a quiet day prints one line.
 
 It uses the same plan usage as interactive sessions, so run the budget check in `model-mix` before enabling it and read the weekly percent before and after its first change day. Unverified points are listed in `sources.md` section 8.

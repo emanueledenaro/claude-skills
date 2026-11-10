@@ -37,7 +37,7 @@ This is a cloud session. It cannot see the owner's installed CLI, Desktop app bu
 
 ## Step 2: has this change already been handled?
 
-The probe already drops changes held by an open `chore/release-watch-*` branch (`coveredByOpenPr` counts them), so what remains is new work. If `notChecked` holds `covered-by-open-pr`, the probe could not look at those branches. Then list the open PRs by REST (`gh api repos/$REPO/pulls --jq '.[].head.ref'`, `REPO` as in step 6). If any head starts with `chore/release-watch-`, stop with one line, `release-watch <yyyy-mm-dd>: a release-watch PR is already open, not duplicating`, and open nothing.
+The probe lists the open PRs and already drops changes held by one whose head starts with `chore/release-watch-` (`coveredByOpenPr` counts them), so what remains is new work. A closed PR does not count. If `notChecked` holds `covered-by-open-pr`, the probe could not look. Then list the open PRs by REST (`gh api repos/$REPO/pulls --jq '.[].head.ref'`, `REPO` as in step 6). If any head starts with `chore/release-watch-`, stop with one line, `release-watch <yyyy-mm-dd>: a release-watch PR is already open, not duplicating`, and open nothing.
 
 ## Step 3: verify
 
@@ -47,13 +47,13 @@ Read `release-watch/apply.md`, sections 1 to 3, and `verified-research/SKILL.md`
 
 ## Step 4: edit
 
-Follow `apply.md` section 2: branch `chore/release-watch-<yyyy-mm-dd>` from the latest `origin/main`, one commit per area, `git-conventions` headers, state written by `node release-watch/rw.mjs apply-state <area>`. No fact goes in without a confirmed verdict. Anything unverified or contested goes into the PR body under "Not applied".
+Follow `apply.md` section 2: branch `chore/release-watch-<yyyy-mm-dd>` from the latest `origin/main`, one commit per area, `git-conventions` headers, state written by `node release-watch/rw.mjs apply-state <area>`. No fact goes in without a confirmed verdict. Anything refuted goes into the PR body under "Refuted", anything unverified or contested under "Not applied"; either makes the PR owner-only.
 
 If no skill line needs a change, the branch holds only the state file. That is a state-only PR.
 
 ## Step 5: classify and split
 
-Run `node release-watch/rw.mjs classify origin/main HEAD`. Apply `apply.md` section 3 exactly: FACT or RULE comes from the script, and a PR is owner-only if it touches the `upstream` area, has anything under "Not applied", or ends with an open review finding. Split into a facts PR and a `-rule` PR only when every cherry-pick is clean; otherwise keep one owner-only PR.
+Run `node release-watch/rw.mjs classify origin/main HEAD` and apply `apply.md` section 3 exactly: the verdict, the owner-only conditions and the split all live there, and none is repeated here.
 
 ## Step 6: PR, review, merge or wait
 
@@ -65,15 +65,19 @@ gh api repos/$REPO/pulls -f title="<title>" -f head=<branch> -f base=main -F bod
 gh api repos/$REPO/labels -f name=needs-owner -f color=D93F0B -f description="a rule changed: waits for the owner"   # once; a 422 means it exists
 gh api repos/$REPO/issues/<N>/labels -f 'labels[]=needs-owner'
 gh api repos/$REPO/issues/<N>/comments -F body=@/tmp/review.md
-gh api repos/$REPO/pulls/<N> --jq '.head.sha'
-gh api -X PUT repos/$REPO/pulls/<N>/merge -f merge_method=squash -f sha=<reviewed head sha> -f commit_title="<title> (#<N>)"
+gh api -X PUT repos/$REPO/pulls/<N>/merge -f merge_method=squash -f sha=$HEAD -f commit_title="<title> (#<N>)"
 ```
 
 1. Write the PR body as `apply.md` section 4 says. Title `docs(release-watch): <what changed>`, valid by `git-conventions` (`node git-conventions/check/cli.mjs pr-title "<title>"`).
-2. Owner-only PR: add the label `needs-owner`, start the body with `NEEDS OWNER: <reason>` and one plain paragraph on the rule change. Do not merge it. Do not review it with Opus unless it also holds fact edits worth checking; a pure rule PR is for the owner to judge.
-3. Facts PR (not state-only): run the Opus review of `apply.md` section 4, post its verdict as a PR comment with the head sha, apply its fixes as new commits, run the delta review, and re-run `classify` on the final head.
-4. State-only PR: no review; `classify` must say FACT and the diff must touch only `release-watch/state.json`.
-5. Merge only when `apply.md` section 5 allows it: final-head `classify` is FACT, not owner-only, review passed. Merge with the REST call above, `sha` set to the reviewed head. Whether this call works in a cloud session, and whether the auto mode classifier lets an unattended merge through, has not been confirmed. If it is refused, retry once, then add the label `ready-to-merge` (create it like `needs-owner`) and leave the PR open. Never try another route to the same merge.
+2. Owner-only PR: add the label `needs-owner`, start the body with `NEEDS OWNER: <reason>` and one plain paragraph on the rule change. Do not merge it. A pure rule PR is for the owner to judge; skip the Opus review for it.
+3. Any other PR, state-only ones included: run the Opus review of `apply.md` section 4 and post it as a comment whose first line is `PASS <head sha>` or `FAIL <head sha>`. Apply fixes as new commits, then review the new head again. Re-run `classify` on the final head.
+4. Merge only when `apply.md` section 5 allows it. Just before merging, read the head and the comments, and stop unless a comment starts with `PASS ` followed by exactly that head:
+   ```
+   HEAD=$(gh api repos/$REPO/pulls/<N> --jq '.head.sha')
+   gh api repos/$REPO/issues/<N>/comments --paginate --jq '.[].body | split("\n")[0]' | grep -qx "PASS $HEAD" || echo "no matching PASS: do not merge"
+   ```
+   Then call the merge with `sha` set to `$HEAD`. No matching `PASS`, no merge: leave the PR open with the label `ready-to-merge` (create it like `needs-owner`).
+5. Whether the merge call works in a cloud session, and whether the auto mode classifier lets an unattended merge through, has not been confirmed. If it is refused, retry once, then add the label `ready-to-merge` and leave the PR open. Never try another route to the same merge.
 
 ## Step 7: output
 
@@ -83,6 +87,6 @@ Print one short block, nothing else:
 release-watch <yyyy-mm-dd>
 changed:   <areas, or none>
 PRs:       <url> merged | <url> waits (needs-owner) | <url> waits (ready-to-merge)
-not applied: <claims left unverified, or none>
+refuted / not applied: <claims, or none>
 not checked: <sources that failed, plus the local checks a cloud run skips>
 ```

@@ -117,7 +117,7 @@ Cloud scheduled tasks, formerly routines. Source: https://code.claude.com/docs/e
 Documented:
 
 - Available on Pro, Max, Ultra, Team and Enterprise. Created at https://claude.ai/code/routines or with `/schedule` (alias `/routines`) in a terminal; `/schedule` is not available inside a cloud session and needs a claude.ai login, not a Console API key.
-- A schedule trigger takes a preset or a custom cron; expressions more often than once per hour are rejected. A five-field cron is read in UTC unless it starts with `CRON_TZ=<zone>`. A run on the hour can start several minutes late.
+- A schedule trigger takes a preset or a custom cron; expressions more often than once per hour are rejected. A preset frequency takes the time in the local time zone; a Custom cron is available in the edit dialog after the task exists, and is read in UTC unless it starts with `CRON_TZ=<zone>`. A run on the hour can start several minutes late.
 - Each run is a new full cloud session: the repository is cloned from its default branch, the prompt is the saved one, the model and effort come from the selector, all connectors are included by default (remove them). Auto mode is on unless unavailable; repeated classifier blocks stop the run and wait for a person.
 - Claude pushes to `claude/`-prefixed branches unless the prompt names another branch. Branch protection or rulesets control where a run can push.
 - Limits: scheduled runs 100 per hour per account; Run now plus API fires 30 per hour per task. Runs draw down subscription usage like interactive sessions, with no per-run figure published.
@@ -129,8 +129,7 @@ Unverified, not tested because no routine was created:
 
 - That the REST merge (`PUT /pulls/N/merge` with `merge_method=squash` and `sha`) is allowed through the GitHub proxy.
 - That the auto mode classifier lets an unattended run merge a PR. The routine page says a fired prompt cannot act as consent for an action during the run.
-- That a hand-typed `CRON_TZ=Europe/Rome 0 8 * * *` is accepted by the Custom field. The docs describe the prefix, not this exact input.
 - That the Agent tool in a cloud session accepts `model` and `effort` per call, and that Haiku 5.5 is selectable there by id.
 - That the probe's fetches work from the cloud VM. They were run from a local machine; the domains are on the allowlist.
-- That `git ls-remote` of the branch list works through the proxy; if not, the probe says so and the routine stops when an open release-watch PR exists.
+- That `gh api repos/<repo>/pulls` (the probe's open-PR listing) and a `git fetch` of a PR branch work through the proxy; if not, the probe says so and the routine stops when an open release-watch PR exists.
 - The plan usage of one change day. Read the weekly percent before and after.
