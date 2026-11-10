@@ -33,24 +33,32 @@ The skills point to each other instead of repeating themselves. A project's own 
 Clone once and link every skill, so a `git pull` updates them. Claude Code reads `~/.claude/skills`; OpenCode reads `~/.claude/skills`, `~/.agents/skills` and `~/.config/opencode/skills`, so the two links below serve both. The loop installs every skill in this repo (all of them are in the table above) and skips a name that already exists:
 
 ```bash
-git clone https://github.com/emanueledenaro/claude-skills.git ~/.agents/repos/claude-skills
-cd ~/.agents/repos/claude-skills
-mkdir -p ~/.agents/skills ~/.claude/skills
-for f in */SKILL.md; do
-  id=${f%/SKILL.md}
-  [ -e ~/.agents/skills/$id ] || [ -L ~/.agents/skills/$id ] || ln -s "$PWD/$id" ~/.agents/skills/$id
-  [ -e ~/.claude/skills/$id ] || [ -L ~/.claude/skills/$id ] || ln -s ../../.agents/skills/$id ~/.claude/skills/$id
-done
+git clone https://github.com/emanueledenaro/claude-skills.git ~/.agents/repos/claude-skills \
+  && cd ~/.agents/repos/claude-skills \
+  && mkdir -p ~/.agents/skills ~/.claude/skills \
+  && for f in */SKILL.md; do
+       id=${f%/SKILL.md}
+       [ -e ~/.agents/skills/$id ] || [ -L ~/.agents/skills/$id ] || ln -s "$PWD/$id" ~/.agents/skills/$id
+       [ -e ~/.claude/skills/$id ] || [ -L ~/.claude/skills/$id ] || ln -s ../../.agents/skills/$id ~/.claude/skills/$id
+     done
 ```
 
 Update with `git -C ~/.agents/repos/claude-skills pull --ff-only`. Check that no other copy shadows the repo: OpenCode ranks `~/.config/opencode/skills` above the other two folders, so an old copy or a link into a stale plugin marketplace clone there hides the current skill without a warning. The `project-setup` skill runs this check and fixes it. On Windows, use `windows-ops` for links.
 
-Then add a routing block to your global `~/.claude/CLAUDE.md`, so every project reaches them at the right moment. OpenCode reads `~/.config/opencode/AGENTS.md` and never `CLAUDE.md`, so link it to the same file (`ln -s ~/.claude/CLAUDE.md ~/.config/opencode/AGENTS.md`) or paste the block there too:
+Then add a routing block to your global `~/.claude/CLAUDE.md`, so every project reaches them at the right moment. OpenCode reads `~/.config/opencode/AGENTS.md` and never `CLAUDE.md`, so link it to the same file (`ln -s ~/.claude/CLAUDE.md ~/.config/opencode/AGENTS.md`) or paste the block there too. A link also hands OpenCode the Claude-only lines and the `@` imports of that file, which it does not follow; if you keep those in the global file, use a separate `AGENTS.md` with the block instead:
 
 ```markdown
 Before launching any agent, cloud session, workflow or review, use `model-mix`. Before writing a workflow script, use `smart-ultracode`. When coordinating delegated work (workers, merges, rounds, overnight loops, UI changes), use `coordinator-method`. Before writing, changing, installing or reviewing a Claude Code mod or any plugin, or when asked for a pane, a band above the prompt, a custom command or a tool-call guard, use `smart-mods`; for what a mod draws, also `mod-ui`.
 Launching or steering a cloud worker: `cloud-worker`. Merging a finished PR: `merge-gate`. Going unattended or to sleep: `overnight`. Issues, milestones, the roadmap: `roadmap-tracker`. Running Matt Pocock's skills: `matt-bridge`. Researching facts that change (prices, limits, versions, APIs): `verified-research`. Checking for new releases or models: `release-watch`. Reviewing skills or their cost: `skill-audit`. A heavy or long session: `context-hygiene`. Shell, paths or tools on Windows: `windows-ops`. Writing, refactoring or reviewing code: `clean-code`. Writing a commit message, naming a branch, titling a PR or a merge commit: `git-conventions`. Mapping screens or keeping design and code aligned: `screen-map`. Several agents running tests, e2e or containers on one machine: `shared-machine-checks`. Adding or changing test assertions: `assertions-go-red`. Setting up or auditing a repository for Claude Code or OpenCode: `project-setup`.
 ```
+
+Optional: add this line, alone on a line, to the same `~/.claude/CLAUDE.md` if you want `project-setup` to clone, update and link these skills, fix stale copies and add the routing block without asking:
+
+```markdown
+claude-skills: auto-sync
+```
+
+Without it, `project-setup` only prints what it would do and asks once.
 
 ## In a new project
 
