@@ -32,13 +32,13 @@ Run the budget check in `model-mix` first. Size by the diff, not by the worker's
 ## 4. Apply findings
 
 - Send verified findings to the worker that owns the PR as one message: file and line, evidence, expected change. If the worker is gone, start a fix thread. Fixes are new commits: no amend, no force.
-- A serious finding (wrong behavior, security, data loss, removed or weakened tests, a broken project rule, a `clean-code` block rule) must be fixed before the merge. After the first review only blockers (serious findings) and hard-rule matters go back to the worker; every minor finding goes to one follow-up ticket with a milestone and a state label (`roadmap-tracker` §5). Each extra round costs a new head and a new gate.
-- After fixes, one delta review of the new commits only (one Opus high agent, same brief). Two fix rounds at most; if serious findings remain after the second, stop and tell the person.
+- A serious finding (wrong behavior, security, data loss, removed or weakened tests, an assertion nothing can turn red, a broken project rule, a `clean-code` block rule) must be fixed before the merge: the reviewer names its consequence. After the first review only blockers and hard-rule matters go back to the worker. A minor finding is fixed in the same PR when it takes a few lines, otherwise it stays one line in the PR comment; a follow-up ticket only for real work, small ones batched into one ticket (`roadmap-tracker` §5). Each extra round costs a new head and a new gate.
+- After fixes, one delta review of the new commits only (one Opus high agent, same brief). No third round: a blocker the delta still finds goes back to the worker once, and the coordinator checks that one fix itself; if it is still wrong, stop and tell the person.
 - Refuted and unverified findings are not sent to the worker. Note them in the PR comment.
 
 ## 5. Hold for the person: UI
 
-- A PR that draws or changes UI waits for the person's ok on screenshots of every touched view (`coordinator-method`, UI changes). The review looks for model-facing text leaking into the interface and for removed components or tests.
+- A PR that draws or changes UI waits for the person's ok on screenshots of every touched view, or, when the person has delegated the look, for the pre-PR screenshot review and a final review that checked its fixes (`coordinator-method`, UI changes). The review looks for model-facing text leaking into the interface and for removed components or tests.
 
 ## 6. Realign and check
 
@@ -76,6 +76,6 @@ An auto-mode classifier may refuse the merge as a "merge without review". What i
 - Every PR merged has a review sized by its diff, with the reviewed sha in a PR comment, and the merge used that same sha.
 - Every serious finding was verified and fixed, or the merge waited for the person.
 - Required checks were green on the realigned head and main had not moved.
-- UI PRs merged only after the person's ok on screenshots.
+- UI PRs merged only after the person's ok on screenshots, or the delegated pre-PR screenshot review with its fixes checked.
 - Tickets, roadmap, superseded PRs and installed copies are done, or listed as open.
 - A refused merge was retried once and then handed over, never bypassed.

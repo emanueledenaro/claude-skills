@@ -1,16 +1,19 @@
 ---
 name: coordinator-method
-description: "The person's coordinator method: delegating to cloud and local workers, merging PRs, checks every round, usage stops, overnight loops, deciding instead of asking, UI changes. Use when acting as coordinator in any project: launching or briefing a worker, merging or closing a PR, starting a round, the person going to sleep, or changing an interface."
+description: "The person's coordinator method: delegating to cloud and local workers, merging PRs, checks every round, usage stops, overnight loops, deciding instead of asking, UI changes. Use when acting as coordinator in any project: starting a coordinator run in a new project, launching or briefing a worker, merging or closing a PR, starting a round, a retro, the person going to sleep, or changing an interface."
 ---
 
 How the person wants delegated work run, in every project. The project's own AGENTS.md, CONTRIBUTING.md, branch protection and `.claude/CLAUDE.md` win over this skill. Project facts (scripts, paths, roadmap issue, accounts, test app) live in the project's memory and its optional `.claude/CLAUDE.md`. Model and effort for every worker come from `model-mix`; whether and how to run a workflow comes from `smart-ultracode`.
 
 ## Delegation
 
+- Starting a coordinator session in a new project: paste `references/kickoff.md` with its slots filled, and ask the person which authority line applies.
 - The coordinator keeps the queue, briefs, reviews, merges and roadmap. Hands-on work of any size (debugging, conflicts, tests, docs, settings) becomes a delegated thread: gather only the facts a precise brief needs, then hand off.
 - Cloud sessions take everything that runs in a checkout: code, tests, conflicts, docs, investigations. From the repo root: `expect ~/.claude/skills/coordinator-method/launch.exp <task> <rules|-> <log> <model> <effort>`. The prompt is the task, the Worker brief at the end of this file (keep it the last section), then the project's rules file. Confirm the session URL before telling the person work runs in the cloud; an agent tool's remote option can fall back to local silently.
 - A local background agent in its own worktree takes only work that needs this machine: installed CLIs, the person's signed-in accounts, the local packaged build. One at a time.
 - The local machine stays light: full suites, builds and UI checks run in cloud sessions and CI. When checks must run locally, at most two code workers at once, because their heavy checks queue on one lock anyway (`shared-machine-checks`).
+- One big feature is always in flight; fixes and small batched tickets fill the gaps, never the other way round.
+- When CI is off or cannot run the full checks, build the local tools in `references/local-tools.md` the first time a step repeats: worktree, check under the lock, gate, realign, land, status, demo.
 - One implementation thread at a time by default; run parallel threads, on disjoint areas, when the person asks or when the budget is green and today's profile in `model-mix` allows more than one cloud session. Cloud sessions and routines draw from the same plan limits as everything else. Check rarely: one long wait beats many status reads. Workers commit often.
 - Real proofs against an AI provider pin the cheapest suitable model and the lowest effort in every request and ticket prompt. The person's own tool configs stay as they are unless they ask.
 - When a feature maps to a named upstream skill or method, load its text verbatim with a thin binding to local tools; flag anything without an upstream source as a local addition.
@@ -33,6 +36,8 @@ How the person wants delegated work run, in every project. The project's own AGE
 
 - After each merge, read main's CI and the failing test itself. Tell a flaky timeout from a deterministic failure and fix or hand off the second at once.
 - List open PRs and new issues. For each idle worker, look in the tracker for its PR, branch or comments so finished work gets picked up.
+- A worker that ended its turn while its check ran in the background: wait on the recorded PID, then resume it with the result.
+- After 5 or 6 merged PRs, or a run that went sideways, draft a retro (Matt Pocock's `retro`) and show it one proposal at a time; each accepted item becomes a rules line, a tool change or a ticket.
 - Compare each new PR with what just landed on main to catch duplicates. Review the diff (final review row of `model-mix`) and the screenshots of every UI PR, including model-facing text leaking into the interface.
 
 ## Usage and overnight
@@ -49,6 +54,7 @@ How the person wants delegated work run, in every project. The project's own AGE
 
 - Decide anything derivable from project rules, agreed decisions or earlier messages. Arbitrate disagreements between agents or reviewers, record the choice with its doubt, and break loops. Finish mechanical steps yourself, such as committing a resolved merge. Ask only product or design choices nothing covers.
 - A new request while a PR is open or in review becomes a new ticket, linked as blocked by that PR's ticket. It joins the open PR only when the person says so ("nello stesso giro") or the PR's ticket already asks for it.
+- Report progress as what a user can now do, not ticket numbers.
 - With more than one worker running, every status update is one table: worker, ticket, PR, state, next step. Then what is needed from the person.
 - In grilling sessions map the whole frontier, then ask one question per message with options and a recommendation, and say how many remain.
 - Public content for the person's accounts: show each draft (text, translation, visual) and publish only after their ok on that item, within their daily cap. Humanizer on every text, only merged facts, visuals from the real product with no private data, the person's own browser session. Videos reuse real components and tokens, few soft and motivated camera and mouse moves, short caption cards on why the product is useful, synthesized audio. Scheduled routines only prepare drafts.
@@ -59,6 +65,7 @@ How the person wants delegated work run, in every project. The project's own AGE
 - A reference the person hands over (a theme preset, a block, a design) applies as is to every component, page and state. Remove anything not in it, including the project's own tints, variants and gradients, without asking, and say so afterwards. Lock it with a check: tokens equal a committed snapshot of the reference, and lint refuses colours or gradients outside it.
 - Show UI screenshots next to the reference they must match, one side-by-side image per view, once the worker has compared them and they match.
 - Show first: edit the working tree, run the app from it, send a screenshot, wait for the ok, then commit and push.
+- Pre-PR screenshot review: a UI worker goes through `references/ui-checklist.md` on its own screenshots of every state and width, then stops before the PR with "READY FOR SCREENSHOT REVIEW". One reviewer looks once: the person, or Fable when the person has delegated the look (`model-mix` budget permitting; Opus when Fable is not allowed). It writes MUST-FIX (a consequence for the user) and NICE (one line each) to the evidence folder; the worker fixes, then opens the PR, and the final review checks the fixes. It found 4, 10 and 4 fixes on three PRs, one a data bug, before any review round.
 - Workers write screenshots to a fresh temp dir and swap it into the evidence folder at the end; nobody empties or edits that folder while a worker writes.
 - Mockups and prototypes decide layout only; every real component and feature stays. Each UI PR carries a before/after table of touched components, a feature map is the contract each change ticks, and CI blocks removed tests or screenshots.
 - Every visual choice states its meaning from the product's core metaphor in the project's visual-language doc, and one signal keeps one meaning everywhere. Motion: about 150 ms for state changes, slow and continuous only for ongoing work, off under reduced motion.
@@ -77,6 +84,8 @@ Rules for every worker. The project's rules that follow win on conflict.
 - Code you add or change follows `clean-code` when that skill is available; at least: clear names, no hidden side effects, no logic copied from elsewhere in the repo. Name in the PR any `clean-code` rule left unapplied and any problem seen in existing code you did not change.
 - Tests use one clock: fake Date and move the system time with the test clock, or pass `now` explicitly.
 - Mockups decide layout only: keep every real component and list the touched ones in the PR.
+- UI tickets: go through the coordinator's UI checklist on your own screenshots, then stop before the PR with "READY FOR SCREENSHOT REVIEW" and the screenshot folder; open the PR after the review's fixes.
+- Run every check in the foreground and stay until it ends; clear lint and build caches before the final checks (a stale lint cache once hid an error until the gate).
 - Text the person sees carries no model-facing framing, tool or API names, or prompt instructions.
 - Code reused from another repository is credited only in the third-party notices file.
 - Finish with a short report: what changed, PR URL, check results, and the origin/main SHA tested.
