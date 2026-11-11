@@ -1,6 +1,6 @@
 # UI checklist
 
-Every UI worker brief points here. The worker checks each item on its own screenshots, at every width the project shoots (for example 360, 768, 1024 and 1440), before it stops with "READY FOR SCREENSHOT REVIEW". The pre-PR reviewer uses the same list. Project rules (a UI library, a preset, a design system) win on components, colours and fonts; this list judges layout, spacing, copy and states.
+Every UI worker brief includes this list; paste it, because a cloud worker cannot read this file. The worker checks each item on its own screenshots, at every width the project shoots (for example 360, 768, 1024 and 1440), before it stops with "READY FOR SCREENSHOT REVIEW". The pre-PR reviewer uses the same list. Project rules (a UI library, a preset, a design system) win on components, colours and fonts; this list judges layout, spacing, copy and states.
 
 Source: the faults that came back on every UI PR of one project (5 to 10 fixes per screen) and a full design audit of its app, 2026-11-11.
 

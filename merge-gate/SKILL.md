@@ -32,13 +32,13 @@ Run the budget check in `model-mix` first. Size by the diff, not by the worker's
 ## 4. Apply findings
 
 - Send verified findings to the worker that owns the PR as one message: file and line, evidence, expected change. If the worker is gone, start a fix thread. Fixes are new commits: no amend, no force.
-- A serious finding (wrong behavior, security, data loss, removed or weakened tests, an assertion nothing can turn red, a broken project rule, a `clean-code` block rule) must be fixed before the merge: the reviewer names its consequence. After the first review only blockers and hard-rule matters go back to the worker. A minor finding is fixed in the same PR when it takes a few lines, otherwise it stays one line in the PR comment; a follow-up ticket only for real work, small ones batched into one ticket (`roadmap-tracker` §5). Each extra round costs a new head and a new gate.
-- After fixes, one delta review of the new commits only (one Opus high agent, same brief). No third round: a blocker the delta still finds goes back to the worker once, and the coordinator checks that one fix itself; if it is still wrong, stop and tell the person.
+- A serious finding (wrong behavior, security, data loss, removed or weakened tests, an assertion nothing can turn red, a broken project rule, a `clean-code` block rule) must be fixed before the merge: the reviewer names its consequence. After the first review only blockers and hard-rule matters go back to the worker. In the first round, a minor finding is fixed in the same PR when it takes a few lines, otherwise it stays one line in the PR comment; a follow-up ticket only for real work, small ones batched into one ticket (`roadmap-tracker` §4). Each extra round costs a new head and a new gate.
+- After fixes, one delta review of the new commits only (one Opus high agent, same brief). No third round: a blocker the delta still finds goes back to the worker once, and the coordinator checks that one fix itself (an Opus high agent when the PR is security-related or the session is not Opus) and posts the checked sha as the review comment; if it is still wrong, stop and tell the person.
 - Refuted and unverified findings are not sent to the worker. Note them in the PR comment.
 
 ## 5. Hold for the person: UI
 
-- A PR that draws or changes UI waits for the person's ok on screenshots of every touched view, or, when the person has delegated the look, for the pre-PR screenshot review and a final review that checked its fixes (`coordinator-method`, UI changes). The review looks for model-facing text leaking into the interface and for removed components or tests.
+- A PR that draws or changes UI waits for the person's ok on screenshots of every touched view, or, when the person has delegated the look in writing for this run, for the pre-PR screenshot review and a final review that checked its fixes (`coordinator-method`, UI changes). The review looks for model-facing text leaking into the interface and for removed components or tests.
 
 ## 6. Realign and check
 
