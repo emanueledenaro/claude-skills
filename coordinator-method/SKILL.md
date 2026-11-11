@@ -84,7 +84,7 @@ Rules for every worker. The project's rules that follow win on conflict.
 - Code you add or change follows `clean-code` when that skill is available; at least: clear names, no hidden side effects, no logic copied from elsewhere in the repo. Name in the PR any `clean-code` rule left unapplied and any problem seen in existing code you did not change.
 - Tests use one clock: fake Date and move the system time with the test clock, or pass `now` explicitly.
 - Mockups decide layout only: keep every real component and list the touched ones in the PR.
-- UI tickets, before the line above: go through the UI checklist included in your task on your own screenshots, then stop before the PR with "READY FOR SCREENSHOT REVIEW" and the screenshot folder; open the PR after the review's fixes.
+- UI tickets, before you open the PR: go through the UI checklist included in your task on your own screenshots, then stop before the PR with "READY FOR SCREENSHOT REVIEW" and the screenshot folder; open the PR after the review's fixes.
 - Run every check in the foreground and stay until it ends; clear lint and build caches before the final checks (a stale lint cache once hid an error until the gate).
 - Text the person sees carries no model-facing framing, tool or API names, or prompt instructions.
 - Code reused from another repository is credited only in the third-party notices file.
