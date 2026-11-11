@@ -39,7 +39,7 @@ Haiku 5.5 (`claude-haiku-5-5`, released 2026-10-07):
 
 Outside the default mix (these can bill usage credits):
 
-- **Fable 5.1:** off by default. Only on Ultra with a green budget, and only for the single most consequential judgment (the final review of a security-critical diff). Never on Pro, where it is not part of the plan. Never on `-p`, background or cloud workers: past the Fable cap, `-p` runs bill credits without asking when credits are on, background and teammate sessions wait 5 minutes for consent and then drop the turn, and in cloud sessions the consent prompt depends on the app.
+- **Fable 5.1:** off by default. Only on Ultra with a green budget, and only for two uses: the single most consequential judgment (the final review of a security-critical diff), and, when the person has delegated the look, the one pre-PR screenshot review of a UI ticket (`coordinator-method`), as a foreground subagent. Never on Pro, where it is not part of the plan. Never on `-p`, background or cloud workers: past the Fable cap, `-p` runs bill credits without asking when credits are on, background and teammate sessions wait 5 minutes for consent and then drop the turn, and in cloud sessions the consent prompt depends on the app.
 - **Fast mode (`/fast`):** credits only. Never for delegated work.
 - **Ultrareview (`/code-review ultra`):** credits after 3 one-time free runs per account. Only when the person asks for it.
 
