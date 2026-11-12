@@ -84,11 +84,11 @@ gh api -X PUT repos/$REPO/pulls/<N>/merge -f merge_method=squash -f sha=$HEAD -f
 1. Write the PR body as `apply.md` section 4 says. Title `docs(release-watch): <what changed>`, valid by `git-conventions` (`node git-conventions/check/cli.mjs pr-title "<title>"`).
 2. Owner-only PR: add the label `needs-owner`, start the body with `NEEDS OWNER: <reason>` and one plain paragraph on the rule change. Do not merge it. A pure rule PR is for the owner to judge; skip the Opus review for it.
 3. Any other PR, state-only ones included: run the Opus review of `apply.md` section 4 and post it as a comment whose first line is `PASS <head sha>` or `FAIL <head sha>`. Apply fixes as new commits, then review the new head again. Re-run `classify` on the final head.
-4. Merge only when `apply.md` section 5 allows it. Just before merging, read the head and the comments. Only a comment posted by this routine's own login counts: the repository is public, so anyone can post `PASS <sha>`. `pass-check` exits 0 only when a comment by `ME` has exactly `PASS <head>` as its first line:
+4. Merge only when `apply.md` section 5 allows it. Just before merging, read the head and the comments. Only a comment posted by this routine's own login counts: the repository is public, so anyone can post `PASS <sha>`. Among the comments by `ME` whose first line names the head, the latest decides: `pass-check` exits 0 only when its first line is exactly `PASS <head>`, so a `FAIL` after a `PASS` blocks the merge:
    ```
    HEAD=$(gh api repos/$REPO/pulls/<N> --jq '.head.sha')
    ME=$(gh api user --jq .login)
-   gh api repos/$REPO/issues/<N>/comments --paginate --jq '.[] | {login: .user.login, body}' | node release-watch/rw.mjs pass-check "$ME" "$HEAD"
+   gh api repos/$REPO/issues/<N>/comments --paginate --jq '.[] | {id, login: .user.login, body}' | node release-watch/rw.mjs pass-check "$ME" "$HEAD"
    ```
    Exit 0: call the merge with `sha` set to `$HEAD`. Any other exit, an empty `ME`, or a failed call: no merge, leave the PR open with the label `ready-to-merge` (create it like `needs-owner`). If your own review comment shows under a login other than `ME`, that is also no merge.
 5. Whether the merge call works in a cloud session, and whether the auto mode classifier lets an unattended merge through, has not been confirmed. If it is refused, retry once, then add the label `ready-to-merge` and leave the PR open. Never try another route to the same merge.

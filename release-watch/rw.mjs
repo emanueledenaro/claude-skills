@@ -3,7 +3,7 @@
 //   node release-watch/rw.mjs probe [--local]   compare upstream with state.json, print JSON
 //   node release-watch/rw.mjs classify <base> <head>   FACT or RULE for a git diff
 //   node release-watch/rw.mjs apply-state <area>...    copy probed values into state.json
-//   node release-watch/rw.mjs pass-check <login> <sha> < comments   is there a PASS <sha> by <login>?
+//   node release-watch/rw.mjs pass-check <login> <sha> < comments   is <login>'s latest verdict on <sha> a PASS?
 // Exit codes: probe 0 nothing to do, 10 something changed, 2 error. classify 0 FACT, 10 RULE, 2 error.
 // pass-check 0 found, 10 not found, 2 error.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -30,10 +30,15 @@ const PROTECTED = /^release-watch\/(SKILL\.md|routine\.md|apply\.md|rw\.mjs|rw\.
 // masked: its numbers, quotes and words are compared as they are, and any change is a rule change.
 const RULE_CONTEXT = /\b(always|never|only|must|at most|at least|unless|until|stop|budget|limit|reserve|cap|threshold|under|over|above|below|more than|less than|within|up to|maximum|minimum|exceed)\b/i
 
-const URL_RE = /https?:\/\/([^/\s)>\]"'`]+)([^\s)>\]"'`]*)/g
+const URL_RE = /(https?):\/\/([^/\s)>\]"'`]+)([^\s)>\]"'`]*)/gi
 const SOURCES_FILE = 'release-watch/sources.md'
-// On these hosts the first path segments name the owner and the repository (api.github.com: /repos/owner/repo).
-const GITHUB_HOST = /(^|\.)(github\.com|githubusercontent\.com)$/i
+// Hosts are matched whole, on a dot boundary: no user, port or query can sit in front of the name.
+// On GitHub hosts the first path segments name the owner and the repository (api.github.com: /repos/owner/repo).
+const GITHUB_HOST = /^([a-z0-9-]+\.)*(github\.com|githubusercontent\.com)$/i
+// On Anthropic hosts the vendor's own pages may move.
+const ANTHROPIC_HOST = /^([a-z0-9-]+\.)*(claude\.com|claude\.ai|anthropic\.com)$/i
+// A path the server may resolve to another place: dot segments, escapes, backslashes, empty segments.
+const TRICKY_PATH = /\.\.|(^|\/)\.(\/|$)|%|\\|\/\//
 const DATE = [/\b\d{4}-\d{2}-\d{2}\b/g, '§D']
 // Each token class becomes a placeholder; the family name of a model stays visible, so swapping Haiku
 // for Sonnet is never hidden. Anything not listed is not a fact token.
@@ -53,17 +58,21 @@ const UNIT_MASKS = [
   [/\b\d+ (per hour|hours?|days?|minutes?)\b/g, '§N $1'],
   [/\b\d+-hour\b/g, '§N-hour'],
 ]
-// On a line that carries a source URL, a short double-quoted passage is a quote of the source.
+// In sources.md, on a line that carries a source URL, a short double-quoted passage is a quote of the source.
 // A quote that holds a URL is not masked: the URL inside it is judged like any other.
 const QUOTE = /"[^"\0]{1,160}"/g
 
-// A URL may change only in sources.md, and there only below its host (on GitHub hosts, below owner,
-// repository and the next segment). Everywhere else a URL is compared exactly as written.
-function urlKey(host, path, inSources) {
-  if (!inSources) return `${host}${path}`
-  if (!GITHUB_HOST.test(host)) return `${host}/§P`
+// A URL may change only in sources.md, and there only its path below an Anthropic host, or below owner,
+// repository and the next segment on a GitHub host. Everywhere else, on any other host, and for any path
+// that holds a dot segment, an escape, a backslash or an empty segment, the URL is compared exactly as written
+// (the raw text is checked, never a parsed URL). The scheme is always part of the key.
+function urlKey(scheme, host, path, inSources) {
+  const whole = `${scheme}://${host}${path}`
+  if (!inSources || TRICKY_PATH.test(path)) return whole
+  if (ANTHROPIC_HOST.test(host)) return `${scheme}://${host}/§P`
+  if (!GITHUB_HOST.test(host)) return whole
   const keep = /^api\./i.test(host) ? 4 : 3
-  return `${host}/${path.split('/').slice(1, 1 + keep).join('/')}/§P`
+  return `${scheme}://${host}/${path.split('/').slice(1, 1 + keep).join('/')}/§P`
 }
 
 export function normalize(line, file = '') {
@@ -71,8 +80,8 @@ export function normalize(line, file = '') {
   const inSources = file === SOURCES_FILE
   const urls = []
   // URLs are lifted out first, so no mask below can touch a host or a path, then put back as keys.
-  let s = line.replace(/\0/g, '§NUL').replace(URL_RE, (_, host, path) => { urls.push(urlKey(host, path, inSources)); return '\0' })
-  if (!ruleLine && urls.length) s = s.replace(QUOTE, '"§Q"')
+  let s = line.replace(/\0/g, '§NUL').replace(URL_RE, (_, scheme, host, path) => { urls.push(urlKey(scheme, host, path, inSources)); return '\0' })
+  if (inSources && !ruleLine && urls.length) s = s.replace(QUOTE, '"§Q"')
   const masks = ruleLine ? [DATE] : inSources ? [...FACT_MASKS, ...UNIT_MASKS] : FACT_MASKS
   for (const [re, to] of masks) s = s.replace(re, to)
   let i = 0
@@ -180,11 +189,16 @@ export function releaseWatchRefs(pulls, repo) {
   return pulls.filter((p) => typeof p.repo === 'string' && p.repo.toLowerCase() === repo.toLowerCase() && p.ref?.startsWith('chore/release-watch-')).map((p) => p.ref)
 }
 
-// Comments as [{ login, body }]. True only when a comment by `login` (the routine's own GitHub login)
-// has `PASS <head>` as its whole first line, with head a full 40-character sha. Anyone can comment on a public repo.
+// Comments as [{ id?, login, body }], oldest first (sorted by id when every comment has one). Only comments
+// by `login` (the routine's own GitHub login) whose first line names the head count, and the latest of them
+// decides: true only when its whole first line is `PASS <head>`, head a full 40-character sha. A FAIL after a
+// PASS is no pass. Anyone can comment on a public repo, so other logins never count.
 export function hasPass(comments, login, head) {
   if (!login || !/^[0-9a-f]{40}$/.test(head ?? '')) return false
-  return comments.some((c) => c.login === login && String(c.body ?? '').split(/\r?\n/)[0] === `PASS ${head}`)
+  const ordered = comments.every((c) => Number.isFinite(c.id)) ? [...comments].sort((a, b) => a.id - b.id) : comments
+  const first = (c) => String(c.body ?? '').split(/\r?\n/)[0]
+  const mine = ordered.filter((c) => c.login === login && first(c).includes(head))
+  return mine.length > 0 && first(mine[mine.length - 1]) === `PASS ${head}`
 }
 
 // ---------- probe ----------
@@ -365,7 +379,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     } else if (cmd === 'apply-state') {
       applyState(rest)
     } else if (cmd === 'pass-check') {
-      // stdin: one JSON object per line, from gh api .../comments --paginate --jq '.[] | {login: .user.login, body}'
+      // stdin: one JSON object per line, from gh api .../comments --paginate --jq '.[] | {id, login: .user.login, body}'
       const [login, head] = rest
       const comments = readFileSync(0, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
       const ok = hasPass(comments, login, head)

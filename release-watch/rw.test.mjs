@@ -20,7 +20,7 @@ test('FACT: version, date, price, ratio, model id, same-host url, quote on a sou
   assert.equal(verdict(MM, [['Max ($100/month)', 'Max ($120/month)']]), 'FACT')
   assert.equal(verdict(MM, [['Fable 5.1 about 5× Sonnet', 'Fable 5.2 about 4× Sonnet']]), 'FACT')
   assert.equal(verdict(MM, [['use `claude-haiku-5-5` here', 'use `claude-haiku-5-6` here']]), 'FACT')
-  assert.equal(verdict('release-watch/sources.md', [['see https://a.example/x', 'see https://a.example/y']]), 'FACT')
+  assert.equal(verdict('release-watch/sources.md', [['see https://code.claude.com/docs/en/x', 'see https://code.claude.com/docs/en/y']]), 'FACT')
   assert.equal(verdict('release-watch/sources.md', [['"old words" https://a.example/x', '"new words" https://a.example/x']]), 'FACT')
 })
 
@@ -123,6 +123,58 @@ test('finding 3: a PASS counts only from the routine\'s own login, for the exact
   assert.equal(rw.hasPass([own], 'routine-bot', 'b'.repeat(40)), false)
   assert.equal(rw.hasPass([{ login: 'routine-bot', body: `ok\nPASS ${head}` }], 'routine-bot', head), false)
   assert.equal(rw.hasPass([{ login: 'routine-bot', body: `PASS ${head}` }], 'routine-bot', 'PASS'), false)
+})
+
+// ---- second review of PR #21 ----
+
+const RAW = 'https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md'
+const BLOB = 'https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md'
+
+test('r2 finding 1: a dot segment, percent, backslash or double slash in a path keeps the whole url', () => {
+  for (const [from, to] of [
+    [RAW, 'https://raw.githubusercontent.com/anthropics/claude-code/main/../../../evil/repo/main/CHANGELOG.md'],
+    [RAW, 'https://raw.githubusercontent.com/anthropics/claude-code/main/%2e%2e/%2e%2e/%2e%2e/evil/repo/main/CHANGELOG.md'],
+    [RAW, 'https://raw.githubusercontent.com/anthropics/claude-code/main/..\\..\\..\\evil\\repo\\main\\CHANGELOG.md'],
+    [RAW, 'https://raw.githubusercontent.com/anthropics/claude-code/main/./CHANGELOG.md'],
+    [RAW, 'https://raw.githubusercontent.com/anthropics/claude-code/main//CHANGELOG.md'],
+    [BLOB, 'https://github.com/anthropics/claude-code/blob/main/../../../evil/repo/blob/main/CHANGELOG.md'],
+    [BLOB, 'https://github.com/anthropics/claude-code/blob/%2e%2e/%2e%2e/%2e%2e/evil/repo/blob/main/CHANGELOG.md'],
+    [BLOB, 'https://github.com/anthropics/claude-code/blob/..\\..\\..\\evil\\repo\\blob\\main\\CHANGELOG.md'],
+    [RAW, 'https://raw.githubusercontent.com/anthropics/claude-code/main/docs\\CHANGELOG.md'],
+    [BLOB, 'https://github.com/anthropics/claude-code/blob/main/docs\\CHANGELOG.md'],
+    ['https://code.claude.com/docs/en/routines', 'https://code.claude.com/docs/en/../../evil'],
+  ]) assert.equal(verdict(SRC, [[`see ${from}`, `see ${to}`]]), 'RULE', to)
+})
+
+test('r2 finding 2: a path may move only on Anthropic and GitHub hosts, matched on a dot boundary', () => {
+  assert.equal(verdict(SRC, [['curl -s https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags', 'curl -s https://registry.npmjs.org/-/package/@evil/claude-code/dist-tags']]), 'RULE')
+  assert.equal(verdict(SRC, [['see https://evilanthropic.com/a', 'see https://evilanthropic.com/b']]), 'RULE')
+  assert.equal(verdict(SRC, [['see https://anthropic.com.evil.io/a', 'see https://anthropic.com.evil.io/b']]), 'RULE')
+  assert.equal(verdict(SRC, [['see https://user@claude.com/a', 'see https://user@claude.com/b']]), 'RULE')
+  assert.equal(verdict(SRC, [['see https://evil.io?x.github.com/a/b/c/d', 'see https://evil.io?x.github.com/a/b/c/e']]), 'RULE')
+  for (const host of ['claude.com', 'support.claude.com', 'claude.ai', 'anthropic.com', 'docs.anthropic.com']) {
+    assert.equal(verdict(SRC, [[`see https://${host}/a`, `see https://${host}/b`]]), 'FACT', host)
+  }
+})
+
+test('r2 finding 3: a scheme change is RULE', () => {
+  assert.equal(verdict(SRC, [['see https://code.claude.com/docs/en/a', 'see http://code.claude.com/docs/en/a']]), 'RULE')
+  assert.equal(verdict(MM, [['see https://code.claude.com/docs/en/a', 'see http://code.claude.com/docs/en/a']]), 'RULE')
+})
+
+test('r2 finding 4: a quote is masked only in sources.md', () => {
+  assert.equal(verdict(MM, [['"wake every hour" https://code.claude.com/docs/en/a', '"wake every day" https://code.claude.com/docs/en/a']]), 'RULE')
+  assert.equal(verdict(SRC, [['"wake every hour" https://code.claude.com/docs/en/a', '"wake every day" https://code.claude.com/docs/en/a']]), 'FACT')
+})
+
+test('r2 finding 5: the latest comment from the routine for the head decides, and a FAIL after a PASS is no pass', () => {
+  const head = 'c'.repeat(40)
+  const pass = { login: 'routine-bot', body: `PASS ${head}` }
+  const fail = { login: 'routine-bot', body: `FAIL ${head}\nfinding` }
+  assert.equal(rw.hasPass([pass, fail], 'routine-bot', head), false)
+  assert.equal(rw.hasPass([fail, pass], 'routine-bot', head), true)
+  assert.equal(rw.hasPass([pass, { login: 'stranger', body: `FAIL ${head}` }], 'routine-bot', head), true)
+  assert.equal(rw.hasPass([{ id: 2, ...fail }, { id: 1, ...pass }], 'routine-bot', head), false)
 })
 
 // ---- the routine's documents stay in line with model-mix ----
