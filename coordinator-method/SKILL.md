@@ -12,6 +12,8 @@ How the person wants delegated work run, in every project. The project's own AGE
 - Cloud sessions take everything that runs in a checkout: code, tests, conflicts, docs, investigations. From the repo root: `expect ~/.claude/skills/coordinator-method/launch.exp <task> <rules|-> <log> <model> <effort>`. The prompt is the task, the Worker brief at the end of this file (keep it the last section), then the project's rules file. Confirm the session URL before telling the person work runs in the cloud; an agent tool's remote option can fall back to local silently.
 - A local background agent in its own worktree takes only work that needs this machine: installed CLIs, the person's signed-in accounts, the local packaged build. One at a time.
 - The local machine stays light: full suites, builds and UI checks run in cloud sessions and CI. When checks must run locally, at most two code workers at once, because their heavy checks queue on one lock anyway (`shared-machine-checks`).
+- Ticket size: a UI ticket has one acceptance group and names its files. A change to every view is two tickets: the rule with its lint and one view, then the sweep. A second request from the person is a second ticket.
+- Time box: every worker brief carries one (default 120 min of wall time). At the box, at the third red of one test, or after two failed fixes of one failure, the worker pushes, writes what is done, left and blocking, and stops. The coordinator then decides once: cut (PR what is green, the rest a ticket), extend 60 min for one named item, or send the failure to an advisor. A second extension needs the person.
 - One big item (a feature, or the current phase of a reliability cycle) is always in flight; fixes and small batched tickets fill the gaps, never the other way round.
 - When CI is off or cannot run the full checks, build the local tools in `references/local-tools.md` the first time a step repeats: worktree, check under the lock, gate, realign, land, status, demo.
 - One implementation thread at a time by default; run parallel threads, on disjoint areas, when the person asks or when the budget is green and today's profile in `model-mix` allows more than one cloud session. Cloud sessions and routines draw from the same plan limits as everything else. Check rarely: one long wait beats many status reads. Workers commit often.
@@ -53,7 +55,7 @@ How the person wants delegated work run, in every project. The project's own AGE
 ## Talking with the person
 
 - Decide anything derivable from project rules, agreed decisions or earlier messages. Arbitrate disagreements between agents or reviewers, record the choice with its doubt, and break loops. Finish mechanical steps yourself, such as committing a resolved merge. Ask only product or design choices nothing covers.
-- A new request while a PR is open or in review becomes a new ticket, linked as blocked by that PR's ticket. It joins the open PR only when the person says so ("nello stesso giro") or the PR's ticket already asks for it.
+- A new request while a worker is in flight or its PR is open becomes a new ticket, linked as blocked by that ticket. It joins the running work only when the person says so ("nello stesso giro") or the ticket already asks for it. Message a running worker only to answer it or to remove scope. A brief names no work that waits on a ticket not yet merged (retro 2026-11-12: one added sentence cost a worker 5.5 hours).
 - Report progress as what a user can now do, not ticket numbers.
 - With more than one worker running, every status update is one table: worker, ticket, PR, state, next step. Then what is needed from the person.
 - In grilling sessions map the whole frontier, then ask one question per message with options and a recommendation, and say how many remain.
@@ -77,6 +79,7 @@ Rules for every worker. The project's rules that follow win on conflict.
 - Start from the latest main and merge it again before every push: `git fetch origin && git merge -m "chore: merge origin/main into <branch>" origin/main`.
 - Before every push run the full type check, test suite, build and UI check on the merged result. If the environment cannot run one, say so in the PR and the report; report only checks that ran and passed as passed.
 - Commits, merge commits and PR titles follow Conventional Commits; branches follow Conventional Branch with long types, lowercase, hyphens and the issue number, never an agent prefix. Each commit ends with the Co-Authored-By line your session's attribution gives for your model.
+- Time box: your task names one (default 120 min of wall time). At the box, at the third red of one test, or after two failed fixes of one failure: push what you have, report what is done, what is left and what blocks, and stop. Report a red push as red, and open no PR at the box.
 - Pushed history is append-only: a fix after a push is a new commit, no amend plus push, no `--force` or `--force-with-lease`.
 - Open or update the PR, then stop: the coordinator merges. Start no other ticket.
 - Stop a process only by the PID you recorded or the tool's own stop command, never `pkill -f` or `killall`: a pattern also kills other agents' checks.

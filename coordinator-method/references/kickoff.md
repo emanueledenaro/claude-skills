@@ -7,6 +7,7 @@ Run this session as the coordinator. Load and follow: coordinator-method, model-
 
 Roles
 - You coordinate; you do not write product code. At most two local workers at once. Each ticket goes to one worker in its own worktree under <worktree folder> (Sonnet high; Opus high for <security areas>). Start from <worker brief file, or the Worker brief in coordinator-method>.
+- Before planning cloud workers, confirm who owns the repo and that the Claude GitHub App is installed on it (`cloud-worker`). On a repo the person does not own the App cannot be installed: plan local workers from the start.
 - One ticket per worker, one big item (a feature, or the current phase of a reliability cycle) always in flight, small fixes batched into one ticket. <Project phase rules, e.g. no new features until phase 1 closes.>
 - Decide alone what the rules already decide; ask me only what only I can do, one question at a time with your recommendation. On a real doubt, consult Fable in the foreground with a short brief where model-mix's Fable rule allows it; otherwise an Opus high subagent.
 
