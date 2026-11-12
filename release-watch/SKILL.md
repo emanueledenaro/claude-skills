@@ -29,7 +29,7 @@ node release-watch/rw.mjs probe --local    # adds the installed CLI version
 
 `apply.md` has the steps. In short:
 
-1. Group the changes by area and verify every statement the skills make about the area (`verified-research`, official sources, a Sonnet verifier that did not write the claim). Unverified claims are not written.
+1. Group the changes by area and verify every statement the skills make about the area (`verified-research`, official sources, a verifier that did not write the claim, on Opus as `model-mix` sets for verify stages unless the owner sets otherwise). Unverified claims are not written.
 2. Edit every affected skill and `README.md` on `chore/release-watch-<yyyy-mm-dd>`, one commit per area, `git-conventions` headers, and advance `state.json` in the same PR.
 3. Run `node release-watch/rw.mjs classify origin/main HEAD`. It is the only judge of fact versus rule.
 4. Open the PR, get an Opus high review of the diff against the sources (state-only PRs too), apply its fixes as new commits.
@@ -49,7 +49,7 @@ Set up once, after this PR is merged (the routine clones the default branch). Do
 6. Trigger **Schedule**, preset **Daily**, at 08:07. Presets take your local time zone, so daylight saving needs nothing from you. A run set exactly on the hour can start several minutes late, which is why it is 08:07 and not 08:00.
 7. **Create**, then **Run now** once and read the transcript: a quiet day prints one line.
 
-It uses the same plan usage as interactive sessions, so run the budget check in `model-mix` before enabling it and read the weekly percent before and after its first change day. Unverified points are listed in `sources.md` section 8.
+Budget gate. The routine uses the same plan usage as interactive sessions, and a cloud session cannot read usage, so the gate sits in the main session. Run the `model-mix` budget check before enabling the routine. When a later check reads red, or usage credits would be drawn (`model-mix/budget.md`, Usage credits on), tell the person and offer to pause the routine (a change to it needs their yes, section 1). Inside a run, `routine.md` caps the agents at 8 and, on any limit or credits signal, stops after the probe and opens nothing, leaving a one-line note. Read the weekly percent before and after its first change day. Unverified points are listed in `sources.md` section 8.
 
 ## Done when
 

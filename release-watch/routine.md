@@ -12,7 +12,7 @@ You are the release-watch routine for this repository of Claude Code skills. You
 
 ## Rules that never bend
 
-- Never use Fable. Use Opus only for the review in step 6, as an Agent call with `model: "opus"` and `effort: "high"`. Readers use `claude-haiku-5-5` at medium effort, verifiers use Sonnet at high effort. Always pass `model` and `effort` on an Agent call; if `effort` is rejected, drop it and note that in the PR.
+- Never use Fable. Readers use `claude-haiku-5-5` at medium effort. Verifiers and the review in step 6 use Opus at high effort (`model: "opus"`, `effort: "high"`), as `model-mix` sets for verify and judge stages, unless the owner sets otherwise in `apply.md` section 1. Always pass `model` and `effort` on an Agent call; if `effort` is rejected, drop it and note that in the PR.
 - Never push to `main`. Never force push. Never amend a pushed commit. Never delete a branch or a tag.
 - Never read, print or write a credential. Do not use connectors. Everything comes from public sources and this repository.
 - This repository is public. Put no personal data in a commit, a PR or a comment: no names, emails, usernames or plan tier.
@@ -37,11 +37,24 @@ This is a cloud session. It cannot see the owner's installed CLI, Desktop app bu
 
 ## Step 2: has this change already been handled?
 
-The probe lists the open PRs and already drops changes held by one whose head starts with `chore/release-watch-` (`coveredByOpenPr` counts them), so what remains is new work. A closed PR does not count. If `notChecked` holds `covered-by-open-pr`, the probe could not look. Then list the open PRs by REST (`gh api repos/$REPO/pulls --jq '.[].head.ref'`, `REPO` as in step 6). If any head starts with `chore/release-watch-`, stop with one line, `release-watch <yyyy-mm-dd>: a release-watch PR is already open, not duplicating`, and open nothing.
+The probe lists the open PRs and already drops changes held by one whose head starts with `chore/release-watch-` and lives in this repository (`coveredByOpenPr` counts them), so what remains is new work. A closed PR does not count, and neither does a PR from a fork: anyone can open one with any branch name. If `notChecked` holds `covered-by-open-pr`, the probe could not look. Then list the open PRs by REST, keeping only heads in this repository (`REPO` as in step 6):
+
+```
+gh api repos/$REPO/pulls --jq ".[] | select(.head.repo.full_name == \"$REPO\") | .head.ref"
+```
+
+If any of those heads starts with `chore/release-watch-`, stop with one line, `release-watch <yyyy-mm-dd>: a release-watch PR is already open, not duplicating`, and open nothing.
+
+## Budget gate
+
+This session cannot read the plan's usage (`model-mix/budget.md`, section Read), and `model-mix` counts unattended work without a reading as red. So the check that lets this routine start agents belongs to the main session (`SKILL.md` section 4). In this run:
+
+- Cap: at most 8 Agent calls per run, every stage counted (readers, verifiers, second verifiers, Opus reviews). 8 is the Max profile width in `model-mix`; a narrower width set here by the owner wins. That fits 2 areas: take at most 2, in the order cli, models, limits, mods, upstream. The others are deferred: no agent, no edit, state untouched, so the next probe reports them again. A call that would pass the cap is not made; a PR left without its `PASS` waits with `needs-owner`, reason `agent cap`.
+- Stop on red: a usage, rate or weekly limit message, a notice that this session or an agent draws usage credits, or an Agent call failing on a limit, seen at any point. Never start an agent that could only finish on usage credits. On red, start no further agent, push nothing, open nothing and merge nothing; a PR already open stays as it is. Print one line for the owner and end: `release-watch <yyyy-mm-dd>: stopped on budget (<what you saw>); changed: <areas>; nothing opened`.
 
 ## Step 3: verify
 
-Read `release-watch/apply.md`, sections 1 to 3, and `verified-research/SKILL.md`. They are files here, not installed skills. Group the entries by area and run the verification as `apply.md` section 1 says: one Haiku reader per area, then a Sonnet verifier per area that did not write the claims. For each area, the readers look up every statement the skills make about it, using the edit map in `release-watch/sources.md` section 7, and compare each with the official source.
+Read `release-watch/apply.md`, sections 1 to 3, and `verified-research/SKILL.md`. They are files here, not installed skills. Group the entries by area and run the verification as `apply.md` section 1 says: one Haiku reader per area, then a verifier per area, on the model `apply.md` section 1 names, that did not write the claims. For each area, the readers look up every statement the skills make about it, using the edit map in `release-watch/sources.md` section 7, and compare each with the official source.
 
 `baseline` entries are not changes: for them there is nothing to verify. They only need their values written to the state file (step 5).
 
@@ -71,12 +84,13 @@ gh api -X PUT repos/$REPO/pulls/<N>/merge -f merge_method=squash -f sha=$HEAD -f
 1. Write the PR body as `apply.md` section 4 says. Title `docs(release-watch): <what changed>`, valid by `git-conventions` (`node git-conventions/check/cli.mjs pr-title "<title>"`).
 2. Owner-only PR: add the label `needs-owner`, start the body with `NEEDS OWNER: <reason>` and one plain paragraph on the rule change. Do not merge it. A pure rule PR is for the owner to judge; skip the Opus review for it.
 3. Any other PR, state-only ones included: run the Opus review of `apply.md` section 4 and post it as a comment whose first line is `PASS <head sha>` or `FAIL <head sha>`. Apply fixes as new commits, then review the new head again. Re-run `classify` on the final head.
-4. Merge only when `apply.md` section 5 allows it. Just before merging, read the head and the comments, and stop unless a comment starts with `PASS ` followed by exactly that head:
+4. Merge only when `apply.md` section 5 allows it. Just before merging, read the head and the comments. Only a comment posted by this routine's own login counts: the repository is public, so anyone can post `PASS <sha>`. `pass-check` exits 0 only when a comment by `ME` has exactly `PASS <head>` as its first line:
    ```
    HEAD=$(gh api repos/$REPO/pulls/<N> --jq '.head.sha')
-   gh api repos/$REPO/issues/<N>/comments --paginate --jq '.[].body | split("\n")[0]' | grep -qx "PASS $HEAD" || echo "no matching PASS: do not merge"
+   ME=$(gh api user --jq .login)
+   gh api repos/$REPO/issues/<N>/comments --paginate --jq '.[] | {login: .user.login, body}' | node release-watch/rw.mjs pass-check "$ME" "$HEAD"
    ```
-   Then call the merge with `sha` set to `$HEAD`. No matching `PASS`, no merge: leave the PR open with the label `ready-to-merge` (create it like `needs-owner`).
+   Exit 0: call the merge with `sha` set to `$HEAD`. Any other exit, an empty `ME`, or a failed call: no merge, leave the PR open with the label `ready-to-merge` (create it like `needs-owner`). If your own review comment shows under a login other than `ME`, that is also no merge.
 5. Whether the merge call works in a cloud session, and whether the auto mode classifier lets an unattended merge through, has not been confirmed. If it is refused, retry once, then add the label `ready-to-merge` and leave the PR open. Never try another route to the same merge.
 
 ## Step 7: output
@@ -88,5 +102,6 @@ release-watch <yyyy-mm-dd>
 changed:   <areas, or none>
 PRs:       <url> merged | <url> waits (needs-owner) | <url> waits (ready-to-merge)
 refuted / not applied: <claims, or none>
+deferred (agent cap): <areas, or none>
 not checked: <sources that failed, plus the local checks a cloud run skips>
 ```

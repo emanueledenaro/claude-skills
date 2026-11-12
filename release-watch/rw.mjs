@@ -3,7 +3,9 @@
 //   node release-watch/rw.mjs probe [--local]   compare upstream with state.json, print JSON
 //   node release-watch/rw.mjs classify <base> <head>   FACT or RULE for a git diff
 //   node release-watch/rw.mjs apply-state <area>...    copy probed values into state.json
+//   node release-watch/rw.mjs pass-check <login> <sha> < comments   is there a PASS <sha> by <login>?
 // Exit codes: probe 0 nothing to do, 10 something changed, 2 error. classify 0 FACT, 10 RULE, 2 error.
+// pass-check 0 found, 10 not found, 2 error.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -28,10 +30,13 @@ const PROTECTED = /^release-watch\/(SKILL\.md|routine\.md|apply\.md|rw\.mjs|rw\.
 // masked: its numbers, quotes and words are compared as they are, and any change is a rule change.
 const RULE_CONTEXT = /\b(always|never|only|must|at most|at least|unless|until|stop|budget|limit|reserve|cap|threshold|under|over|above|below|more than|less than|within|up to|maximum|minimum|exceed)\b/i
 
-const URL_RE = /https?:\/\/([^/\s)>\]"'`]+)[^\s)>\]"'`]*/g
+const URL_RE = /https?:\/\/([^/\s)>\]"'`]+)([^\s)>\]"'`]*)/g
+const SOURCES_FILE = 'release-watch/sources.md'
+// On these hosts the first path segments name the owner and the repository (api.github.com: /repos/owner/repo).
+const GITHUB_HOST = /(^|\.)(github\.com|githubusercontent\.com)$/i
 const DATE = [/\b\d{4}-\d{2}-\d{2}\b/g, '§D']
 // Each token class becomes a placeholder; the family name of a model stays visible, so swapping Haiku
-// for Sonnet is never hidden, and a URL keeps its host. Anything not listed is not a fact token.
+// for Sonnet is never hidden. Anything not listed is not a fact token.
 const FACT_MASKS = [
   DATE,
   [/claude-(haiku|sonnet|opus|fable|mythos)-[0-9][0-9a-z-]*/gi, 'claude-$1-§V'],
@@ -41,18 +46,37 @@ const FACT_MASKS = [
   [/\$\d+(\.\d+)?/g, '$§N'],
   [/\b\d+(\.\d+)?\s?[×x](?=[\s,.;:)]|$)/g, '§N×'],
   [/\b1\/\d+\b/g, '1/§N'],
+]
+// Durations and rates are vendor facts only in sources.md; in a skill they may be the owner's cadence
+// ("a 30 minute fallback wakeup"), so there a changed duration is a rule change.
+const UNIT_MASKS = [
   [/\b\d+ (per hour|hours?|days?|minutes?)\b/g, '§N $1'],
   [/\b\d+-hour\b/g, '§N-hour'],
 ]
 // On a line that carries a source URL, a short double-quoted passage is a quote of the source.
-const QUOTE = /"[^"]{1,160}"/g
+// A quote that holds a URL is not masked: the URL inside it is judged like any other.
+const QUOTE = /"[^"\0]{1,160}"/g
 
-export function normalize(line) {
+// A URL may change only in sources.md, and there only below its host (on GitHub hosts, below owner,
+// repository and the next segment). Everywhere else a URL is compared exactly as written.
+function urlKey(host, path, inSources) {
+  if (!inSources) return `${host}${path}`
+  if (!GITHUB_HOST.test(host)) return `${host}/§P`
+  const keep = /^api\./i.test(host) ? 4 : 3
+  return `${host}/${path.split('/').slice(1, 1 + keep).join('/')}/§P`
+}
+
+export function normalize(line, file = '') {
   const ruleLine = RULE_CONTEXT.test(line)
-  let s = line
-  if (!ruleLine && /https?:\/\//.test(s)) s = s.replace(QUOTE, '"§Q"')
-  s = s.replace(URL_RE, 'https://$1/§P')
-  for (const [re, to] of ruleLine ? [DATE] : FACT_MASKS) s = s.replace(re, to)
+  const inSources = file === SOURCES_FILE
+  const urls = []
+  // URLs are lifted out first, so no mask below can touch a host or a path, then put back as keys.
+  let s = line.replace(/\0/g, '§NUL').replace(URL_RE, (_, host, path) => { urls.push(urlKey(host, path, inSources)); return '\0' })
+  if (!ruleLine && urls.length) s = s.replace(QUOTE, '"§Q"')
+  const masks = ruleLine ? [DATE] : inSources ? [...FACT_MASKS, ...UNIT_MASKS] : FACT_MASKS
+  for (const [re, to] of masks) s = s.replace(re, to)
+  let i = 0
+  s = s.replace(/\0/g, () => `<${urls[i++]}>`)
   return s.replace(/\s+/g, ' ').trim()
 }
 
@@ -96,11 +120,14 @@ export function classifyDiff(diff, opts = {}) {
   let removed = []
   let added = []
   let inHunk = false
+  let sawHunk = true
+  // A changed file with no hunk (binary, mode only) cannot be read line by line, so it is a rule change.
+  const endFile = () => { if (file !== null && !sawHunk) reasons.push(`${file}: changed with no text hunk (binary or mode only)`) }
   const flush = () => {
     if (!removed.length && !added.length) return
     if (file === STATE_FILE) { removed = []; added = []; return }
-    const a = removed.map(normalize)
-    const b = added.map(normalize)
+    const a = removed.map((l) => normalize(l, file))
+    const b = added.map((l) => normalize(l, file))
     const same = a.length === b.length && a.every((x, i) => x === b[i])
     if (!same) reasons.push(`${file}: ${removed.length} removed, ${added.length} added, not a pure fact substitution: ${(added[0] ?? removed[0]).slice(0, 80)}`)
     else {
@@ -114,7 +141,7 @@ export function classifyDiff(diff, opts = {}) {
   }
   for (const line of diff.split('\n')) {
     if (line.startsWith('diff --git')) {
-      flush(); inHunk = false; file = line.split(' b/')[1]
+      flush(); endFile(); inHunk = false; sawHunk = false; file = line.split(' b/')[1]
       if (file === STATE_FILE) {
         const bad = opts.state ? checkState(opts.state.head ?? '', opts.state.base) : ['state.json text not supplied']
         if (bad.length) reasons.push(`${file}: ${bad.join(', ')}`)
@@ -122,15 +149,17 @@ export function classifyDiff(diff, opts = {}) {
       else if (!FACT_FILE.test(file)) reasons.push(`${file}: not a prose or state file`)
       continue
     }
-    if (line.startsWith('@@')) { flush(); inHunk = true; continue }
+    if (line.startsWith('@@')) { flush(); inHunk = true; sawHunk = true; continue }
     if (!inHunk) {
       if (/^(new file|deleted file|rename|similarity)/.test(line)) reasons.push(`${file}: file created, deleted or renamed`)
+      else if (/^(old|new) mode/.test(line)) reasons.push(`${file}: file mode changed`)
       continue
     }
     if (line.startsWith('-')) removed.push(line.slice(1))
     else if (line.startsWith('+')) added.push(line.slice(1))
   }
   flush()
+  endFile()
   return { verdict: reasons.length ? 'RULE' : 'FACT', reasons }
 }
 
@@ -140,6 +169,22 @@ export function classifyGit(base, head, cwd = process.cwd()) {
   const show = (rev) => { try { return git('show', `${rev}:${STATE_FILE}`) } catch { return null } }
   const diff = git('diff', '-U0', '--no-color', '--no-renames', `${base}...${head}`)
   return classifyDiff(diff, { state: { head: show(head), base: show(git('merge-base', base, head).trim()) } })
+}
+
+// ---------- PR checks ----------
+
+// Open PRs as [{ ref, repo }] (repo = the head repository's full name, null for a deleted fork).
+// Only a release-watch branch in this repository counts: a fork can name a branch anything.
+export function releaseWatchRefs(pulls, repo) {
+  if (!repo) return []
+  return pulls.filter((p) => typeof p.repo === 'string' && p.repo.toLowerCase() === repo.toLowerCase() && p.ref?.startsWith('chore/release-watch-')).map((p) => p.ref)
+}
+
+// Comments as [{ login, body }]. True only when a comment by `login` (the routine's own GitHub login)
+// has `PASS <head>` as its whole first line, with head a full 40-character sha. Anyone can comment on a public repo.
+export function hasPass(comments, login, head) {
+  if (!login || !/^[0-9a-f]{40}$/.test(head ?? '')) return false
+  return comments.some((c) => c.login === login && String(c.body ?? '').split(/\r?\n/)[0] === `PASS ${head}`)
 }
 
 // ---------- probe ----------
@@ -255,10 +300,12 @@ export async function probe({ local }) {
   const covered = []
   const origin = sh('git', ['remote', 'get-url', 'origin'])
   const repo = origin?.replace(/\.git$/, '').match(/([^/:]+\/[^/]+)$/)?.[1]
-  const refs = repo ? sh('gh', ['api', `repos/${repo}/pulls?state=open&per_page=100`, '--jq', '.[].head.ref']) : null
+  const pulls = repo ? sh('gh', ['api', `repos/${repo}/pulls?state=open&per_page=100`, '--jq', '[.[] | {ref: .head.ref, repo: .head.repo.full_name}]']) : null
+  let refs = null
+  try { refs = pulls === null ? null : releaseWatchRefs(JSON.parse(pulls), repo) } catch { refs = null }
   if (refs === null) notChecked.push({ area: 'covered-by-open-pr', why: 'could not list open PRs (gh api failed)' })
   else {
-    for (const ref of refs.split('\n').filter((r) => r.startsWith('chore/release-watch-'))) {
+    for (const ref of refs) {
       const fetched = sh('git', ['fetch', '-q', 'origin', `${ref}:refs/remotes/rw-check/${ref}`])
       const txt = fetched === null ? null : sh('git', ['show', `refs/remotes/rw-check/${ref}:release-watch/state.json`])
       if (!txt) { notChecked.push({ area: 'covered-by-open-pr', why: `could not read state.json of open PR branch ${ref}` }); continue }
@@ -317,8 +364,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       process.exit(r.verdict === 'FACT' ? 0 : 10)
     } else if (cmd === 'apply-state') {
       applyState(rest)
+    } else if (cmd === 'pass-check') {
+      // stdin: one JSON object per line, from gh api .../comments --paginate --jq '.[] | {login: .user.login, body}'
+      const [login, head] = rest
+      const comments = readFileSync(0, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+      const ok = hasPass(comments, login, head)
+      console.log(ok ? `PASS ${head} by ${login}` : 'no matching PASS from the routine\'s own login: do not merge')
+      process.exit(ok ? 0 : 10)
     } else {
-      console.error('usage: rw.mjs probe [--local] | classify <base> <head> | apply-state <cli|models|limits|mods|upstream>...')
+      console.error('usage: rw.mjs probe [--local] | classify <base> <head> | apply-state <cli|models|limits|mods|upstream>... | pass-check <login> <head-sha> < comments.ndjson')
       process.exit(2)
     }
   } catch (e) {

@@ -1,11 +1,12 @@
 // Run: node --test release-watch/rw.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { classifyDiff, classifyGit, applyState } from './rw.mjs'
+import * as rw from './rw.mjs'
 
 const diff = (file, pairs) =>
   `diff --git a/${file} b/${file}\nindex 1..2 100644\n--- a/${file}\n+++ b/${file}\n` +
@@ -65,6 +66,93 @@ test('a mixed diff is RULE and names the rule hunk', () => {
   assert.equal(d.verdict, 'RULE')
   assert.equal(d.reasons.length, 1)
   assert.match(d.reasons[0], /^b\.md/)
+})
+
+// ---- review findings on PR #21 ----
+
+const SRC = 'release-watch/sources.md'
+
+test('finding 1: a GitHub owner or repo change, a quoted url, or any url change outside sources.md is RULE', () => {
+  assert.equal(verdict(SRC, [['see https://github.com/mattpocock/skills', 'see https://github.com/evil/skills']]), 'RULE')
+  assert.equal(verdict(SRC, [['see https://github.com/mattpocock/skills/blob/main/x', 'see https://github.com/mattpocock/skillz/blob/main/x']]), 'RULE')
+  assert.equal(verdict(SRC, [['https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md', 'https://raw.githubusercontent.com/evil/claude-code/main/CHANGELOG.md']]), 'RULE')
+  assert.equal(verdict(SRC, [['gh api https://api.github.com/repos/anthropics/claude-code/releases', 'gh api https://api.github.com/repos/evil/claude-code/releases']]), 'RULE')
+  assert.equal(verdict(SRC, [['curl "https://github.com/mattpocock/skills/x"', 'curl "https://github.com/evil/skills/x"']]), 'RULE')
+  assert.equal(verdict('README.md', [['git clone https://github.com/emanueledenaro/claude-skills.git', 'git clone https://github.com/evil/claude-skills.git']]), 'RULE')
+  assert.equal(verdict(MM, [['read https://support.claude.com/en/articles/1-a', 'read https://support.claude.com/en/articles/2-b']]), 'RULE')
+  // still a fact: a path change in sources.md that keeps the host and the GitHub owner/repo/branch
+  assert.equal(verdict(SRC, [['https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md', 'https://raw.githubusercontent.com/anthropics/claude-code/main/docs/CHANGELOG.md']]), 'FACT')
+})
+
+test('finding 2: a duration outside sources.md is RULE, inside sources.md a fact', () => {
+  assert.equal(verdict('coordinator-method/SKILL.md', [['a 30 minute fallback wakeup', 'a 1 minute fallback wakeup']]), 'RULE')
+  assert.equal(verdict(MM, [['wait 30 minutes between wakes', 'wait 1 minutes between wakes']]), 'RULE')
+  assert.equal(verdict(MM, [['the 5-hour window', 'the 50-hour window']]), 'RULE')
+  assert.equal(verdict(SRC, [['turned off after 72 hours', 'turned off after 96 hours']]), 'FACT')
+  assert.equal(verdict(SRC, [['scheduled runs 100 per hour per account', 'scheduled runs 50 per hour per account']]), 'FACT')
+})
+
+test('finding 6: a changed file with no hunk (binary, mode only) is RULE', () => {
+  const bin = 'diff --git a/x.md b/x.md\nindex 1..2 100644\nBinary files a/x.md and b/x.md differ\n'
+  assert.equal(classifyDiff(bin).verdict, 'RULE')
+  assert.equal(classifyDiff(diff('a.md', [['v2.1.1', 'v2.1.2']]) + bin).verdict, 'RULE')
+  const mode = 'diff --git a/x.md b/x.md\nold mode 100644\nnew mode 100755\n'
+  assert.equal(classifyDiff(mode).verdict, 'RULE')
+  const modeAndFact = 'diff --git a/x.md b/x.md\nold mode 100644\nnew mode 100755\nindex 1..2\n--- a/x.md\n+++ b/x.md\n@@ -1 +1 @@\n-v2.1.1\n+v2.1.2\n'
+  assert.equal(classifyDiff(modeAndFact).verdict, 'RULE')
+})
+
+test('finding 4: only open PRs whose head is in this repo count as release-watch PRs', () => {
+  const pulls = [
+    { ref: 'chore/release-watch-2026-11-12', repo: 'owner/claude-skills' },
+    { ref: 'chore/release-watch-x', repo: 'stranger/claude-skills' },
+    { ref: 'chore/release-watch-y', repo: null },
+    { ref: 'feat/other', repo: 'owner/claude-skills' },
+  ]
+  assert.deepEqual(rw.releaseWatchRefs(pulls, 'owner/claude-skills'), ['chore/release-watch-2026-11-12'])
+  assert.deepEqual(rw.releaseWatchRefs(pulls, null), [])
+})
+
+test('finding 3: a PASS counts only from the routine\'s own login, for the exact head', () => {
+  const head = 'a'.repeat(40)
+  const own = { login: 'routine-bot', body: `PASS ${head}\nall good` }
+  const other = { login: 'stranger', body: `PASS ${head}` }
+  assert.equal(rw.hasPass([other], 'routine-bot', head), false)
+  assert.equal(rw.hasPass([other, own], 'routine-bot', head), true)
+  assert.equal(rw.hasPass([own], '', head), false)
+  assert.equal(rw.hasPass([own], 'routine-bot', 'b'.repeat(40)), false)
+  assert.equal(rw.hasPass([{ login: 'routine-bot', body: `ok\nPASS ${head}` }], 'routine-bot', head), false)
+  assert.equal(rw.hasPass([{ login: 'routine-bot', body: `PASS ${head}` }], 'routine-bot', 'PASS'), false)
+})
+
+// ---- the routine's documents stay in line with model-mix ----
+
+const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8')
+
+test('finding 5: the routine has a budget gate after the probe, with an agent cap no wider than model-mix allows', () => {
+  const routine = read('./routine.md')
+  const gate = routine.indexOf('## Budget gate')
+  assert.ok(gate > routine.indexOf('## Step 1') && gate < routine.indexOf('## Step 3'), 'budget gate sits between the probe and the first agent')
+  const section = routine.slice(gate, routine.indexOf('\n## ', gate + 1))
+  const cap = Number(section.match(/at most (\d+) Agent calls per run/)?.[1])
+  const maxWidth = Number(read('../model-mix/SKILL.md').match(/^\| Max \| (\d+) \|/m)?.[1])
+  assert.ok(cap > 0 && maxWidth > 0 && cap <= maxWidth, `cap ${cap} within model-mix Max width ${maxWidth}`)
+  assert.match(section, /usage credits/)
+  assert.match(section, /open nothing/i)
+  assert.match(read('./SKILL.md'), /budget gate/i)
+})
+
+test('finding 7: verifiers follow model-mix (Opus for verify stages) unless the owner sets otherwise', () => {
+  const verifyModel = read('../model-mix/SKILL.md').match(/\{ model: '(\w+)', effort: '\w+' \}` on verify and judge stages/)?.[1]
+  assert.equal(verifyModel, 'opus')
+  const apply = read('./apply.md')
+  const line = apply.split('\n').find((l) => /^\s*- verifiers:/.test(l))
+  assert.match(line, /Opus/)
+  assert.match(line, /model-mix/)
+  assert.match(line, /unless the owner sets otherwise/)
+  assert.doesNotMatch(apply, /owner's call/)
+  assert.doesNotMatch(read('./routine.md'), /verifiers? (use|at) Sonnet|Sonnet verifier/)
+  assert.doesNotMatch(read('./SKILL.md'), /Sonnet verifier/)
 })
 
 test('a diff line that looks like a header inside a hunk is content', () => {
