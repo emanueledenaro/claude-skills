@@ -195,7 +195,7 @@ Cases, with the diff shown first and written after the person's ok:
 - Only `AGENTS.md`: add the `CLAUDE.md` above.
 - Both: check `CLAUDE.md` starts with `@AGENTS.md`. If both carry the same text, show the overlap and propose keeping it in `AGENTS.md` only.
 - Only `CLAUDE.md`: `git mv CLAUDE.md AGENTS.md`, then create the `CLAUDE.md` above. Lines that name Claude Code features (hooks, `/commands`, plugin names) stay under `## Claude Code`; the rest goes to `AGENTS.md`. `@path` imports move with their file, so check each still resolves from the new place. One commit, so the move shows as a rename.
-- Neither: create `AGENTS.md` with the Checks and queue block (step 4), then the `CLAUDE.md` above.
+- Neither: create `AGENTS.md` with the Checks and queue block (step 3), then the `CLAUDE.md` above.
 - Global: OpenCode reads `~/.config/opencode/AGENTS.md` and Claude Code reads `~/.claude/CLAUDE.md`. See These skills below.
 
 ## Inspect commands
@@ -226,7 +226,7 @@ jq -r '.plugins[][].installPath' ~/.claude/plugins/installed_plugins.json | whil
 done
 ```
 
-Matt Pocock's skills, in the order of `project-setup` step 4 (read-only; `<name>` is a skill from `matt-bridge/flow.md`):
+Matt Pocock's skills, in the order of `project-setup` step 6 (read-only; `<name>` is a skill from `matt-bridge/flow.md`):
 
 ```bash
 ls .claude/skills/<name>/SKILL.md ~/.claude/skills/<name>/SKILL.md ~/.agents/skills/<name>/SKILL.md 2>&1
