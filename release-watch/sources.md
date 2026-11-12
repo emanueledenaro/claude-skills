@@ -1,36 +1,38 @@
 # Sources, commands and edit map
 
-Read by `release-watch` before the first probe. Commands are read-only. Facts marked verified were run or read on 2026-10-07; unverified ones are inference or untested here.
+Read by `release-watch` before the first probe. `rw.mjs probe` runs the checks below that a cloud session can reach; the rest are local or manual. Commands are read-only. Facts marked verified were run or read on 2026-10-07 or on the date given; unverified ones are inference or untested here.
 
 ## State file
 
-`~/.claude/release-watch/state.json`, one small object. Keys are a convention of this skill, not a Claude Code format:
+`release-watch/state.json` in the repo, written only by `node release-watch/rw.mjs apply-state <area>` inside the PR that processed the area (areas: `cli`, `models`, `limits`, `mods`, `upstream`). Keys are a convention of this skill:
 
 ```json
 {
   "checkedAt": "<ISO time>",
-  "cli": "<x.y.z>",
-  "desktopBundled": "<x.y.z or null>",
+  "cli": "<last processed x.y.z>",
   "npmTags": { "latest": "", "next": "", "stable": "" },
-  "changelogSha": "",
-  "modsTypesSha": "",
   "models": ["<id>", "..."],
-  "pageHashes": { "<url>": "<sha256 of the diffed text>" },
-  "upstreamSkills": { "plugin.json": "", "CHANGELOG.md": "", "<category>/<skill>": "<blob sha>" }
+  "modsTypes": "<sha256 of mods/types/claude-code.d.ts>",
+  "pageHashes": { "<page id>": "<sha256 of the slice>" },
+  "upstreamSkills": { ".claude-plugin/plugin.json": "<sha256>", "CHANGELOG.md": "<sha256>" }
 }
 ```
+
+- `cli` is the newest version whose changelog was read, not the installed one. It moves only in a PR that processed a version with relevant lines, so quiet releases cost a shell grep each morning and nothing else.
+- The first seed (2026-11-10) holds `cli` 2.1.293 and the model ids known before Fable 5.2, so the first run catches that backlog. Every other key was baselined the same day.
+- The older `~/.claude/release-watch/state.json` is obsolete. Its Desktop and installed-CLI keys are not kept: those checks have no memory (section 2).
 
 ## 1. Claude Code (verified)
 
 ```
-claude --version
-npm view @anthropic-ai/claude-code dist-tags --json
-gh release list -R anthropics/claude-code -L 5
-gh api repos/anthropics/claude-code/contents/CHANGELOG.md --jq .sha
+claude --version                                                  # local only
+curl -s https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags   # what the probe reads; verified 2026-11-10
+curl -sL https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md   # read only when the version moved
+gh release list -R anthropics/claude-code -L 5                    # local only: a cloud session's GitHub proxy serves attached repos only
 ```
 
 - npm tags: `latest`, `next`, `stable`. `stable` lags about one week and is what `autoUpdatesChannel: "stable"` follows; a new model can need a version newer than `stable`.
-- GitHub release tags are `vX.Y.Z`; the release body repeats the `CHANGELOG.md` entry. `CHANGELOG.md` has `## <version>` headings, newest first. Raw copy: `https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md`. The blob sha above changes whenever the file does, so it is a change detector that downloads nothing.
+- GitHub release tags are `vX.Y.Z`; the release body repeats the `CHANGELOG.md` entry. `CHANGELOG.md` has `## <version>` headings, newest first. Raw copy: `https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md`. The version heading is the change detector: the file is fetched only when npm `latest` is newer than `state.json`'s `cli`, then every `## <version>` section after it is grepped with the probe's pattern (shell, no model).
 - Notes of one version: `gh api repos/anthropics/claude-code/releases/tags/v<x.y.z> --jq .body`.
 - Docs also publish a changelog page and a weekly digest (`https://code.claude.com/docs/en/whats-new/index.md`). The digest lags the CLI by weeks: not a poll target.
 - Extra words worth grepping in changelog sections besides the list in `SKILL.md`: `--cloud`, `--ref`, `--on-branch`, `autoUpdatesChannel`, `promptCacheTtl`, `skillOverrides`, `plugin`.
@@ -39,7 +41,7 @@ gh api repos/anthropics/claude-code/contents/CHANGELOG.md --jq .sha
 
 ## 2. Desktop bundled version
 
-Verified: Desktop keeps its own copy at `%APPDATA%\Claude\claude-code\<version>\claude.exe`, and running it with `--version` printed the same version as the folder name. The folder layout is not documented by Anthropic, so it can change. The documented way is `/status` in a local Code-tab session, whose Claude Code row shows the bundled version (https://code.claude.com/docs/en/plugins/mods/overview, "Turn mods on or off"); it needs a session, so the probe above is for unattended runs. `About Claude` shows only the Desktop app version, not the bundled one.
+Verified: Desktop keeps its own copy at `%APPDATA%\Claude\claude-code\<version>\claude.exe`, and running it with `--version` printed the same version as the folder name. The folder layout is not documented by Anthropic, so it can change. The documented way is `/status` in a local Code-tab session, whose Claude Code row shows the bundled version (https://code.claude.com/docs/en/plugins/mods/overview, "Turn mods on or off"); it needs a session, so the folder probe below is for unattended local runs. A cloud routine cannot see this machine and skips it. `About Claude` shows only the Desktop app version, not the bundled one.
 
 ```powershell
 Get-ChildItem "$env:APPDATA\Claude\claude-code" -Directory | Sort-Object { [version]$_.Name } | Select-Object -Last 1 | ForEach-Object { & "$($_.FullName)\claude.exe" --version }
@@ -53,27 +55,15 @@ Git Bash: `ls "$APPDATA/Claude/claude-code/"`, then run the newest `claude.exe -
 - Known feature floors from the docs: local scheduled tasks need Desktop 1.1.5368 or later (a Desktop app version, not a Claude Code one); `claude --desktop` needs Claude Code 2.1.285 or later.
 - Several version folders: which one the app runs is unverified.
 
-## 3. Models (verified, except fetch and hash stability)
+## 3. Models (verified)
 
 - Overview: `https://platform.claude.com/docs/en/about-claude/models/overview` (canonical path moved to `/docs/en/models/overview`). New models appear as table columns.
 - Deprecations: `https://platform.claude.com/docs/en/about-claude/model-deprecations`. It has a `Model status` table and dated `### YYYY-MM-DD: ...` history headings. Some active models are in this table only, not in the overview columns: parse both.
 - Retirement needs at least 60 days' notice, and a "not sooner than" date is only a floor. A model with no deprecation entry cannot be retired within 60 days of today (inference from the notice rule).
 - Aliases: the Claude Code model-config page (`https://code.claude.com/docs/en/model-config`) has a table of what `opus`, `sonnet` and `haiku` resolve to per provider, and the minimum Claude Code version for each new model. Diff it with the ids; on 2026-10-07 `haiku` is Haiku 5.5 on the Anthropic API from v2.1.293 and Haiku 4.5 elsewhere.
-- Fetch and hash: unverified. `curl` was blocked in the research session, so plain fetch and the stability of these pages' hashes were not tested. Calibrate as in `SKILL.md` section 3.
+- Fetch and hash (verified 2026-11-10, from a local machine, not a cloud session): `https://platform.claude.com/docs/en/about-claude/models/overview.md`, `.../model-deprecations.md` and `https://code.claude.com/docs/en/<page>.md` return plain markdown, identical byte for byte on two fetches. The HTML version of the models page differs between fetches, so never hash it. Support articles are HTML: the probe hashes the text of the `<article>` element, which was identical on two fetches. The probe hashes a slice, not a page: dollar amounts and percentages for the overview, dates for the deprecations page, the alias lines for `model-config`, the limit lines for `routines`.
 
-Git Bash:
-
-```
-curl.exe -sL <url> | sha256sum
-```
-
-PowerShell (no `sha256sum`, and `curl` is an alias of `Invoke-WebRequest` in Windows PowerShell 5.1):
-
-```powershell
-$t=(Invoke-WebRequest <url> -UseBasicParsing).Content; [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($t))) -replace '-'
-```
-
-A fetch error is "not checked", never "unchanged".
+A fetch error is "not checked", never "unchanged". On Windows run `node release-watch/rw.mjs probe` from Git Bash or PowerShell; there is no per-shell hashing recipe any more.
 
 ## 4. Plans and limits
 
@@ -90,7 +80,7 @@ Compare only the numbers the person's skills state: the 5-hour (Pro and Max; non
 
 ## 5. Mods API
 
-- Contract: `https://github.com/anthropics/claude-code/blob/main/mods/types/claude-code.d.ts`. Change detector: `gh api repos/anthropics/claude-code/contents/mods/types/claude-code.d.ts --jq .sha`.
+- Contract: `https://github.com/anthropics/claude-code/blob/main/mods/types/claude-code.d.ts`. Change detector: the probe's sha256 of the raw file (`https://raw.githubusercontent.com/anthropics/claude-code/main/mods/types/claude-code.d.ts`, about 520 KB).
 - Docs pages to diff: `https://code.claude.com/docs/en/plugins/mods/{api,reference,events,interface,create,admin}.md`. The reference states the version it is accurate for ("as of v2.1.NNN"); a newer number there than in `smart-mods` is a signal.
 - There is no separate mods API version number or compatibility policy (none found). Whether breaking changes are flagged in the changelog is unknown.
 - A mod reads the installed version with `$.session.version` and plan limits with `$.session.usage()`.
@@ -100,8 +90,8 @@ Compare only the numbers the person's skills state: the 5-hour (Pro and Max; non
 
 - Upstream is `mattpocock/skills` (verified 2026-10-07): `skills/<category>/<name>/SKILL.md`, categories engineering, productivity, misc, in-progress, deprecated, plus `.claude-plugin/plugin.json` (plugin `mattpocock-skills`) and `CHANGELOG.md`.
 - Installed copies under `~/.claude/skills` are plain folders with no lock entry, from an older release with older names (`matt-bridge` lists both sets). Never diff them against upstream by sha: they always differ. Compare upstream with the last-seen upstream sha in the state file (`upstreamSkills`).
-- Cheap gate first, per call `--jq .sha`: `gh api repos/mattpocock/skills/contents/.claude-plugin/plugin.json` and `gh api repos/mattpocock/skills/contents/CHANGELOG.md`. Both unchanged: skip the rest.
-- Else per category `gh api repos/mattpocock/skills/contents/skills/<category> --jq '[.[].name]'`: a changed list means a skill was added, renamed or removed, so check the name map in `matt-bridge`. Then per skill `gh api repos/mattpocock/skills/contents/skills/<category>/<name>/SKILL.md --jq .sha`. A different sha means read the diff; it never means copy it over: `matt-bridge` adapts around his text and never rewrites it.
+- Cheap gate, and the only part a cloud run can do: the probe's sha256 of the raw `.claude-plugin/plugin.json` and `CHANGELOG.md`. A cloud session's GitHub proxy serves only the repositories attached to the session, so `gh api repos/mattpocock/skills/...` fails there. A change makes the PR owner-only (`apply.md` section 3); the routine lists the new changelog entries and does not rewrite `matt-bridge`.
+- Locally, after a change, per category `gh api repos/mattpocock/skills/contents/skills/<category> --jq '[.[].name]'`: a changed list means a skill was added, renamed or removed, so check the name map in `matt-bridge`. Then per skill `gh api repos/mattpocock/skills/contents/skills/<category>/<name>/SKILL.md --jq .sha`. A different sha means read the diff; it never means copy it over: `matt-bridge` adapts around his text and never rewrites it.
 
 ## 7. Edit map
 
@@ -120,11 +110,26 @@ Which skill holds the line a change probably touches. Find the line with `grep -
 
 Skills named here may not all be installed: skip a row whose skill is missing.
 
-## 8. Scheduling
+## 8. Scheduling: the cloud routine
 
-Only after the person says yes in chat, one option at a time. Cheapest first. Every option draws from the same weekly budget (and 5-hour window on Pro and Max) as interactive use (routines and scheduled tasks: "same as interactive sessions", no per-run figure published), so run the budget check in `model-mix` before adding a frequent schedule, and take a before and after reading of the first run (`budget.md`, Run cost). Cadence: daily is enough for the CLI version, weekly for models, limits, mods and upstream skills.
+Cloud scheduled tasks, formerly routines. Source: https://code.claude.com/docs/en/routines, read 2026-11-10. Setup steps are in `SKILL.md` section 4; the prompt is `routine.md`.
 
-- **OS scheduler, no model (Windows Task Scheduler running a probe script):** zero model use when nothing changed, and the script calls `claude -p` only on change. Unverified: it is an inference, not a documented pattern, and Task Scheduler was not inspected on this machine. The script does not exist yet; write it from the commands above and test it by hand first. `claude --bare` needs `ANTHROPIC_API_KEY` and cannot use a Max login, so do not use it here.
-- **Desktop local scheduled task:** runs only while the app is open and the computer awake; a missed run gets one catch-up run within 7 days; minimum interval 1 minute; Name, Description, Instructions with permission mode and model pickers, Schedule, folder, optional worktree; needs Desktop 1.1.5368 or later. It always starts a Claude session (shell-only is not documented). In Manual permission mode it stalls when a tool needs approval, so the shell and fetch commands need allow rules. Model per `model-mix`, own folder, no worktree.
-- **Cloud routine (`/schedule` or the routines page):** runs without the machine, minimum interval 1 hour, clones a GitHub repo on every run and is skipped, then turned off after 72 hours, when GitHub is disconnected. It runs without permission prompts and with all connectors included by default, so remove every connector. A green status only means the session ended without an infrastructure error. It cannot see this machine, so it cannot read the Desktop bundle or the state file here: keep the state in the repo (inference) and limit it to the GitHub and web sources.
-- The prompt of any scheduled run is self-contained and shell-first: run the commands, stop silent when nothing changed, otherwise write the report. It never edits skills.
+Documented:
+
+- Available on Pro, Max, Ultra, Team and Enterprise. Created at https://claude.ai/code/routines or with `/schedule` (alias `/routines`) in a terminal; `/schedule` is not available inside a cloud session and needs a claude.ai login, not a Console API key.
+- A schedule trigger takes a preset or a custom cron; expressions more often than once per hour are rejected. A preset frequency takes the time in the local time zone; a Custom cron is available in the edit dialog after the task exists, and is read in UTC unless it starts with `CRON_TZ=<zone>`. A run on the hour can start several minutes late.
+- Each run is a new full cloud session: the repository is cloned from its default branch, the prompt is the saved one, the model and effort come from the selector, all connectors are included by default (remove them). Auto mode is on unless unavailable; repeated classifier blocks stop the run and wait for a person.
+- Claude pushes to `claude/`-prefixed branches unless the prompt names another branch. Branch protection or rulesets control where a run can push.
+- Limits: scheduled runs 100 per hour per account; Run now plus API fires 30 per hour per task. Runs draw down subscription usage like interactive sessions, with no per-run figure published.
+- Skipped, then turned off after 72 hours, when the GitHub connection is missing or expired.
+- Cloud sessions reach Anthropic docs, support, platform, the npm registry and raw.githubusercontent.com on the default Trusted network access (https://code.claude.com/docs/en/cloud-environments, "Default allowed domains"). `gh pr` and `gh issue` fail there, because the GitHub proxy refuses GraphQL; `gh api repos/...` REST calls work for the attached repository.
+- Node 22 is on `PATH` in the cloud VM, so `rw.mjs` runs as is.
+
+Unverified, not tested because no routine was created:
+
+- That the REST merge (`PUT /pulls/N/merge` with `merge_method=squash` and `sha`) is allowed through the GitHub proxy.
+- That the auto mode classifier lets an unattended run merge a PR. The routine page says a fired prompt cannot act as consent for an action during the run.
+- That the Agent tool in a cloud session accepts `model` and `effort` per call, and that Haiku 5.5 is selectable there by id.
+- That the probe's fetches work from the cloud VM. They were run from a local machine; the domains are on the allowlist.
+- That `gh api repos/<repo>/pulls` (the probe's open-PR listing) and a `git fetch` of a PR branch work through the proxy; if not, the probe says so and the routine stops when an open release-watch PR exists.
+- The plan usage of one change day. Read the weekly percent before and after.
