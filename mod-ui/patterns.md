@@ -27,7 +27,7 @@ on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
 
 ## Band
 
-One row of groups joined by a dim ` · `: the state dot and word, then weekly use against pace, the 5-hour window (Pro and Max; Ultra has none, so the group is left out), workers running, stalled, decisions, night. Pace color sits only on the dot and the stalled or paused group; the rest is dim. When the groups do not fit `cols - 2`, split into two rows and truncate the last text with `wrap: 'truncate-end'`. `paddingX: 1`, no border, no Button.
+One row of groups joined by a dim ` · `: the state dot and word, then weekly use against pace, the 5-hour window (Pro and Max; a verified Ultra account has none, so the group is left out there), workers running, stalled, decisions, night. Pace color sits only on the dot and the stalled or paused group; the rest is dim. When the groups do not fit `cols - 2`, split into two rows and truncate the last text with `wrap: 'truncate-end'`. `paddingX: 1`, no border, no Button.
 
 ## Pane
 
