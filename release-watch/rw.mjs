@@ -32,10 +32,8 @@ const RULE_CONTEXT = /\b(always|never|only|must|at most|at least|unless|until|st
 
 const URL_RE = /(https?):\/\/([^/\s)>\]"'`]+)([^\s)>\]"'`]*)/gi
 const SOURCES_FILE = 'release-watch/sources.md'
-// Hosts are matched whole, on a dot boundary: no user, port or query can sit in front of the name.
-// On GitHub hosts the first path segments name the owner and the repository (api.github.com: /repos/owner/repo).
-const GITHUB_HOST = /^([a-z0-9-]+\.)*(github\.com|githubusercontent\.com)$/i
-// On Anthropic hosts the vendor's own pages may move.
+// Hosts are matched whole, on a dot boundary: a user, a port or a query in the host part never matches,
+// so such a URL is compared whole. On Anthropic hosts the vendor's own pages may move.
 const ANTHROPIC_HOST = /^([a-z0-9-]+\.)*(claude\.com|claude\.ai|anthropic\.com)$/i
 // A path the server may resolve to another place: dot segments, escapes, backslashes, empty segments.
 const TRICKY_PATH = /\.\.|(^|\/)\.(\/|$)|%|\\|\/\//
@@ -62,17 +60,27 @@ const UNIT_MASKS = [
 // A quote that holds a URL is not masked: the URL inside it is judged like any other.
 const QUOTE = /"[^"\0]{1,160}"/g
 
-// A URL may change only in sources.md, and there only its path below an Anthropic host, or below owner,
-// repository and the next segment on a GitHub host. Everywhere else, on any other host, and for any path
-// that holds a dot segment, an escape, a backslash or an empty segment, the URL is compared exactly as written
-// (the raw text is checked, never a parsed URL). The scheme is always part of the key.
+// The only GitHub URL shapes whose tail may change, each with its prefix that must stay: on github.com
+// owner/repo/(blob|tree)/ref, on raw.githubusercontent.com owner/repo/ref. The ref is kept because GitHub
+// serves a fork's commits under the parent's URL. A `refs/...` ref is refused (its branch name runs past
+// the kept prefix). Every other GitHub host or shape (raw/, commits, releases, archive, compare, the API)
+// is compared whole.
+const GITHUB_SHAPES = [
+  [/^github\.com$/i, /^\/[^/]+\/[^/]+\/(blob|tree)\/(?!refs\/)[^/]+\/[^/]/],
+  [/^raw\.githubusercontent\.com$/i, /^\/[^/]+\/[^/]+\/(?!refs\/)[^/]+\/[^/]/],
+]
+
+// A URL may change only in sources.md, and there only its path below an Anthropic host, or its tail below
+// one of the GITHUB_SHAPES prefixes. Everywhere else, on any other host or GitHub shape, for any URL with a
+// query, and for any path that holds a dot segment, an escape, a backslash or an empty segment, the URL is
+// compared exactly as written (the raw text is checked, never a parsed URL). The scheme is always part of the key.
 function urlKey(scheme, host, path, inSources) {
   const whole = `${scheme}://${host}${path}`
-  if (!inSources || TRICKY_PATH.test(path)) return whole
+  if (!inSources || TRICKY_PATH.test(path) || `${host}${path}`.includes('?')) return whole
   if (ANTHROPIC_HOST.test(host)) return `${scheme}://${host}/§P`
-  if (!GITHUB_HOST.test(host)) return whole
-  const keep = /^api\./i.test(host) ? 4 : 3
-  return `${scheme}://${host}/${path.split('/').slice(1, 1 + keep).join('/')}/§P`
+  const shape = GITHUB_SHAPES.find(([h, p]) => h.test(host) && p.test(path))
+  if (!shape) return whole
+  return `${scheme}://${host}${path.match(shape[1])[0].slice(0, -1)}§P`
 }
 
 export function normalize(line, file = '') {

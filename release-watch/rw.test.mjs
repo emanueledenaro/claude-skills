@@ -177,6 +177,39 @@ test('r2 finding 5: the latest comment from the routine for the head decides, an
   assert.equal(rw.hasPass([{ id: 2, ...fail }, { id: 1, ...pass }], 'routine-bot', head), false)
 })
 
+// ---- third review of PR #21 ----
+
+const GH = 'https://github.com/anthropics/claude-code'
+const SHA = 'f'.repeat(40)
+
+test('r3 finding 1: a GitHub ref change, or any GitHub url shape other than blob/tree on github.com and owner/repo/ref on raw, is RULE', () => {
+  const rule = [
+    ['blob ref', `${GH}/blob/main/mods/x.d.ts`, `${GH}/blob/${SHA}/mods/x.d.ts`],
+    ['tree ref', `${GH}/tree/main/mods`, `${GH}/tree/${SHA}/mods`],
+    ['raw form', `${GH}/raw/main/x.md`, `${GH}/raw/${SHA}/x.md`],
+    ['commits', `${GH}/commits/main/x.md`, `${GH}/commits/${SHA}/x.md`],
+    ['release tag', `${GH}/releases/tag/v2.1.1/x`, `${GH}/releases/tag/evil/x`],
+    ['archive', `${GH}/archive/main/x.zip`, `${GH}/archive/${SHA}/x.zip`],
+    ['compare', `${GH}/compare/main/x`, `${GH}/compare/main/y`],
+    ['raw refs/heads', 'https://raw.githubusercontent.com/anthropics/claude-code/refs/heads/main/x.md', 'https://raw.githubusercontent.com/anthropics/claude-code/refs/heads/evil/x.md'],
+    ['api', 'https://api.github.com/repos/anthropics/claude-code/git/blobs/a', 'https://api.github.com/repos/anthropics/claude-code/git/blobs/b'],
+    ['other github host', 'https://codeload.github.com/anthropics/claude-code/zip/main/a', 'https://codeload.github.com/anthropics/claude-code/zip/main/b'],
+  ]
+  for (const [name, from, to] of rule) assert.equal(verdict(SRC, [[`see ${from}`, `see ${to}`]]), 'RULE', name)
+  assert.equal(verdict(SRC, [[`see ${GH}/blob/main/mods/types/a.d.ts`, `see ${GH}/blob/main/mods/types/b.d.ts`]]), 'FACT', 'blob path below the ref')
+})
+
+test('r3 finding 2: a url with a query is compared whole on every host', () => {
+  const rule = [
+    ['blob ?repo', `${GH}/blob/main/x.md`, `${GH}/blob/main/x.md?repo=evil`],
+    ['anthropic query', 'https://code.claude.com/docs/en/a?v=1', 'https://code.claude.com/docs/en/a?v=2'],
+    ['raw query', 'https://raw.githubusercontent.com/anthropics/claude-code/main/x.md?a=1', 'https://raw.githubusercontent.com/anthropics/claude-code/main/x.md?a=2'],
+    ['api ?ref', 'https://api.github.com/repos/anthropics/claude-code/contents/x.md?ref=main', `https://api.github.com/repos/anthropics/claude-code/contents/x.md?ref=${SHA}`],
+    ['query in the host part', 'https://code.claude.com?a', 'https://code.claude.com?b'],
+  ]
+  for (const [name, from, to] of rule) assert.equal(verdict(SRC, [[`see ${from}`, `see ${to}`]]), 'RULE', name)
+})
+
 // ---- the routine's documents stay in line with model-mix ----
 
 const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8')
