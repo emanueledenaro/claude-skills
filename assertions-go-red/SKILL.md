@@ -16,7 +16,7 @@ For each new or changed assertion:
 
 The PR body lists each mutation and the red line it produced, one row per assertion: mutation, test, red line.
 
-A red run is saved as evidence, so its output holds no secrets: a failure message never prints the environment or a variable's value (no env dumps, `repr=False` on env fields, no `--showlocals`). Why: on 2026-11-13 a worker's first red run printed the whole environment, a personal access token included, into a log and its own output. If it happens: delete the log, check git history, the PR body and the evidence for the value without printing it (`grep -c`), and tell the person to rotate the token.
+A red run is saved as evidence, so its output holds no secrets: a failure message never prints the environment or a variable's value (no env dumps, `repr=False` on env fields, no `--showlocals`). Why: on 2026-11-13 a worker's first red run printed the whole environment, a personal access token included, into a log and its own output. If it happens: delete the log, check git history, the PR body and the evidence for the value without printing it (`grep -rcF -- "$VAR"` with the variable's name, never the literal value on a command line), and tell the person to rotate the token.
 
 ## 2. A mutation can mask another
 
