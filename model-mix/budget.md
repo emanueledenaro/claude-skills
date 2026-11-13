@@ -8,6 +8,7 @@ How `model-mix` turns a usage reading into a color. When a usage mod already put
 - **Terminal session:** read the file named by `usage file:` in the person's plan line, which their statusline script writes from `rate_limits.five_hour` and `rate_limits.seven_day` (`used_percentage`, `resets_at` in epoch seconds). The statusline has no Fable window. Without that file, ask the person for `/usage`.
 - On Ultra, no `Current session` bar in Settings > Usage means a verified account with no five-hour limit: the weekly limit and the Fable weekly limit are the ones to read. If the bar shows, the account is unverified and has a temporary limit: treat that bar as the 5-hour window.
 - A reading counts only if it is less than 10 minutes old and its `resetsAt` is still in the future. Ignore a missing window. With no valid reading and nobody to ask (overnight, unattended), the color is red until the next wakeup.
+- With the person present, a stale reading keeps the color of the last real reading until they send a new one. A plan to redeem a reset ("I will redeem the reset") is not a reading, and neither is a guess. Why: on 2026-11-13 the run went on as green after such a promise and the next reading was 96%.
 - Limits are per account: other sessions, cloud workers, routines and the person's chats spend the same budget.
 
 ## Compute
