@@ -29,6 +29,7 @@ Decide how a run without the person is set up, woken, paced and reported. Nothin
 - **Fallback loop.** Start `/loop` with no interval: it is self-paced, Claude picks a delay from 1 minute to 1 hour with `ScheduleWakeup`. Ask for 30 minutes (any value from 30 to 55 stays under the 1-hour cache) unless an event is pending. Never use 60 to 270 second keep-alive beats on a subscription: they spend usage for nothing.
 - End every wake by scheduling the next one or by stopping the loop (`ScheduleWakeup` with `stop: true`, v2.1.202+). An iteration that does neither gets one fallback wake about 20 minutes later and then the loop ends. `Esc` clears a pending wake.
 - A restart loses self-paced loops and monitors, and recurring scheduled tasks expire after 7 days: the state file is what re-arms them.
+- A harness server restart kills background shells and waiters (rc=143) but not `nohup` jobs. On the next wake, re-arm the waiters from the state file and tell each worker whose check died to rerun it (2026-11-13: a full check was killed at the restart while the gate survived).
 - Unverified: that a self-paced wake counts as the main conversation for the 1-hour cache. Check `/usage` after the first wake.
 - Desktop's CI status bar can auto-fix CI and auto-merge. Auto-merge stays off (`coordinator-method`). Auto-fix CI is the person's choice: ask before turning it on.
 
