@@ -15,8 +15,8 @@ Rules for heavy checks that must run on the developer's own machine, with severa
 ## 2. Memory preflight
 
 - Before a check, read the container VM's memory (`docker info --format '{{.MemTotal}}'`) and compare it with what the services need, plus headroom. An identity server such as Keycloak needs about 1.2 GiB alone. A demo that is still running counts too.
-- Count the heavy containers before starting a check (Keycloak is about 1.2 GiB each, so a 5.9 GiB VM holds three with a check on top). Keep at most one per running worker plus the demo, and stop the dev stack of a parked worktree (`docker compose -p <name> stop`, volumes kept) instead of letting checks queue. Why: on 2026-11-13 three workers waited 20+ minutes on memory and one gave up after 53.
-- A check that stops on low memory is a memory block, not a time box: free memory, then resume it.
+- Count the heavy containers before starting a check (a 5.9 GiB VM holds three Keycloaks, the checks' own included; a fourth blocks every check). Keep at most one per running worker plus the demo, and stop the dev stack of a parked worktree (`docker compose -p <name> stop`, volumes kept) instead of letting checks queue. Why: on 2026-11-13 three workers waited 20+ minutes on memory and one gave up after 53.
+- A check that stops on low memory is a memory block: free memory, then resume it (the time box does not count the wait, `coordinator-method`).
 - Exit code 137 means the process was killed, here almost always for lack of memory. Name the service and the VM memory in the report. Do not retry blind.
 - Restart or resize the VM only between checks and under the lock: it kills every other agent's containers.
 - Why: in one run a VM that was too small passed for flaky tests and cost about six hours.
