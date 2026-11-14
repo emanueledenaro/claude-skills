@@ -73,6 +73,8 @@ nohup ./check.sh > "$LOG" 2>&1 & echo $! > "$PIDFILE"
 while kill -0 "$(cat "$PIDFILE")" 2>/dev/null; do sleep 15; done; tail -n 40 "$LOG"
 ```
 
+Start long runs in their own session, not plain `nohup &`: a tool shell takes its whole process group with it, and the job dies with no last line (`setsid` on Linux; on macOS a `python3 -I -c` wrapper that calls `os.setsid()` and then execs the command). A PID that is gone with no `exit=` line is a dead job: the waiter says so.
+
 ## Done when
 
 - Every heavy check ran under the shared lock, after the memory and disk preflight.
