@@ -1,0 +1,69 @@
+name: check
+
+# The rules are in checks/ and git-conventions/check/. Run the same commands locally before pushing:
+# checks/README.md lists them.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Tests of the check script
+        run: node --test checks/rules.test.mjs checks/cli.test.mjs
+
+      - name: Files (dashes, stock AI words, SKILL.md line cap)
+        if: ${{ !cancelled() }}
+        run: node checks/cli.mjs files
+
+      # Pull request text reaches the shell only through the environment, never inside the script.
+      - name: Commit subjects (git-conventions)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node git-conventions/check/cli.mjs commit-range "origin/$BASE_REF" "$HEAD_SHA"
+
+      - name: Commit messages (dashes, stock AI words)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node checks/cli.mjs commits "origin/$BASE_REF" "$HEAD_SHA"
+
+      - name: PR title (git-conventions)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: node git-conventions/check/cli.mjs pr-title "$PR_TITLE"
+
+      - name: PR title and body (dashes, stock AI words)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          status=0
+          printf '%s' "$PR_TITLE" | node checks/cli.mjs text 'PR title' || status=1
+          printf '%s' "$PR_BODY" | node checks/cli.mjs text 'PR body' || status=1
+          exit "$status"

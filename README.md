@@ -122,6 +122,10 @@ claude plugin install skill-router@emanueledenaro
 
 To try them first, run `claude --plugin-dir mods/model-guard --plugin-dir mods/skill-router` from a clone. Turn one off in `/plugin` (Desktop: + → Plugins → Manage plugins).
 
+## Checks
+
+Every pull request runs the `check` workflow: no em or en dashes in any file, no stock AI words in Markdown, every `SKILL.md` within 120 lines, and commit subjects and the PR title in the `git-conventions` format. [checks/README.md](checks/README.md) has the commands to run before pushing.
+
 ## License
 
 MIT
