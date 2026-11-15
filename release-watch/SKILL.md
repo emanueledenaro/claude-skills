@@ -1,56 +1,60 @@
 ---
 name: release-watch
-description: "Checks for upstream changes that should update the person's skills and mods: new Claude Code releases and changelog entries, the Desktop app's bundled Claude Code version, new or retiring models and aliases (the Haiku, Sonnet and Opus rows of model-mix), plan and limit changes, mods API changes, upstream changes to Matt Pocock's skills. Shell and hashes first, no model unless something changed; the output is a list of concrete edits, never the edits themselves. Use when asked whether anything new shipped, after a Claude Code update, when a feature or fix seems missing, when a model release or retirement may touch model-mix, or before changing a skill on a version, price or limit fact, in any project."
+description: "Watches upstream for changes that make the person's skills stale and fixes them: Claude Code releases, new or retiring models and aliases, prices, plan limits, the mods API, Matt Pocock's skills. A no-model shell probe runs first; on a change the facts are verified, written to the skills on a branch, reviewed by Opus, and merged when only facts changed or left for the owner when a rule changed. Runs every morning as a cloud routine. Use for 'novità di Claude', 'nuovo modello', 'aggiorna le skill', whether anything new shipped, after a Claude Code update, when a model, price, limit or version fact looks stale, or to set up or repair the routine, in any project."
 ---
 
-Decide whether anything outside the person's setup changed, and which skill line that touches. The probe is shell commands with no model; a model reads only what changed. Skill and mod rules that depend on a version or a limit live in `model-mix`, `smart-mods`, `coordinator-method` and `overnight`; this skill only finds the drift and proposes the edit. Sources, exact commands and the edit map are in `sources.md`: read it before the first probe.
+Decide whether anything outside the repo changed, and when it did, update the skills that state it. The probe is `rw.mjs`: shell only, no model. A model starts only when the probe reports a change. Sources, exact commands and the edit map are in `sources.md`; the flow after a change is `apply.md`; the cloud routine's prompt is `routine.md`. Memory between runs is `state.json` in this folder, changed only by the PR that processed it.
 
 ## 1. Gate
 
-- Run when asked, after `claude update` or a new session on a newer version, or when a skill's version floor, model id or limit looks wrong.
-- Do not run it on a schedule, and do not create a routine or scheduled task, without the person's yes in chat. Any schedule is a standing configuration: say so. Pick the option from "Scheduling" in `sources.md`, cheapest first; only a cloud routine goes through the built-in `schedule` skill.
-- Read-only: nothing is posted to GitHub, no login or credential is opened, no skill or mod is edited. Quote at most 15 words from any page.
+- Runs: every morning as the cloud routine (section 4), or on request, after `claude update`, or when a skill's version floor, model id, price or limit looks wrong.
+- Fixing the skills is the job now. Creating, changing or deleting the routine is a standing configuration: do it only after the person says yes in chat.
+- Read-only toward everything outside this repo: no login, no credential, no post anywhere. Quote at most 15 words from a page.
+- Never switch branches in the clone that the live skills are symlinked into. Work in a git worktree off `origin/main`.
 
-## 2. Probe with no model
+## 2. Probe, no model
 
-- Keep the last-seen values in one file, `~/.claude/release-watch/state.json`: CLI version, Desktop bundled version, CHANGELOG blob sha, mods types blob sha, the model ids seen, one text hash per watched page, one sha per watched upstream skill. A missing key means first run: record the values, report them as the baseline, propose nothing.
-- Run the commands in `sources.md` for each area. Compare each value with the stored one. Equal everywhere: say "nothing changed", update the timestamp and stop. This is the usual result, and it costs no model call.
-- Prefer `gh api` for GitHub sources (verified: tags, blob shas). For docs and support pages, hash the page text, not a date: support articles show only a relative "Last Updated".
-- A fetch that fails or is blocked is "not checked", never "unchanged". Say which area was not checked and why.
+```
+node release-watch/rw.mjs probe            # what a cloud run can see
+node release-watch/rw.mjs probe --local    # adds the installed CLI version
+```
 
-## 3. Calibrate before trusting a hash
+- It compares npm dist-tags and the Claude Code changelog (read only when the version moved), model ids on the models pages, hashes of watched slices of docs and support pages, the mods types file, and Matt's `plugin.json` and `CHANGELOG.md`, against `state.json`. Exit 0 nothing to do, 10 something changed, 2 error.
+- Nothing changed: say so in one line and stop. This is the usual result and costs no model call. Do not update the state.
+- A source that fails to load is "not checked", never "unchanged". A key missing from `state.json` is a baseline: record it, propose no edit.
+- Local only, never in the cloud: the Desktop bundled version, the installed CLI, and drift between installed skill copies and this repo. They have no stored memory; compare the value with the skills' version floors. Installed-skill drift belongs to `project-setup`.
+- Plain fetch works for every watched URL (checked 2026-11-10) and the slices hash the same twice. If a page breaks that, fix the slice in `rw.mjs`; do not hash a whole page that changes with its build.
 
-Plain fetch of the docs and support pages, and the stability of their hashes, is unverified. Before the first schedule, and before believing the first "changed":
+## 3. A change: verify, edit, review, merge or wait
 
-- Fetch each watched page twice in a row and compare the hashes. If they differ with nothing changed, hash only the part you diff (the model-id table, the usage section, the headings) instead of the whole page.
-- If plain fetch is blocked, a model-based fetch works but spends a call per page. Then check weekly, not daily, and tell the person.
-- Record in the state file which pages hash stably.
+`apply.md` has the steps. In short:
 
-## 4. Read only what changed
+1. Group the changes by area and verify every statement the skills make about the area (`verified-research`, official sources, a verifier that did not write the claim, on Opus as `model-mix` sets for verify stages unless the owner sets otherwise). Unverified claims are not written.
+2. Edit every affected skill and `README.md` on `chore/release-watch-<yyyy-mm-dd>`, one commit per area, `git-conventions` headers, and advance `state.json` in the same PR.
+3. Run `node release-watch/rw.mjs classify origin/main HEAD`. It is the only judge of fact versus rule.
+4. Open the PR, get an Opus high review of the diff against the sources (state-only PRs too), apply its fixes as new commits.
+5. FACT, with a review comment `PASS <sha>` for the exact head: squash-merge it yourself on that head. RULE: leave it open, label `needs-owner`, first line `NEEDS OWNER`, one plain paragraph on the rule change.
 
-- **Claude Code:** read only the `## <version>` sections of `CHANGELOG.md` between the last-seen and the latest version. Grep them for `model`, `mod`, `prompt.`, `$.model`, `agent.spawn`, `effort`, `schedule`, `routine`, `/usage`, `limit`, `Windows`, `PowerShell`, `CRLF`; ignore the rest.
-- **Desktop:** `/status` in a local Code-tab session shows the bundled version on its Claude Code row (mods overview docs), but that needs a session. With no person and no model, read it from the folder `%APPDATA%\Claude\claude-code\` and run the newest `claude.exe --version` there; that layout is undocumented. Never assume it equals the CLI. If several version folders exist, which one the app uses is unverified: take the newest and say so. If the folder is missing, ask the person once.
-- **Models:** diff the ids in the models overview and the `Model status` table of the deprecations page, both. Some models appear only in the second. Flag any new id, any change in what `haiku`, `sonnet` or `opus` resolves to, a Haiku price change around the 100K-token step, and any retirement within 30 days. A "not sooner than" date is a floor, not a retirement date.
-- **Plans and limits:** on a changed hash, summarize the diff and compare it with the numbers in `model-mix/budget.md` and the plan table in `model-mix/SKILL.md`.
-- **Mods:** the contract is `mods/types/claude-code.d.ts` on GitHub, which can be older than the installed version, plus the "as of v2.1.NNN" marker in the mods reference. The types Claude Code writes for the installed build win.
-- **Matt Pocock's skills:** upstream is `mattpocock/skills` (`skills/<category>/<name>/SKILL.md`, categories engineering, productivity, misc, in-progress, deprecated). Compare each upstream sha with the last-seen upstream sha in the state file, never with the installed copy: the installed copies are an older release with older names (see `matt-bridge`). Start from the plugin and `CHANGELOG.md` shas, and list each category's names to catch added, renamed or removed skills.
+What counts as a fact and what as a rule is defined once, in `apply.md` section 3, and decided by `classify`. A mixed run splits into two PRs when clean, else waits as one. Upstream skills (Matt's), refuted and unverified claims also wait.
 
-When the interpreting step needs a model (a long diff), one agent, per `model-mix`, no fan-out.
+## 4. The daily routine
 
-## 5. Report
+Set up once, after this PR is merged (the routine clones the default branch). Docs: https://code.claude.com/docs/en/routines ("Create a scheduled task", "Add a schedule trigger"). Cloud tasks need a claude.ai login (not an API key) and GitHub access for this repo (`/web-setup`, or the Claude GitHub App).
 
-One short block per area (version, Desktop, models, limits, mods, Matt):
+1. Open https://claude.ai/code/routines and click **New task** (**New routine** on some accounts), or run `/schedule` in a terminal outside a cloud session.
+2. Name `release-watch`. Prompt, one line: `Read release-watch/routine.md in this repository and do exactly what it says.`
+3. Repository: this one. Environment: **Default** (Trusted network access reaches every watched domain).
+4. Model **Sonnet**, effort **high**, in the prompt box selector.
+5. Connectors tab: remove all.
+6. Trigger **Schedule**, preset **Daily**, at 08:07. Presets take your local time zone, so daylight saving needs nothing from you. A run set exactly on the hour can start several minutes late, which is why it is 08:07 and not 08:00.
+7. **Create**, then **Run now** once and read the transcript: a quiet day prints one line.
 
-- old -> new, and the command or URL used.
-- the skill file and line to change: find it with `grep -n` on the old value, and quote the line. Use the edit map in `sources.md`.
-- the proposed new text, or "no edit needed".
-- what a new feature needs: a version floor, and whether the Desktop bundle meets it.
-
-Order by what breaks something first: a retired model, a removed API, a changed limit, then new features. Then ask which edits to make. Edits go through the normal rules of the skill concerned; a new model slot follows the trial rule written in `model-mix`.
+Budget gate. The routine uses the same plan usage as interactive sessions, and a cloud session cannot read usage, so the gate sits in the main session. Run the `model-mix` budget check before enabling the routine. When a later check reads red, or usage credits would be drawn (`model-mix/budget.md`, Usage credits on), tell the person and offer to pause the routine (a change to it needs their yes, section 1). Inside a run, `routine.md` caps the agents at 8 and, on any limit or credits signal, stops after the probe and opens nothing, leaving a one-line note. Read the weekly percent before and after its first change day. Unverified points are listed in `sources.md` section 8.
 
 ## Done when
 
-- [ ] Every area is marked changed, unchanged or not checked, with the reason for "not checked".
-- [ ] State file updated with the new last-seen values, and only after the report is shown.
-- [ ] Each proposed edit names a file and a line, or says none is needed.
-- [ ] No routine, scheduled task or skill edit was made without the person's yes.
+- [ ] Every area is marked changed, unchanged or not checked, with the reason.
+- [ ] Each fact written has an opened, dated official source, or is under "Not applied".
+- [ ] `classify` ran on the final head; FACT PRs merged on the reviewed sha, RULE PRs wait with the label.
+- [ ] `state.json` moved only inside the PR that processed the area.
+- [ ] No routine was created or changed without the person's yes.
