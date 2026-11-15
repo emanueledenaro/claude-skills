@@ -73,6 +73,8 @@ nohup ./check.sh > "$LOG" 2>&1 & echo $! > "$PIDFILE"
 while kill -0 "$(cat "$PIDFILE")" 2>/dev/null; do sleep 15; done; tail -n 40 "$LOG"
 ```
 
+Start long runs in their own session, not plain `nohup &` as above: a tool shell takes its whole process group with it, and the job dies with no last line. On Linux put `setsid` before `./check.sh`; macOS has no `setsid`, so use `python3 -I -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' ./check.sh`. The waiter only prints the tail: a tail with no `exit=` line means the job died, so report it as dead.
+
 ## Done when
 
 - Every heavy check ran under the shared lock, after the memory and disk preflight.
