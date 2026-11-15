@@ -14,7 +14,7 @@ Personal skills for running Claude Code as a coordinator that delegates work to 
 | [roadmap-tracker](roadmap-tracker/SKILL.md) | Tracker hygiene for the roadmap: pinned issue, milestones on every issue, labels mapped to the queue, tickets closed with the PR that landed them. |
 | [matt-bridge](matt-bridge/SKILL.md) | How Matt Pocock's skills run inside the coordinator method, and which rule wins where they differ. |
 | [verified-research](verified-research/SKILL.md) | Researching fast-changing facts with parallel readers, adversarial verifiers and a critic, and reporting them sorted by what survived. |
-| [release-watch](release-watch/SKILL.md) | Cheap checks for Claude Code, Desktop, model, plan and upstream skill changes that should update the skills and mods. |
+| [release-watch](release-watch/SKILL.md) | Watches Claude Code, model, price, plan and upstream skill changes with a no-model probe. On a change it verifies the facts, edits the skills on a branch, gets an Opus review and squash-merges fact-only PRs itself; a rule change waits for you. Runs every morning as a cloud routine; the prompt, the state file and the fact-or-rule test are in the folder. |
 | [skill-audit](skill-audit/SKILL.md) | Auditing skills for trigger quality, size, duplication, stale facts and token cost, with concrete edits. |
 | [context-hygiene](context-hygiene/SKILL.md) | Keeping sessions cheap: what every turn pays, how to measure it, when to compact, clear or hand off. |
 | [windows-ops](windows-ops/SKILL.md) | What an agent must know on Windows 11: shells, Git Bash path conversion, long paths, line endings, missing tools, where Claude Code keeps its files. |

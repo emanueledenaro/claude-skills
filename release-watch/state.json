@@ -1,0 +1,52 @@
+{
+  "checkedAt": "2026-11-10T00:00:00Z",
+  "cli": "2.1.293",
+  "models": [
+    "claude-fable-5",
+    "claude-fable-5-1",
+    "claude-haiku-4-5-20251001",
+    "claude-haiku-5-5",
+    "claude-mythos-5",
+    "claude-mythos-5-1",
+    "claude-opus-4-1-20250805",
+    "claude-opus-4-20250514",
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-opus-5-5",
+    "claude-sonnet-4-20250514",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-6",
+    "claude-sonnet-5",
+    "claude-sonnet-5-5"
+  ],
+  "modsTypes": "20a1f8726b6a1511ca1c32e44054f9fc6041dfbb0da6df9b53b5f1b13d5d0662",
+  "npmTags": {
+    "latest": "2.1.322",
+    "next": "2.1.322",
+    "stable": "2.1.311"
+  },
+  "pageHashes": {
+    "claude-code-on-plan": "e0807626adfc8b74eb6178f6da7cd85d950e2c5d5f322b01532f7890d801ce8e",
+    "fable-on-plan": "ddfd6bb1438aab4915b0cdd72e8cc6012178a806af63733364c0645a8caf36e7",
+    "model-config": "84ffb50827a27afbe52e6a486492d60a1fd723db5723ce507d0e94e21dac2e20",
+    "models-deprecations": "a076d884b310b49f9d62a0d519545658227b090c849907ddb6607184b75c6f32",
+    "models-overview": "edbe70005e2b00419bb74f50502f0601816492623a68f34c6c47a4fa88450286",
+    "mods-admin": "98fc7d323560d3fa84e17a6d22536b9532052c2c96643b7f028c82bb548964d2",
+    "mods-api": "b64550f6fce51563796e5a54fa1e5eb2c66734fb59669f6e1736daa3e001a545",
+    "mods-create": "5dba46dd083cf1c111411bf659f32548b6bbc6064cd48366c457a8b71da17edd",
+    "mods-events": "5913ffd8190f83b94bba5f8ae275d0dd9d03a916e7f9686fc9b81a750dfeb541",
+    "mods-interface": "be0c8af0a35b3709a9f2e287a4bc79862a4dc71504313f864303e0249aa9561e",
+    "mods-reference": "aa8412edc09fd39e3c52c0e8abd3c2cb407c158aefaaa2c5d23b33802f50b96f",
+    "plan-max": "0f77641bde0569e253d25566f616606b2c34c825b4e14c717683e6b078460fba",
+    "plan-ultra": "0b0d231463d87c9debdee247baa9193966f0f390dc57f3dd3d3ccd687c24ac92",
+    "routines": "b4b1ec1a12feaee3c051f42b61ab1f9e1ef365c7861f948818a465cd9f80de7e",
+    "usage-credits": "52859179b0c127824fb83e9ea4a24cddc345757845d877acdaec960429c065b9"
+  },
+  "upstreamSkills": {
+    ".claude-plugin/plugin.json": "5ac658336404c0b09a7c3f6d754a649fd7721cf1b5c604c36c6d62a96e8c81f7",
+    "CHANGELOG.md": "4428dd2711eb5e51ae8bca7a55a1144e3afd5805afb96c9480faa1081b77622e"
+  }
+}
