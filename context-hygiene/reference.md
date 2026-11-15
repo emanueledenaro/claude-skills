@@ -43,7 +43,7 @@ One reading, a coordinator session after about a day: 57% of a 1M window; messag
 - The TTL inside a claude --cloud session is not documented (unverified).
 - A cache hit resets the timer. A message after a longer break rereads the full context uncached.
 - Overrides (v2.1.242+ for the two settings and their env vars): `promptCacheTtl` or `CLAUDE_CODE_PROMPT_CACHE_TTL` for the main bucket, `subagentPromptCacheTtl` or `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` for the rest, `ENABLE_PROMPT_CACHING_1H=1` for both, `FORCE_PROMPT_CACHING_5M=1` beats them all. A 1 hour write bills at a higher rate.
-- Keeps the cache: effort change on Opus 5.5, Sonnet 5.5 and Fable 5.1 (subscription or API key), invoking skills, changing permission mode, spawning subagents.
+- Keeps the cache: effort change on Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1 or later, so Fable 5.2 too (subscription or API key; checked 2026-11-10 on the Claude Code prompt-caching page), invoking skills, changing permission mode, spawning subagents.
 - Spends the cache: a model switch (also through a skill or command frontmatter), `/fast`, connecting or removing an MCP server while tool definitions are not deferred.
 - A workflow fan-out shares cache only between agents with identical model, effort, agent type, tools, schema and working directory.
 - Idle cost: each `/loop` firing, each delivered cross-session message and each goal check-in sends the whole context. Goal check-ins stop after 3 per goal between prompts (v2.1.246+); `CLAUDE_CODE_GOAL_CHECKIN_MINUTES=0` turns them off; `crossSessionInbound=hold` holds inbound messages.
