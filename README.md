@@ -80,7 +80,7 @@ Without Matt Pocock's skills the other skills work alone; `matt-bridge` applies 
 Claude Code can tell Pro from Max, but not Max from Ultra (formerly Max 5x and Max 20x). Add one line to the same `~/.claude/CLAUDE.md` and keep it current:
 
 ```markdown
-Claude plan: Ultra · reserve 10% · banked: weekly reset, expires 2026-10-22
+Claude plan: Ultra · reserve 10% · banked: weekly reset, expires YYYY-MM-DD
 ```
 
 - **reserve:** the share of the weekly limit the skills leave for your own use.
