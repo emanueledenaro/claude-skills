@@ -74,7 +74,7 @@ Ask the person before changing their own configuration. Show the `/context` numb
 
 ## 8. In OpenCode
 
-- **Fixed layers:** OpenCode V2 loads `AGENTS.md` (`~/.config/opencode/AGENTS.md`, then each one from the workspace up), never `CLAUDE.md`, and lists skills from `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` and the project roots (`project-setup/reference.md`, Instructions and Skills). The 200-line advice in section 7 applies to those files.
+- **Fixed layers:** OpenCode V2 loads `AGENTS.md` (`~/.config/opencode/AGENTS.md`, then each one from the workspace up), never `CLAUDE.md`, and lists skills from `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` and the project roots (`project-setup/reference.md`, Instructions and Skills). The 200-line advice in section 7 applies to those files. Whether the Agent SDK behind `claude-agent/*` models also adds Claude Code's own layers (`CLAUDE.md`, its skills listing) on top was not checked.
 - **Measure:** no `/context` or `get_usage`. `opencode stats --cost --models` (2.3.0, `--help`) gives token and cost totals over days, not what fills one window. The plan windows come from the usage file in `model-mix/budget.md`.
 - **Claude Code only, no OpenCode equivalent checked:** `/compact` with a focus, `/clear`, `/autocompact`, `/usage`, the cache TTL settings (sections 3 and 6), and `skillOverrides` (section 7).
 
