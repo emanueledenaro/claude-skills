@@ -67,6 +67,15 @@ Decide how a run without the person is set up, woken, paced and reported. Nothin
 - Write the summary into the state file in the format of `reference.md`: done, merged PRs, open items that need the person, weekly points spent (reading before and after), what was not done and why.
 - Stop the loop (`ScheduleWakeup` with `stop: true`), end watchers, and send one push that the summary is ready only if a decision is waiting.
 
+## 9. In OpenCode
+
+Sections 1 to 8 name Claude Code tools. In an OpenCode session (2.3.0, checked 2026-11-18):
+
+- **Wakes:** no `/loop`, `ScheduleWakeup` or `Monitor`. The fallback wake is `sleep 1800; echo wake` run as a background shell (`coordinator-method/references/kickoff.md`): the shell tool's background mode tells the session when the command ends. An event watch is a background shell that exits on the event, for example `gh pr checks N --watch`; the session hears of it when the command ends, not line by line. End each wake by starting the next sleep; stop the night by starting none.
+- **Usage:** read the OpenCode usage file in `model-mix/budget.md`.
+- **Notifications:** no `PushNotification`. Where the session lists a `notify_phone` tool, it sends a phone push through the OpenCode iOS app when this session or a parent has a phone callback; section 7's rule holds. The `notify` plugin (opencode-plugins) pings the desktop on its own events and cannot be called.
+- **Claude Code only, no OpenCode equivalent checked:** the `/usage` cache line (section 2), `autoContinueAtUsageLimit` and `/rate-limit-options` (section 5), Remote Control and Desktop's Keep computer awake (section 6).
+
 ## Done when
 
 - The pre-sleep list ran and the person heard the color, the surface and the limit behavior.
