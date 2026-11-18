@@ -228,7 +228,7 @@ test('finding 5: the routine has a budget gate after the probe, with an agent ca
 })
 
 test('finding 7: verifiers follow model-mix (Opus for verify stages) unless the owner sets otherwise', () => {
-  const verifyModel = read('../model-mix/SKILL.md').match(/\{ model: '(\w+)', effort: '\w+' \}` on verify and judge stages/)?.[1]
+  const verifyModel = read('../model-mix/SKILL.md').match(/\{ model: '(\w+)', effort: '\w+' \}\)` on every stage/)?.[1]
   assert.equal(verifyModel, 'opus')
   const apply = read('./apply.md')
   const line = apply.split('\n').find((l) => /^\s*- verifiers:/.test(l))
