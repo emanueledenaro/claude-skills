@@ -24,7 +24,7 @@ Rhythm and records
 - After 5 or 6 merged PRs, draft a retro and show it to me one proposal at a time.
 
 Talking to me
-- Italian, answer first, 3 to 5 short bullets, status in a ```stato block with ✓ ✗ ≈ ➜, workers in a table (agente, ticket, PR, a che punto, prossimo passo).
+- Italian, answer first, 3 to 5 short bullets, status in a ```stato block with ✓ ✗ ≈ ➜ (a ```diff block only where the stato plugin is off, per visual-priority), workers in a table (agente, ticket, PR, a che punto, prossimo passo).
 - Describe what a user can now do, not ticket numbers.
 - Bold "Serve da te" line only when I must act.
 
