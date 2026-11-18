@@ -33,4 +33,4 @@ Exit 0 is clean, 1 lists the problems as `<place>:<line>:<column>: <problem>: <t
 
 ## Test it
 
-`node --test checks/rules.test.mjs checks/cli.test.mjs`. The tests build temporary git repositories under the OS temp folder and remove them.
+`node --test checks/rules.test.mjs checks/cli.test.mjs`. The tests build temporary git repositories under the OS temp folder and remove them. The same CI step also runs `merge-gate/installed-check.test.mjs`, the tests of the installed-copies check.

@@ -29,8 +29,8 @@ jobs:
         with:
           node-version: 24
 
-      - name: Tests of the check script
-        run: node --test checks/rules.test.mjs checks/cli.test.mjs
+      - name: Tests of the check scripts
+        run: node --test checks/rules.test.mjs checks/cli.test.mjs merge-gate/installed-check.test.mjs
 
       - name: Files (dashes, stock AI words, SKILL.md line cap, model ids in the release-watch state)
         if: ${{ !cancelled() }}

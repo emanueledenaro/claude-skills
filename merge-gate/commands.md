@@ -93,27 +93,21 @@ To merge: gh pr merge N --merge --match-head-commit <sha> --subject "<type>(scop
 
 ## Sync installed copies
 
-For a skills repo. The installed copies are links, not copies: `~/.claude/skills/<id>` and `~/.agents/skills/<id>` lead to a clone of the repo (on the owner's Mac, the main checkout), and `~/.config/opencode/skills/<id>` leads to the marketplace clone under `~/.claude/plugins/marketplaces/`. OpenCode ranks `~/.config/opencode/skills` first (`project-setup/reference.md`, Skills), so a stale marketplace clone means OpenCode loads the old text while Claude Code loads the new one. Never `cp` into `~/.claude/skills`: the write goes through the link into the clone.
+For a skills repo. In the README's install (`ln -s`, checked on macOS) the installed copies are links: `~/.claude/skills/<id>` and `~/.agents/skills/<id>` lead to a clone of the repo, and `~/.config/opencode/skills/<id>` leads to the marketplace clone under `~/.claude/plugins/marketplaces/`. OpenCode ranks `~/.config/opencode/skills` first (`project-setup/reference.md`, Skills), so a stale marketplace clone means OpenCode loads the old text while Claude Code loads the new one. Never `cp` into a root whose entries are links: the write goes through the link into the clone.
 
-1. Run the script in `project-setup/reference.md`, section "These skills". It fast-forwards each clean clone on its default branch and runs `claude plugin marketplace update <name>` for the marketplace clone. Without the `claude-skills: auto-sync` line it is a dry run: follow what that section says.
-2. Run this read-only check, with `<clone>` set to the clone the links lead to, after a `git -C <clone> fetch origin`:
+1. Run the script in `project-setup/reference.md`, section "These skills". It fast-forwards each clean clone on its default branch and runs `claude plugin marketplace update <name>` for the marketplace clone. Without the `claude-skills: auto-sync` line it is a dry run: follow what that section says. It reports a plain copy that differs and leaves it.
+2. A root that holds plain copies, not links, is updated by hand. On Windows, Git Bash may have made copies where the README says `ln -s` (not checked there). From a clean checkout of the merged main, for each `<skill>` the PR changed, with `<merge>` the merge commit:
 
-```bash
-clone=<clone>; want=$(git -C "$clone" rev-parse origin/main); bad=0
-for id in $(git -C "$clone" ls-tree -r --name-only origin/main | sed -n 's|^\([^/]*\)/SKILL\.md$|\1|p'); do
-  for root in ~/.config/opencode/skills ~/.claude/skills ~/.agents/skills; do
-    [ -e "$root/$id" ] || continue
-    top=$(git -C "$(realpath "$root/$id")" rev-parse --show-toplevel 2>/dev/null)
-    [ -n "$top" ] || { echo "report: plain copy $root/$id"; continue; }
-    git -C "$top" remote get-url origin 2>/dev/null | grep -Eq '[/:]emanueledenaro/claude-skills(\.git)?$' \
-      || { echo "report: $root/$id is in another repo, $top"; continue; }
-    [ "$(git -C "$top" rev-parse HEAD)" = "$want" ] || { echo "stale: $root/$id, $top at $(git -C "$top" rev-parse --short HEAD)"; bad=1; }
-    [ -z "$(git --no-optional-locks -C "$top" status --porcelain -- "$id")" ] || { echo "local edit: $root/$id in $top"; bad=1; }
-  done
-done; echo "checked against origin/main $(git -C "$clone" rev-parse --short origin/main)"; [ "$bad" = 0 ]
+```
+diff -rq <skill> <root>/<skill>
+git show <merge>^1:<skill>/<file> | diff -q - <root>/<skill>/<file>
+cp -R <skill> <root>/
 ```
 
-- Pass: exit 0 and no `stale:` or `local edit:` line. Tested on macOS against a throwaway home: green with every clone on `origin/main`, red with a marketplace clone one commit behind, red with an uncommitted edit in the clone.
-- A `report:` line is not a failure. On 2026-11-18 it printed one for `adhd-replies`, whose links lead to another repo (`ai-config`); say which copy loads.
-- A `local edit:` line, or a script `report:` line about a dirty clone or a plain copy that differs, is the person's work: list it and touch it only after their ok, or bring it into the repo through a PR.
+   Read the `diff -rq` output first: it shows no direction of change, and `cp -R` overwrites but never deletes. Compare each differing or installed-only file with main before the merge (the second line). Identical: safe to overwrite, or to remove if the PR deleted it. Different, or `git show` fails (the file was never on main): it is a local edit; list it to the person and touch it only after their ok, or bring it into the repo through a PR. Then copy.
+3. Run the read-only check, after a `git -C <clone> fetch origin`, with `<clone>` a clone of the repo: `bash <clone>/merge-gate/installed-check.sh <clone>`. It compares every installed copy of every skill on `origin/main`, in the three roots, with `origin/main` by content: a clone by the skill folder's tree id, anything else with `diff -rq`. A merge that changes no skill folder leaves it green.
+
+- Pass: exit 0 and no `stale:`, `stale copy:` or `local edit:` line. Its tests (`merge-gate/installed-check.test.mjs`) build the links in a throwaway home and run in CI; it was not run on Windows.
+- A `report:` line is not a failure: a skill whose links lead to another repo prints one; say which copy loads. A link into another repo that differs is fixed in that repo.
+- A `local edit:` line, or a sync script `report:` line about a dirty clone or a plain copy that differs, is the person's work: list it and touch it only after their ok, or bring it into the repo through a PR.
 - Whether a running session reloads a changed skill is unverified: a new session is the sure check.
