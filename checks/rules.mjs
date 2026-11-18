@@ -100,6 +100,29 @@ export function countLines(text) {
   return text.replace(/\r?\n$/, '').split(LINE_BREAK).length;
 }
 
+// A model id as release-watch's probe reads it from the models pages (rw.mjs, models step).
+const MODEL_ID = /claude-(?:haiku|sonnet|opus|fable|mythos)-[0-9][0-9a-z-]*/g;
+const WEB_ADDRESS = /https?:\/\/\S+/g;
+
+/**
+ * Model ids in the text that the release-watch state does not list, so the next probe would report
+ * a fact the skills already state. An id inside a web address (a page slug) and a prefix that ends in
+ * a hyphen (`claude-opus-4-1-...`) are not ids.
+ */
+export function findUnknownModelIds(text, knownIds) {
+  const known = new Set(knownIds);
+  const findings = [];
+  text.replace(WEB_ADDRESS, (address) => blank(address)).split(LINE_BREAK).forEach((line, index) => {
+    for (const match of line.matchAll(MODEL_ID)) {
+      const id = match[0];
+      if (id.endsWith('-') || known.has(id)) continue;
+      const message = `model id ${id} is not in the models of release-watch/state.json: advance the state in the same PR`;
+      findings.push({ line: index + 1, column: match.index + 1, message });
+    }
+  });
+  return findings;
+}
+
 /** The problem with a SKILL.md's length, or null when it is within the cap. */
 export function checkSkillLength(text) {
   const lines = countLines(text);

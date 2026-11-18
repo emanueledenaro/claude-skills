@@ -86,11 +86,7 @@ mkdir -p "$TMP/v/skills" && cp -r <repo>/<name> "$TMP/v/skills/"
 claude plugin validate "$TMP/v/skills" --strict --json
 ```
 
-Drift between a repo and the installed copies:
-
-```bash
-diff -rq <repo>/<name> ~/.claude/skills/<name>
-```
+Drift between a repo and the installed copies: the read-only check in `merge-gate/commands.md`, "Sync installed copies". It covers `~/.config/opencode/skills`, `~/.claude/skills` and `~/.agents/skills`. A plain `diff -rq <repo>/<name> ~/.claude/skills/<name>` compares the repo with itself where that root links into the repo, and never sees the copy OpenCode loads.
 
 Duplicated bullets across skills, and hidden characters or comments:
 

@@ -72,6 +72,12 @@ Ask the person before changing their own configuration. Show the `/context` numb
 - **CLAUDE.md and memory.** Under 200 lines per file. `@imports` still load at launch. Path-scoped `.claude/rules` load only when matching files are touched. Move steps that matter for one workflow into a skill. Only the first 200 lines or 25KB of `MEMORY.md` load.
 - **Output style and terse personas.** Their effect on plan usage is unquantified: do not count on them.
 
+## 8. In OpenCode
+
+- **Fixed layers:** OpenCode V2 loads `AGENTS.md` (`~/.config/opencode/AGENTS.md`, then each one from the workspace up), never `CLAUDE.md`, and lists skills from `~/.config/opencode/skills`, `~/.claude/skills`, `~/.agents/skills` and the project roots (`project-setup/reference.md`, Instructions and Skills). The 200-line advice in section 7 applies to those files. Whether the Agent SDK behind `claude-agent/*` models also adds Claude Code's own layers (`CLAUDE.md`, its skills listing) on top was not checked.
+- **Measure:** no `/context` or `get_usage`. `opencode stats --cost --models` (2.3.0, `--help`) gives token and cost totals over days, not what fills one window. The plan windows come from the usage file in `model-mix/budget.md`.
+- **Claude Code only, no OpenCode equivalent checked:** `/compact` with a focus, `/clear`, `/autocompact`, `/usage`, the cache TTL settings (sections 3 and 6), and `skillOverrides` (section 7).
+
 ## Done when
 
 - A `/context` or `get_usage` reading was taken before any trim, and its number is quoted.

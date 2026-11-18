@@ -9,7 +9,7 @@ Decide how a run without the person is set up, woken, paced and reported. Nothin
 
 - Work that needs no local files, accounts or build, and may run while the machine sleeps: a cloud session or routine. Only cloud runs with the machine off or asleep. A routine runs at most once an hour, draws plan usage, asks no permissions and pushes `claude/` branches by default (name the branch in the prompt per `git-conventions`, for example `feature/issue-N-slug`; branch protection limits it). Ask the person before creating any routine or scheduled task, and use the `schedule` skill. Launch details are in `cloud-worker`.
 - Coordination that reads local state (`gh`, the state file, the local build): a local session, which needs the machine on. `/loop` and Desktop scheduled tasks do not run with the machine off.
-- Runtime: prefer the terminal CLI at 2.1.292 or later for a `/loop` night. 2.1.292 fixed a background session's `/loop` stopping when its process restarted and `claude -p` dropping a scheduled wakeup; 2.1.290 keeps background sessions waiting on a wakeup alive through updates and low memory. Desktop bundles its own Claude Code, which can lag the CLI (2.1.284 on the Windows machine, 2.1.293 on the Mac on 2026-10-07): if the bundle is older than 2.1.292 and Desktop runs the night, tell the person this once and keep the fallback loop short. Read the versions with `claude --version` in a terminal and, for Desktop, the newest version folder: `%APPDATA%\Claude\claude-code\<ver>\` on Windows (probe in `windows-ops`), `~/Library/Application Support/Claude/claude-code/<ver>/` on macOS; layout undocumented.
+- Runtime: prefer the terminal CLI at 2.1.292 or later for a `/loop` night. 2.1.292 fixed a background session's `/loop` stopping when its process restarted and `claude -p` dropping a scheduled wakeup; 2.1.290 keeps background sessions waiting on a wakeup alive through updates and low memory. Desktop bundles its own Claude Code, which can lag the CLI (2.1.284 on the Windows machine on 2026-10-07; on the Mac on 2026-11-18 the CLI was 2.1.321 and the bundle 2.1.327, both past the floor): if the bundle is older than 2.1.292 and Desktop runs the night, tell the person this once and keep the fallback loop short. Read the versions with `claude --version` in a terminal and, for Desktop, the newest version folder: `%APPDATA%\Claude\claude-code\<ver>\` on Windows (probe in `windows-ops`), `~/Library/Application Support/Claude/claude-code/<ver>/` on macOS; layout undocumented.
 - `/bg` (or `/background`) carries a session's `/loop` tasks to a background session. `claude --bg` starts a new session and carries nothing over. Background sessions survive a closed terminal and sleep; a shutdown or reboot stops them; they never offer the usage-limit wait.
 
 ## 2. Before sleeping
@@ -66,6 +66,15 @@ Decide how a run without the person is set up, woken, paced and reported. Nothin
 
 - Write the summary into the state file in the format of `reference.md`: done, merged PRs, open items that need the person, weekly points spent (reading before and after), what was not done and why.
 - Stop the loop (`ScheduleWakeup` with `stop: true`), end watchers, and send one push that the summary is ready only if a decision is waiting.
+
+## 9. In OpenCode
+
+Sections 1 to 8 name Claude Code tools. In an OpenCode session (2.3.0, checked 2026-11-18):
+
+- **Wakes:** no `/loop`, `ScheduleWakeup` or `Monitor`. The fallback wake is `sleep 1800; echo wake` run as a background shell (`coordinator-method/references/kickoff.md`): the shell tool's background mode tells the session when the command ends. An event watch is a background shell that exits on the event, for example `gh pr checks N --watch`; the session hears of it when the command ends, not line by line. End each wake by starting the next sleep; stop the night by starting none.
+- **Usage:** read the OpenCode usage file in `model-mix/budget.md`.
+- **Notifications:** no `PushNotification`. Where the session lists a `notify_phone` tool, it sends a phone push through the OpenCode iOS app when this session or a parent has a phone callback; section 7's rule holds. The `notify` plugin (opencode-plugins) pings the desktop on its own events and cannot be called.
+- **Claude Code only, no OpenCode equivalent checked:** the `/usage` cache line (section 2), `autoContinueAtUsageLimit` and `/rate-limit-options` (section 5), Remote Control and Desktop's Keep computer awake (section 6).
 
 ## Done when
 

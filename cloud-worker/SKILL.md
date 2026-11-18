@@ -66,6 +66,10 @@ Run one trivial task (say hi, change nothing) in a terminal tab before the first
 - Unknown: how a `ListAgents` row maps to a session URL, any cap on concurrent or daily sessions, cleanup of idle sessions.
 - Non-interactive creation (`-p` with `--environment ccpool_...`) exists only for self-hosted environments, in beta on Team and Enterprise plans.
 
+## 8. In OpenCode
+
+Claude Code only: a cloud worker is a `claude --cloud` session, and OpenCode has no cloud sessions. From an OpenCode session the `claude` and `gh` commands above run in the shell tool like any CLI (not tried from OpenCode), and the launch still needs a real terminal (section 2). `ListAgents`, `SendMessage`, `start_session`, `move_to_cloud` and the terminal-tab tools do not exist there.
+
 ## Done when
 
 - [ ] Budget checked and the parallel cap respected

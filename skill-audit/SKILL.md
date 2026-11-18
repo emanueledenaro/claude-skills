@@ -8,7 +8,7 @@ Decide what each skill costs, whether it triggers when it should, and whether it
 ## 1. Scope
 
 - Name what is audited: one skill, the person's folder, a skills repo, a third-party skill before install, or the whole listing. Skills live in `~/.claude/skills`, a project's `.claude/skills`, plugins and the bundled set.
-- Audit the installed copy, because that is what loads, and edit the repo source. When both exist, `diff -r <repo>/<name> ~/.claude/skills/<name>`: drift is a finding.
+- Audit the installed copy, because that is what loads, and edit the repo source. When both exist, drift between the repo and any installed root is a finding (check in `reference.md`).
 - Bundled and enterprise skills are out of scope. Symlinked skills belong to another tool: measure them, change nothing in the target.
 - A third-party skill is never rewritten: adapt around it, and the levers are settings (section 4).
 
@@ -64,6 +64,13 @@ After any override or description edit, rerun the trigger test: a skill hidden o
 - Edits to the person's skills go on a branch and a PR per `coordinator-method`. After the merge, sync the installed copies and run section 2 again.
 - `skillOverrides` and `disable-model-invocation` in settings are settings changes: ask first, and use `update-config`. In `/skills`, Space cycles a skill's state and Esc saves it to `.claude/settings.local.json`.
 - Re-measure, and rerun the trigger test on every changed description.
+
+## 8. In OpenCode
+
+- **Roots:** OpenCode also loads `~/.config/opencode/skills`, and a copy there hides the same ID in `~/.claude/skills` and `~/.agents/skills` (`project-setup/reference.md`, Skills). Audit the copy that root resolves to; for drift across all three roots, use the read-only check in `merge-gate/commands.md`, "Sync installed copies".
+- **Measure:** `/skills`, `/doctor`, `/usage`, `/context` and `/skill-doctor` are Claude Code only. The `claude plugin` commands of section 2 run from OpenCode's shell like any CLI.
+- **Triage:** `skillOverrides` and `disable-model-invocation` are Claude Code settings. OpenCode's `skill` permission and `skill.use` policy take the skill ID (`project-setup/reference.md`); whether a deny also drops the skill from the listing was not checked.
+- **Trigger test:** `opencode run --archived --format json --model claude-agent/sonnet#high "<prompt>"` runs one fresh session (flags from `opencode run --help`, 2.3.0); look for a skill tool call in its output. Not calibrated, and it spends plan usage like section 5: run the budget check, try one prompt, and record the working command in `reference.md`.
 
 ## Done when
 

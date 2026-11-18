@@ -137,6 +137,35 @@ describe('files', () => {
     assert.equal(result.out, 'ok: 2 tracked files checked\n');
   });
 
+  it('fails on a model id that a tracked release-watch state does not list', () => {
+    const repo = makeRepo();
+    repo.track('release-watch/state.json', `${JSON.stringify({ models: ['claude-opus-5-5'] })}\n`);
+    repo.track('a/SKILL.md', 'Opus `claude-opus-5-5`.\nMythos `claude-mythos-5-2`.\n');
+    repo.track('a/tool.mjs', "const id = 'claude-mythos-5-2';\n");
+    const result = repo.cli(['files']);
+    assert.equal(result.code, 1);
+    assert.match(result.err, /^a\/SKILL\.md:2:9: model id claude-mythos-5-2 is not in the models of release-watch\/state\.json/m);
+    assert.match(result.err, /^1 problem found$/m);
+  });
+
+  it('passes the same id once the state lists it, and skips the rule with no tracked state', () => {
+    const repo = makeRepo();
+    repo.track('a/SKILL.md', 'Mythos `claude-mythos-5-2`.\n');
+    assert.equal(repo.cli(['files']).code, 0);
+    repo.track('release-watch/state.json', `${JSON.stringify({ models: ['claude-mythos-5-2'] })}\n`);
+    const result = repo.cli(['files']);
+    assert.equal(result.code, 0, result.err);
+    assert.equal(result.out, 'ok: 2 tracked files checked\n');
+  });
+
+  it('fails when a tracked release-watch state has no models list', () => {
+    const repo = makeRepo();
+    repo.track('release-watch/state.json', '{"cli": "2.1.1"}\n');
+    const result = repo.cli(['files']);
+    assert.equal(result.code, 1);
+    assert.match(result.err, /^release-watch\/state\.json: no models list could be read$/m);
+  });
+
   it('is a usage error with an argument or outside a repository', () => {
     const repo = makeRepo();
     assert.equal(repo.cli(['files', 'a.md']).code, 2);

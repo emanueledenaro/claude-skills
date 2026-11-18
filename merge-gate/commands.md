@@ -62,6 +62,8 @@ gh pr checks N --required --watch --fail-fast
 
 The watch ends at its deadline (5 minutes by default, 30 at most): re-arm it if checks are still pending. Do not trust the watch's exit code alone: after it ends, run `gh pr checks N --required` and read the buckets.
 
+In OpenCode, run the same command with the shell tool's background mode: the session hears when it exits, with no deadline to re-arm. Where CI is off there is nothing for it to watch: the project's `gate` posts the status (`coordinator-method/references/local-tools.md`).
+
 ## Merge
 
 ```
@@ -93,14 +95,21 @@ To merge: gh pr merge N --merge --match-head-commit <sha> --subject "<type>(scop
 
 ## Sync installed copies
 
-For a skills repo. From a clean checkout of the merged main, in Git Bash (`<skill>` is each folder the PR changed):
+For a skills repo. In the README's install (`ln -s`, checked on macOS) the installed copies are links: `~/.claude/skills/<id>` and `~/.agents/skills/<id>` lead to a clone of the repo, and `~/.config/opencode/skills/<id>` leads to the marketplace clone under `~/.claude/plugins/marketplaces/`. OpenCode ranks `~/.config/opencode/skills` first (`project-setup/reference.md`, Skills), so a stale marketplace clone means OpenCode loads the old text while Claude Code loads the new one. Never `cp` into a root whose entries are links: the write goes through the link into the clone.
+
+1. Run the script in `project-setup/reference.md`, section "These skills". It fast-forwards each clean clone on its default branch and runs `claude plugin marketplace update <name>` for the marketplace clone. Without the `claude-skills: auto-sync` line it is a dry run: follow what that section says. It reports a plain copy that differs and leaves it.
+2. A root that holds plain copies, not links, is updated by hand. On Windows, Git Bash may have made copies where the README says `ln -s` (not checked there). From a clean checkout of the merged main, for each `<skill>` the PR changed, with `<merge>` the merge commit:
 
 ```
-git fetch origin && git merge --ff-only origin/main
-diff -rq <skill> ~/.claude/skills/<skill>
-cp -R <skill> ~/.claude/skills/
+diff -rq <skill> <root>/<skill>
+git show <merge>^1:<skill>/<file> | diff -q - <root>/<skill>/<file>
+cp -R <skill> <root>/
 ```
 
-- Read the `diff -rq` output first. `cp -R` overwrites but never deletes, and `diff -rq` shows no direction of change.
-- For each differing or installed-only file, compare the installed copy with the pre-merge main: `git show ORIG_HEAD:<skill>/<file> | diff -q - ~/.claude/skills/<skill>/<file>`. Identical: safe to overwrite, or to remove if the PR deleted it. Different, or `git show` fails (the file was never in main): it is a local edit; list it to the person and touch it only after their ok, or copy it back into the repo through a PR. Never remove a file from `~/.claude/skills` without that check.
+   Read the `diff -rq` output first: it shows no direction of change, and `cp -R` overwrites but never deletes. Compare each differing or installed-only file with main before the merge (the second line). Identical: safe to overwrite, or to remove if the PR deleted it. Different, or `git show` fails (the file was never on main): it is a local edit; list it to the person and touch it only after their ok, or bring it into the repo through a PR. Then copy.
+3. Run the read-only check, after a `git -C <clone> fetch origin`, with `<clone>` a clone of the repo: `bash <clone>/merge-gate/installed-check.sh <clone>`. It compares every installed copy of every skill on `origin/main`, in the three roots, with `origin/main` by content: a clone by the skill folder's tree id, anything else with `diff -rq`. A merge that changes no skill folder leaves it green.
+
+- Pass: exit 0 and no `stale:`, `stale copy:` or `local edit:` line. Its tests (`merge-gate/installed-check.test.mjs`) build the links in a throwaway home and run in CI; it was not run on Windows.
+- A `report:` line is not a failure: a skill whose links lead to another repo prints one; say which copy loads. A link into another repo that differs is fixed in that repo.
+- A `local edit:` line, or a sync script `report:` line about a dirty clone or a plain copy that differs, is the person's work: list it and touch it only after their ok, or bring it into the repo through a PR.
 - Whether a running session reloads a changed skill is unverified: a new session is the sure check.

@@ -46,6 +46,7 @@ Run the budget check in `model-mix` first. Size by the diff, not by the worker's
 - Merge the latest main into the branch with `git merge -m "chore: merge origin/main into <branch>" origin/main`, then push. Not `gh pr update-branch`: it takes no message flag (gh 2.83.2). If the merge stops on conflicts, run `git merge --abort` and send the PR back to its worker to merge main and resolve, keeping both sides' behavior and listing the conflicts in the PR; only a clean merge is the coordinator's (a mechanical step).
 - A merge commit from a worker that resolved conflicts is new code: give it a delta review. A clean merge needs none.
 - Rerun the required checks on the result. Arm a `Monitor` watch on them; a watch ends at its deadline (5 minutes by default, 30 at most), so re-arm it if checks are still pending. Then read the final state with `gh pr checks N --required`.
+- In OpenCode there is no `Monitor`: run the same watch as a background shell, which tells the session when it ends (`overnight`, section 9). Where the project's CI is off, the required checks are the project's `gate` (`coordinator-method/references/local-tools.md`): run it on the realigned head and merge only on the commit status it posts there.
 - Merge only if main has not moved since: fetch, then `git merge-base --is-ancestor origin/main <sha>`. Otherwise realign again. Never merge past a failing or pending required check.
 - A green gate expires when main gains a merge that touches the same area: rerun it on the realigned head.
 
