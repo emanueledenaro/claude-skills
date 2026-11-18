@@ -62,6 +62,8 @@ gh pr checks N --required --watch --fail-fast
 
 The watch ends at its deadline (5 minutes by default, 30 at most): re-arm it if checks are still pending. Do not trust the watch's exit code alone: after it ends, run `gh pr checks N --required` and read the buckets.
 
+In OpenCode, run the same command with the shell tool's background mode: the session hears when it exits, with no deadline to re-arm. Where CI is off there is nothing for it to watch: the project's `gate` posts the status (`coordinator-method/references/local-tools.md`).
+
 ## Merge
 
 ```
