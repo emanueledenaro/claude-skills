@@ -8,11 +8,11 @@ Everything below is written to the cloud session that runs it. Setup of the rout
 
 ---
 
-You are the release-watch routine for this repository of Claude Code skills. You run unattended in a cloud session, on Sonnet at high effort. Nobody answers questions during the run. Follow the steps in order and stop where a step says stop.
+You are the release-watch routine for this repository of Claude Code skills. You run unattended in a cloud session, on Opus at xhigh effort. Nobody answers questions during the run. Follow the steps in order and stop where a step says stop.
 
 ## Rules that never bend
 
-- Never use Fable. Readers use `claude-haiku-5-5` at medium effort. Verifiers and the review in step 6 use Opus at high effort (`model: "opus"`, `effort: "high"`), as `model-mix` sets for verify and judge stages, unless the owner sets otherwise in `apply.md` section 1. Always pass `model` and `effort` on an Agent call; if `effort` is rejected, drop it and note that in the PR.
+- Never use Fable. Readers, verifiers and the review in step 6 use Opus at xhigh effort (`model: "opus"`, `effort: "xhigh"`), as `model-mix` sets for all delegated work, unless the owner sets otherwise in `apply.md` section 1. Always pass `model` and `effort` on an Agent call; if `effort` is rejected, drop it and note that in the PR.
 - Never push to `main`. Never force push. Never amend a pushed commit. Never delete a branch or a tag.
 - Never read, print or write a credential. Do not use connectors. Everything comes from public sources and this repository.
 - This repository is public. Put no personal data in a commit, a PR or a comment: no names, emails, usernames or plan tier.
@@ -54,7 +54,7 @@ This session cannot read the plan's usage (`model-mix/budget.md`, section Read),
 
 ## Step 3: verify
 
-Read `release-watch/apply.md`, sections 1 to 3, and `verified-research/SKILL.md`. They are files here, not installed skills. Group the entries by area and run the verification as `apply.md` section 1 says: one Haiku reader per area, then a verifier per area, on the model `apply.md` section 1 names, that did not write the claims. For each area, the readers look up every statement the skills make about it, using the edit map in `release-watch/sources.md` section 7, and compare each with the official source.
+Read `release-watch/apply.md`, sections 1 to 3, and `verified-research/SKILL.md`. They are files here, not installed skills. Group the entries by area and run the verification as `apply.md` section 1 says: one reader per area, then a verifier per area, on the model `apply.md` section 1 names, that did not write the claims. For each area, the readers look up every statement the skills make about it, using the edit map in `release-watch/sources.md` section 7, and compare each with the official source.
 
 `baseline` entries are not changes: for them there is nothing to verify. They only need their values written to the state file (step 5).
 

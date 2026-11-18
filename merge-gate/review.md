@@ -1,10 +1,10 @@
 # Review briefs
 
-Briefs and lenses for `merge-gate`, sections 2 to 4. Model and effort per stage come from `model-mix`, the shape and the fleet size from `smart-ultracode`, the script API from `workflow-authoring`. Lens agents read a diff for defects, which is the final-review row of `model-mix`; a pre-pass that only gathers context (callers, tests of touched files) is its broad-reading row.
+Briefs and lenses for `merge-gate`, sections 2 to 4. Model and effort per stage come from `model-mix`, the shape and the fleet size from `smart-ultracode`, the script API from `workflow-authoring`. Lens agents, verifiers and a pre-pass that only gathers context (callers, tests of touched files) all run on the delegated-work row of `model-mix`: Opus xhigh.
 
 ## Small path: one reviewer
 
-One read-only Agent call, `model: "opus"`, high effort. Give it:
+One read-only Agent call, `model: "opus"`, `effort: "xhigh"`. Give it:
 
 - the worktree path at the head sha and the command `gh pr diff N`
 - the ticket text and its acceptance criteria
@@ -13,14 +13,14 @@ One read-only Agent call, `model: "opus"`, high effort. Give it:
 
 Ask for findings only, in the format below, ranked, with a line saying which lenses it covered. It runs no builds and no full suites.
 
-Then verify: each serious finding gets one fresh Opus high verifier (Pro: medium; a security finding always its own) with the brief of the large path, step 2. Minor findings, on either path, are checked by the main session reading the cited lines. Unchecked findings count as unverified.
+Then verify: each serious finding gets one fresh Opus xhigh verifier (a security finding always its own) with the brief of the large path, step 2. Minor findings, on either path, are checked by the main session reading the cited lines. Unchecked findings count as unverified.
 
 ## Large path: lenses, verify, critic
 
 1. **Lenses** (one agent each, same model, effort, tools and schema, so the prompt prefix caches):
    - code PRs: correctness and edge cases; security and trust boundaries; tests and checks (anything removed or weakened); fit with the ticket, the project rules and the `clean-code` rules (levels after the project's `clean-code:` line); overlap or duplication with what main has now; UI and text the person sees, including model-facing wording that leaks.
    - skills, docs and prompt PRs: facts (every claim checked against a source); use (how a model would misread or misuse it); safety (what a literal copy would let through); consistency with sibling skills.
-2. **Verify**: one fresh Opus high agent per serious finding (batched per area below Ultra, but a security finding always has its own verifier, `smart-ultracode`). It gets the claim and the cited lines, never the author's reasoning, and tries to refute with evidence. It returns confirmed, refuted or unverified with the file and line or the command and output.
+2. **Verify**: one fresh Opus xhigh agent per serious finding (batched per area below Ultra, but a security finding always has its own verifier, `smart-ultracode`). It gets the claim and the cited lines, never the author's reasoning, and tries to refute with evidence. It returns confirmed, refuted or unverified with the file and line or the command and output.
 3. **Critic**: one agent gets the PR goal, the diff's file list, the lenses and the verified results, and names what was skipped, assumed or left unread. Its gaps go into one more round or into the PR comment.
 
 Fleet size: at most the lens count, and never above the width of today's profile in `model-mix`; group lenses per agent to fit and log any lens left out.

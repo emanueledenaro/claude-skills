@@ -99,7 +99,7 @@ Which skill holds the line a change probably touches. Find the line with `grep -
 
 | Change | Look in |
 | --- | --- |
-| New or retiring model, an alias that resolves to another model | `model-mix/SKILL.md` Models table and the Haiku 5.5 bullets; model ids anywhere else |
+| New or retiring model, an alias that resolves to another model | `model-mix/SKILL.md` Models section; model ids anywhere else |
 | 5-hour, weekly or reset rules, plan ratios | `model-mix/SKILL.md` Plan profiles; `model-mix/budget.md` Overrides |
 | Routine or scheduled-task limits | `overnight`, `cloud-worker`, and `model-mix` routine bullet |
 | Version floors, mods API | `smart-mods/SKILL.md` sections 2, 3 and 6, `smart-mods/writing.md`, `smart-mods/testing.md`, `smart-mods/vetting.md`; `mod-ui` |

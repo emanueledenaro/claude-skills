@@ -40,7 +40,7 @@ gh pr list --head <branch>
 git ls-remote --heads origin
 ```
 
-In a session: `/remote-env` sets the default environment, `/web-setup` sends the local `gh` login to the account, `/tasks` lists cloud sessions (teleport with `t`), `/model sonnet` and `/effort high` work inside a cloud session from 2.1.205.
+In a session: `/remote-env` sets the default environment, `/web-setup` sends the local `gh` login to the account, `/tasks` lists cloud sessions (teleport with `t`), `/model` and `/effort` work inside a cloud session from 2.1.205.
 
 ## Pre-filled link
 
