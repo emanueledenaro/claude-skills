@@ -9,6 +9,7 @@ import {
   excerptOf,
   findDashes,
   findStockWords,
+  findUnknownModelIds,
 } from './rules.mjs';
 
 // Written as code points, never as the characters themselves.
@@ -153,5 +154,33 @@ describe('checkSkillLength', () => {
       checkSkillLength(linesOf(SKILL_LINE_CAP + 1)),
       '121 lines, the cap is 120: move detail to a reference file',
     );
+  });
+});
+
+describe('findUnknownModelIds', () => {
+  const known = ['claude-haiku-5-5', 'claude-opus-5-5'];
+
+  it('passes ids the state lists', () => {
+    assert.deepEqual(findUnknownModelIds('Haiku `claude-haiku-5-5`, Opus claude-opus-5-5.\n', known), []);
+  });
+
+  it('reports an id the state lacks, with its line and column', () => {
+    const findings = findUnknownModelIds('fine\nthe new `claude-mythos-5-2` model\n', known);
+    assert.deepEqual(findings.map((finding) => `${finding.line}:${finding.column}`), ['2:10']);
+    assert.match(findings[0].message, /^model id claude-mythos-5-2 is not in the models of release-watch\/state\.json/);
+  });
+
+  it('reports every unknown id on a line, each time it appears', () => {
+    const findings = findUnknownModelIds('claude-fable-5-2 and claude-fable-5-2 and claude-opus-5-5\n', known);
+    assert.deepEqual(findings.map((finding) => finding.column), [1, 22]);
+  });
+
+  it('skips an id inside a web address and a prefix that ends in a hyphen', () => {
+    const text = 'see https://example.com/news/claude-fable-5-2-launch-offers and `claude-opus-4-1-...`\n';
+    assert.deepEqual(findUnknownModelIds(text, known), []);
+  });
+
+  it('checks ids in code too, where the skills write them', () => {
+    assert.equal(findUnknownModelIds('```\nmodel: claude-sonnet-9\n```\n', known).length, 1);
   });
 });

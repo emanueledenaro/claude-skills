@@ -21,13 +21,14 @@ Exit 0 is clean, 1 lists the problems as `<place>:<line>:<column>: <problem>: <t
 
 | Command | Checks |
 | --- | --- |
-| `files` | Every tracked file that is text: no em dash (U+2014) and no en dash (U+2013), code included. Markdown files: none of the stock AI words in `rules.mjs`, outside fenced code blocks and inline code spans. Every `SKILL.md`: at most 120 lines, the top of the house range in `skill-audit`. |
+| `files` | Every tracked file that is text: no em dash (U+2014) and no en dash (U+2013), code included. Markdown files: none of the stock AI words in `rules.mjs`, outside fenced code blocks and inline code spans. Every `SKILL.md`: at most 120 lines, the top of the house range in `skill-audit`. When `release-watch/state.json` is tracked, every model id in a Markdown file (`claude-opus-5-5`, code included) is in its `models` list, so the next `release-watch` probe does not report as new a model the skills already name; an id inside a web address and a prefix that ends in a hyphen (`claude-opus-4-1-...`) are skipped. |
 | `commits <base> <head>` | The whole message of each commit in `<base>..<head>`: no dashes, no stock AI words outside code. The subject format stays with `git-conventions/check`. |
 | `text <label>` | Text on stdin, such as a PR title or body: no dashes, no stock AI words outside code. |
 
 - A file that is new and not yet staged is not tracked: `git add` it first.
 - A report shows a dash as `<U+2014>` or `<U+2013>`, so it can be pasted into a PR body.
 - To write about a stock word, put it in backticks. A dash in code or in a test is written as a code point (`\u2014`, `String.fromCharCode(0x2014)`).
+- A model id the state lacks is fixed by adding it to `models` in `release-watch/state.json` in the same PR, sorted, after checking it on the models overview page.
 - The word list holds the words with no ordinary use in these skills. The comment above it in `rules.mjs` names the ones left out and why.
 
 ## Test it

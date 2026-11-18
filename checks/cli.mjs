@@ -4,16 +4,19 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { checkProse, checkSkillLength, excerptOf, findDashes } from './rules.mjs';
+import { checkProse, checkSkillLength, excerptOf, findDashes, findUnknownModelIds } from './rules.mjs';
 
 const USAGE = `usage:
   node checks/cli.mjs files                  every tracked file: no em or en dashes; Markdown also
-                                             has no stock AI words outside code; SKILL.md line cap
+                                             has no stock AI words outside code and, when
+                                             release-watch/state.json is tracked, no model id it
+                                             does not list; SKILL.md line cap
   node checks/cli.mjs commits <base> <head>  the whole message of every commit in <base>..<head>
   node checks/cli.mjs text <label>           text on stdin (a PR title or body), reported as <label>
 exit codes: 0 clean, 1 problems found, 2 usage error`;
 
 const FIELD_SEPARATOR = '\x1f';
+const STATE_FILE = 'release-watch/state.json';
 const NUL_BYTE = 0;
 const UNREADABLE = new Set(['ENOENT', 'EISDIR']);
 
@@ -68,10 +71,23 @@ function readText(file) {
   return bytes.includes(NUL_BYTE) ? null : bytes.toString('utf8');
 }
 
-function problemsInFile(file) {
+/** The models the release-watch state lists, null when the state is not tracked, or a problem. */
+function readStateModels(files) {
+  if (!files.includes(STATE_FILE)) return { models: null };
+  try {
+    const models = JSON.parse(readText(STATE_FILE) ?? '').models;
+    if (Array.isArray(models)) return { models };
+  } catch {
+    // reported below
+  }
+  return { models: null, problem: `${STATE_FILE}: no models list could be read` };
+}
+
+function problemsInFile(file, stateModels) {
   const text = readText(file);
   if (text === null) return [];
   const findings = file.endsWith('.md') ? checkProse(text) : findDashes(text);
+  if (file.endsWith('.md') && stateModels !== null) findings.push(...findUnknownModelIds(text, stateModels));
   const problems = describeFindings(file, text, findings);
   const lengthProblem = basename(file) === 'SKILL.md' ? checkSkillLength(text) : null;
   if (lengthProblem !== null) problems.push(`${file}: ${lengthProblem}`);
@@ -86,7 +102,10 @@ function checkFiles(args) {
   } catch (error) {
     return usageError(`cannot list tracked files: ${gitFailure(error)}`);
   }
-  return report(files.flatMap(problemsInFile), `ok: ${files.length} tracked files checked`);
+  const state = readStateModels(files);
+  const problems = files.flatMap((file) => problemsInFile(file, state.models));
+  if (state.problem) problems.push(state.problem);
+  return report(problems, `ok: ${files.length} tracked files checked`);
 }
 
 function revisionProblem(name, value) {

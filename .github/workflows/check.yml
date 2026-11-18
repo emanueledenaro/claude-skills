@@ -32,7 +32,7 @@ jobs:
       - name: Tests of the check script
         run: node --test checks/rules.test.mjs checks/cli.test.mjs
 
-      - name: Files (dashes, stock AI words, SKILL.md line cap)
+      - name: Files (dashes, stock AI words, SKILL.md line cap, model ids in the release-watch state)
         if: ${{ !cancelled() }}
         run: node checks/cli.mjs files
 
