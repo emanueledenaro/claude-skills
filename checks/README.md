@@ -28,7 +28,7 @@ Exit 0 is clean, 1 lists the problems as `<place>:<line>:<column>: <problem>: <t
 - A file that is new and not yet staged is not tracked: `git add` it first.
 - A report shows a dash as `<U+2014>` or `<U+2013>`, so it can be pasted into a PR body.
 - To write about a stock word, put it in backticks. A dash in code or in a test is written as a code point (`\u2014`, `String.fromCharCode(0x2014)`).
-- A model id the state lacks is fixed by adding it to `models` in `release-watch/state.json` in the same PR, sorted, after checking it on the models overview page.
+- A model id the state lacks is fixed by adding it to `models` in `release-watch/state.json` in the same PR, sorted, after checking it on one of the models pages the probe reads (`models-` entries in `release-watch/rw.mjs`: the models overview and the deprecations page).
 - The word list holds the words with no ordinary use in these skills. The comment above it in `rules.mjs` names the ones left out and why.
 
 ## Test it
