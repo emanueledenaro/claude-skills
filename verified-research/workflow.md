@@ -77,7 +77,7 @@ export const meta = {
   name: 'verified-research',
   description: 'Read, verify and critique claims per research area',
   phases: [
-    { title: 'Read and verify', detail: 'Haiku reader then Opus verifier per area' },
+    { title: 'Read and verify', detail: 'Opus reader then Opus verifier per area' },
     { title: 'Critic', detail: 'Opus completeness critic' },
   ],
 }
@@ -107,7 +107,7 @@ const verifyArea = async (c, a) => {
   if (!c) return null
   const groups = splitClaims(c.claims)
   const rs = (await parallel(groups.map((g, i) => () =>
-    agent(verifierPrompt(a, g), { label: `verify ${a.name} ${i + 1}/${groups.length}`, phase: 'Read and verify', schema: VERDICTS, model: 'opus', effort: 'high' })))).filter(Boolean)
+    agent(verifierPrompt(a, g), { label: `verify ${a.name} ${i + 1}/${groups.length}`, phase: 'Read and verify', schema: VERDICTS, model: 'opus', effort: 'xhigh' })))).filter(Boolean)
   if (!rs.length) return null
   const verdicts = rs.flatMap(v => v.verdicts)
   const seen = new Set(verdicts.map(v => v.id))
@@ -121,7 +121,7 @@ const verifyArea = async (c, a) => {
 phase('Read and verify')
 const verified = (await pipeline(
   areas,
-  (a) => agent(readerPrompt(a), { label: 'read ' + a.name, phase: 'Read and verify', schema: CLAIMS, model: 'haiku', effort: 'medium' }),
+  (a) => agent(readerPrompt(a), { label: 'read ' + a.name, phase: 'Read and verify', schema: CLAIMS, model: 'opus', effort: 'xhigh' }),
   verifyArea,
 )).filter(Boolean)
 log(`${verified.length}/${areas.length} areas verified`)
@@ -131,7 +131,7 @@ const gaps = await agent(`Today is ${today}. Goal: ${goal}
 Areas: ${areas.map(a => a.name).join(', ')}.
 Verified results (claims, verdicts and open questions per area; join verdicts to claims by id; unchecked ids count as unverified): ${JSON.stringify(verified)}
 Name what the goal needs and no claim covers, what stayed unverified, and what contradicts. Rank the gaps. Settle the top ones yourself with an official source or a local check, and mark each settled or not.`,
-  { label: 'critic', phase: 'Critic', schema: GAPS, model: 'opus', effort: 'high' })
+  { label: 'critic', phase: 'Critic', schema: GAPS, model: 'opus', effort: 'xhigh' })
 
 return { verified, gaps, droppedAreas: areas.length - verified.length }
 ```
@@ -140,7 +140,7 @@ Notes on the skeleton:
 
 - Use `pipeline` so a fast area's verifier starts without waiting for the slowest reader. The critic is the one barrier, because it needs every area.
 - A dead reader drops its area (`null`), and `droppedAreas` makes the drop visible. A dead verifier leaves its claims in `unchecked`; if all of an area's verifiers die the area drops. Put both under "not covered" or "unverified" in the answer.
-- Max is the `perArea: true` shape. On Pro (`model-mix`): verifier and critic at `effort: 'medium'`, one final verify stage, workflow only when the person asks.
+- Max is the `perArea: true` shape. On Pro (`model-mix`): one final verify stage, workflow only when the person asks.
 - Add `agentType`, tools and working directory only if all agents of a stage share them: the cache is shared only between identical settings.
 - Rerun a failed run with `resumeFromRunId`: unchanged prefixes come from cache.
 - Read the whole result before writing the answer. Each item holds the reader's `claims` plus the `verdicts`: join them by `id` to get claim, scope, source and date next to the status. A reader's claim is a lead; only a verifier's `confirmed` makes it a fact.
@@ -148,7 +148,7 @@ Notes on the skeleton:
 ## Report footer
 
 ```
-fleet: 4 readers (Haiku medium) + 4 verifiers (Opus high) + 1 critic (Opus high)
+fleet: 4 readers + 4 verifiers + 1 critic, all Opus xhigh
 weekly points: <after> - <before> = N (five-hour: M, Pro and Max only)
 facts read on: <today>
 not covered: <dropped areas, unreadable sources>

@@ -5,7 +5,7 @@ description: "Claude Code mods judgement: whether a mod or a lighter extension (
 
 A mod is a plugin whose JavaScript or TypeScript hooks module runs inside the Claude Code process, unsandboxed, with the person's permissions. This skill decides when to write one and how to ship it safely. API detail lives in the built-in `plugin-authoring` skill (`/plugin-authoring`) and in the types Claude Code writes into the mod's `.claude-plugin/types/` each time it loads the mod from `--plugin-dir` or loads a mod Claude wrote: those types match the running version and win over the docs pages and over memory. What a mod draws and how it looks: `mod-ui`.
 
-Model per piece of work (`model-mix`): a guard (`tool.call`, `tool.check`, `plugin.register` hooks), anything that reads secrets or approves tool calls, and vetting someone else's mod are its security-critical row, Opus high, even when small. Delegated vetting goes to one Opus high agent with the whole source, never to fan-out readers. Panes, bands, commands and restyling are implementation: Sonnet high.
+Model (`model-mix`): Opus xhigh for every delegated job here: a guard (`tool.call`, `tool.check`, `plugin.register` hooks), anything that reads secrets or approves tool calls, vetting someone else's mod, and panes, bands, commands and restyling. Delegated vetting goes to one agent with the whole source, never to fan-out readers.
 
 ## 1. Gate: pick the lightest extension that does the job
 
@@ -42,7 +42,7 @@ on('tool.call', { tool: ['Bash', 'PowerShell', 'Monitor'] }, guard).catch(async 
 
 - A hook has 10 s of its own execution per event (50 ms for `prompt.edit`), a `.catch` 1 s, and all mods share one worker: never loop without awaiting.
 - Plan for where nothing is drawn (the VS Code panel, `claude -p`, the Agent SDK, cloud sessions; Desktop WSL sessions run no mods) and fall back to a transcript line or command text. `Svg` draws only in Desktop; `Raster` and `Image` only in the terminal.
-- `$.model.complete`, `$.model.classify`, `$.model.fork` and `$.agent.spawn` spend the plan: pass `model` per `model-mix` to all but `$.model.fork` (it runs on the session's model, so call it only from a command the person runs), `haiku` only as `model-mix` allows it, never Fable. Call a model only from a command, a button or a timer with a capped count, never from a hook that fires on every event. A hook that sets `model` or `effort` may move work down to the `model-mix` row, never above it or to Fable, unless the person asked for exactly that.
+- `$.model.complete`, `$.model.classify`, `$.model.fork` and `$.agent.spawn` spend the plan: pass `model` per `model-mix` (`opus`) to all but `$.model.fork` (it runs on the session's model, so call it only from a command the person runs), never Fable. Call a model only from a command, a button or a timer with a capped count, never from a hook that fires on every event. A hook that sets `model` or `effort` may move work down to the `model-mix` row, never above it or to Fable, unless the person asked for exactly that.
 - Read `writing.md` for the rest: budgets and crashes, `$.process.run` on Windows, registering commands, state lifetimes and redraw, every rule on model calls, and keeping prompt text stable for the cache.
 
 ## 4. Develop and test

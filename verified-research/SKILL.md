@@ -31,20 +31,20 @@ Research that feeds a plan, a skill or a mod is only as good as its weakest clai
 
 ## 4. Readers
 
-- One reader per area, Haiku medium per `model-mix` (Sonnet medium when an area needs more than about 100K tokens of sources), read-only, web fetch and search allowed. Every reader of the stage gets the same settings and a shared prompt prefix.
+- One reader per area, Opus xhigh per `model-mix`, read-only, web fetch and search allowed. Every reader of the stage gets the same settings and a shared prompt prefix.
 - A reader returns atomic claims, one fact each, in the claim schema (`workflow.md`): id, claim, scope (plan, version, platform), source URL, source date, quote under 15 words, confidence (high, medium, low), kind (security, money, consent or other), and the sources it could not open.
 - Readers also return open questions: what they looked for and did not find. An empty list is suspicious.
 
 ## 5. Verifiers
 
-- Verifier width follows today's profile in `model-mix` and `smart-ultracode` section 4: on Ultra one verifier per claim, or per small group of claims that cite the same source, grouped only as far as the width needs (`smart-ultracode` section 2); below Ultra one verifier per area with all its claims. Opus high (Pro: medium), never the reader that wrote the claims. It gets the claims and the sources, never the reader's reasoning.
+- Verifier width follows today's profile in `model-mix` and `smart-ultracode` section 4: on Ultra one verifier per claim, or per small group of claims that cite the same source, grouped only as far as the width needs (`smart-ultracode` section 2); below Ultra one verifier per area with all its claims. Opus xhigh, never the reader that wrote the claims. It gets the claims and the sources, never the reader's reasoning.
 - It opens every source itself, or reruns the local check. A claim whose source it cannot open is unverified.
 - Verdict per claim: confirmed, refuted (with the corrected fact and its evidence) or unverified (with what is missing). It also adds missed facts it found while reading and keeps the open questions.
 - Security, money and consent claims (who can read what, what costs credits) get their own verifier each, per `smart-ultracode` section 4.
 
 ## 6. Completeness critic
 
-- One agent after all areas, Opus high. It gets the goal, the area list and the verified results, and ranks the gaps: what the decision needs and no claim covers, what stayed unverified, what contradicts.
+- One agent after all areas, Opus xhigh. It gets the goal, the area list and the verified results, and ranks the gaps: what the decision needs and no claim covers, what stayed unverified, what contradicts.
 - It settles the top gaps itself with a source or a local check, and marks each gap settled or not.
 - Settled gaps go into the answer. Unsettled ones go into the answer as unverified. Run a second round only when a gap is critical and cheap to close.
 

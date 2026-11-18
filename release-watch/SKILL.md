@@ -32,7 +32,7 @@ node release-watch/rw.mjs probe --local    # adds the installed CLI version
 1. Group the changes by area and verify every statement the skills make about the area (`verified-research`, official sources, a verifier that did not write the claim, on Opus as `model-mix` sets for verify stages unless the owner sets otherwise). Unverified claims are not written.
 2. Edit every affected skill and `README.md` on `chore/release-watch-<yyyy-mm-dd>`, one commit per area, `git-conventions` headers, and advance `state.json` in the same PR.
 3. Run `node release-watch/rw.mjs classify origin/main HEAD`. It is the only judge of fact versus rule.
-4. Open the PR, get an Opus high review of the diff against the sources (state-only PRs too), apply its fixes as new commits.
+4. Open the PR, get an Opus xhigh review of the diff against the sources (state-only PRs too), apply its fixes as new commits.
 5. FACT, with a review comment `PASS <sha>` for the exact head: squash-merge it yourself on that head. RULE: leave it open, label `needs-owner`, first line `NEEDS OWNER`, one plain paragraph on the rule change.
 
 What counts as a fact and what as a rule is defined once, in `apply.md` section 3, and decided by `classify`. A mixed run splits into two PRs when clean, else waits as one. Upstream skills (Matt's), refuted and unverified claims also wait.
@@ -44,7 +44,7 @@ Set up once, after this PR is merged (the routine clones the default branch). Do
 1. Open https://claude.ai/code/routines and click **New task** (**New routine** on some accounts), or run `/schedule` in a terminal outside a cloud session.
 2. Name `release-watch`. Prompt, one line: `Read release-watch/routine.md in this repository and do exactly what it says.`
 3. Repository: this one. Environment: **Default** (Trusted network access reaches every watched domain).
-4. Model **Sonnet**, effort **high**, in the prompt box selector.
+4. Model **Opus**, effort **xhigh** (**high** if the selector stops there), in the prompt box selector.
 5. Connectors tab: remove all.
 6. Trigger **Schedule**, preset **Daily**, at 08:07. Presets take your local time zone, so daylight saving needs nothing from you. A run set exactly on the hour can start several minutes late, which is why it is 08:07 and not 08:00.
 7. **Create**, then **Run now** once and read the transcript: a quiet day prints one line.

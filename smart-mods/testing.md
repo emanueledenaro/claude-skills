@@ -11,13 +11,13 @@ Read this from `SKILL.md` sections 4 and 5 when you load, smoke-check, debug or 
 
 ## Smoke checks
 
-- Smoke-check a command with `claude -p "/<name>" --plugin-dir <dir> --model sonnet --max-turns 1`: a mod command starts no Claude turn, but a mod that failed to load or a mistyped name reaches the model.
+- Smoke-check a command with `claude -p "/<name>" --plugin-dir <dir> --model opus --max-turns 1`: a mod command starts no Claude turn, but a mod that failed to load or a mistyped name reaches the model. `opus` is the model `model-mix` gives delegated work; a passing check runs no turn, so it costs nothing.
 - In Git Bash prefix `MSYS2_ARG_CONV_EXCL='/<name>'`, or `/<name>` is turned into a file path and sent to the model as a prompt; it still converts `<dir>` and `<path>`. With `MSYS_NO_PATHCONV=1` instead, write every path as `C:/...`, never `~/` or `/c/`. More on this machine's shells: `windows-ops`.
 
 ## Debugging
 
 - `$.ui.log(msg, { to: 'debug' })` writes to the debug log.
-- As an agent, reproduce with `claude -p "/<name>" --plugin-dir <dir> --model sonnet --max-turns 1 --debug-file <path>` (in Git Bash with the same prefix; load errors also go to stderr), then read the log once: `grep <mod-name> <path> | tail -n 50`, or in PowerShell `Select-String -Path <path> -Pattern <mod-name> | Select-Object -Last 50`.
+- As an agent, reproduce with `claude -p "/<name>" --plugin-dir <dir> --model opus --max-turns 1 --debug-file <path>` (in Git Bash with the same prefix; load errors also go to stderr), then read the log once: `grep <mod-name> <path> | tail -n 50`, or in PowerShell `Select-String -Path <path> -Pattern <mod-name> | Select-Object -Last 50`.
 - Never run `tail -f` or `Get-Content -Wait` from a tool call: they never exit. For an interactive repro, ask the person to run `claude --debug-file <path> --plugin-dir <dir>` in a terminal.
 - To check whether mods can load at all, run `claude plugin test` in a folder without a mod and read its message.
 

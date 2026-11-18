@@ -16,7 +16,7 @@ What happens between "the worker says the PR is done" and "main has it". The coo
 
 Run the budget check in `model-mix` first. Size by the diff, not by the worker's confidence:
 
-- **Small:** under about 300 changed lines in at most 5 files, nothing security-related. One read-only Agent call, `model: "opus"`, high effort (Pro: medium; Solo: the main session reads the diff).
+- **Small:** under about 300 changed lines in at most 5 files, nothing security-related. One read-only Agent call, `model: "opus"`, `effort: "xhigh"` (Solo: the main session reads the diff).
 - **Large, or security:** a review workflow: lenses, adversarial verify per serious finding, then a completeness critic (`smart-ultracode`). Security means consents, permissions, secrets, auth, sandboxing, tool-call guards: those PRs take this path at any size.
 - The thresholds are starting defaults, not measured. When unsure take the larger path.
 - A red budget does not skip the review: finishing open work continues, with the final review in the main session (`model-mix`). A lower profile narrows the width. On Pro the large path is a workflow only if the person asks; otherwise use one Opus Agent call per lens group, then the verifiers. On Solo the main session reviews and verifies (`smart-ultracode` §1, §4).
@@ -33,7 +33,7 @@ Run the budget check in `model-mix` first. Size by the diff, not by the worker's
 
 - Send verified findings to the worker that owns the PR as one message: file and line, evidence, expected change. If the worker is gone, start a fix thread. Fixes are new commits: no amend, no force.
 - A serious finding (wrong behavior, security, data loss, removed or weakened tests, an assertion nothing can turn red, a broken project rule, a `clean-code` block rule) must be fixed before the merge: the reviewer names its consequence. After the first review only blockers and hard-rule matters go back to the worker. In the first round, a minor finding is fixed in the same PR when it takes a few lines, otherwise it stays one line in the PR comment; a follow-up ticket only for real work, small ones batched into one ticket (`roadmap-tracker` §4). Each extra round costs a new head and a new gate.
-- After fixes, one delta review of the new commits only (one Opus high agent, same brief). No third round: a blocker the delta still finds goes back to the worker once, and the coordinator checks that one fix itself (an Opus high agent when the PR is security-related or the session is not Opus) and posts the checked sha as the review comment; if it is still wrong, stop and tell the person.
+- After fixes, one delta review of the new commits only (one Opus xhigh agent, same brief). No third round: a blocker the delta still finds goes back to the worker once, and the coordinator checks that one fix itself (an Opus xhigh agent when the PR is security-related or the session is not Opus) and posts the checked sha as the review comment; if it is still wrong, stop and tell the person.
 - Refuted and unverified findings are not sent to the worker. Note them in the PR comment.
 
 ## 5. Hold for the person: UI

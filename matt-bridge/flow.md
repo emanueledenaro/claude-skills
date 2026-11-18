@@ -34,7 +34,7 @@ Reference for `matt-bridge`. Source: the installed plugin `mattpocock-skills` 1.
 | Tickets | `to-tickets` | child issues with `## Parent`, `## What to build`, `## Acceptance criteria`, `## Blocked by` | `roadmap-tracker`: milestone, state labels, blockers as real links; hot-file order |
 | Build | `implement` with `tdd` | commits on a feature branch | `model-mix` before the launch; `git-conventions` for branch and commits; `clean-code`; `assertions-go-red` for assertions changed after the red |
 | Build, many | `implement-spec` | integration branch, one worktree per implementer, a merger subagent | width and model per `model-mix`; `shared-machine-checks` when checks run here; one PR to main |
-| Review | `code-review` (Standards, Spec) | report, posted as a PR comment | `clean-code` as a standards source; Opus high per `model-mix` |
+| Review | `code-review` (Standards, Spec) | report, posted as a PR comment | `clean-code` as a standards source; Opus xhigh per `model-mix` |
 | PR | `pr` | PR body | `git-conventions` title, `Closes #N`; mutation table in Evidence |
 | Merge | `merge-gate` (nothing upstream) | one PR comment per round | reads the review comment, covers the rest; `coordinator-method` merge rule |
 | Retro | `retro` | candidates, by severity | each accepted one: ticket via `roadmap-tracker`, or skill edit via `skill-audit` |
@@ -51,8 +51,8 @@ One short message before invoking, not an edit of his text. Fill the brackets.
 - Spec: `After publishing, add milestone "[name]". Do not interview.`
 - Tickets: `Publish HITL slices as [ready-for-human label]. I add the milestone after each issue. One question per message for the breakdown quiz. Hot files: [list]; propose a blocked-by edge between tickets that touch one.`
 - Build: `Work on branch [feature/issue-N-slug], never main. Targeted tests only. No amend, no force.`
-- Fan-out: `At most [N] implementers at once (N: one, or the Parallel cloud sessions number of today's model-mix profile when the budget is green and the slices are disjoint), each model [sonnet] effort [high]. The rest of the frontier waits. The merger touches the integration branch only; I merge to main.`
-- Review: `Reviewers on model [opus] effort [high]. Report findings; do not merge. Post the report as a PR comment with the head sha.`
+- Fan-out: `At most [N] implementers at once (N: one, or the Parallel cloud sessions number of today's model-mix profile when the budget is green and the slices are disjoint), each model [opus] effort [xhigh]. The rest of the frontier waits. The merger touches the integration branch only; I merge to main.`
+- Review: `Reviewers on model [opus] effort [xhigh]. Report findings; do not merge. Post the report as a PR comment with the head sha.`
 
 ## Commands
 
