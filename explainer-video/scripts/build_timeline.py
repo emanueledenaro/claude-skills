@@ -50,6 +50,8 @@ def quietest(samples, lo, hi, win=0.02):
 
 
 def main():
+    if len(sys.argv) != 2:
+        sys.exit(__doc__)
     cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     scene_cfg = cfg["scenes"]
     tail = cfg.get("tail", 3.5)

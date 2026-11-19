@@ -19,7 +19,7 @@ CH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ## Voice and music (ElevenLabs connector)
 
 - Voice search: the language filter with a search text returned voices of other languages. Filter by language and gender, sort by usage, read the descriptions.
-- A speech run returns two takes and charges both. About 2,500 credits per take for 2,400 characters. Price it with `estimate_only`, and call it once: a second call is a second charge.
+- A speech run returns two takes and charges both. About 2,500 credits per take for 2,500 characters. Price it with `estimate_only`, and call it once: a second call is a second charge.
 - The run returns before the audio exists. Read the status with the run's session ids, then download `content.mp3` from the signed URL with `curl`. The URL expires.
 - Word times: put the chosen take on the flow as an asset node, transcribe it with that node as input. The result carries `words` with start and end, and a `words.json` URL. It cost 0 credits.
 - Written the way it is said: a brand name with its stress accent, an acronym as its spoken syllables, "intelligenza artificiale" where the script says "AI". The transcript returns the same spelling, so the display map in the timeline config turns it back.

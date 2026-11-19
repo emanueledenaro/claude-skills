@@ -34,7 +34,8 @@ Done when the person names the direction, or the two to build.
 
 ## 4. Voice, word times, music
 
-- Pick the voice with the language filter and no search text, price the run with an estimate first, and tell the person the cost and the voice.
+- With no voice connector listed, say so and offer the other audio choices of step 1.
+- Pick the voice with the language filter and no search text, price the run with an estimate first, and tell the person the cost and the voice. The choice of an AI voice in step 1 covers that cost; a price far above what you said waits for their ok.
 - Generate the whole script in one run, scenes separated by blank lines. Spell for the ear: a brand, an acronym or a foreign word is written the way it is said, and a display map turns it back into the written form on screen.
 - Download every take. Transcribe the one you use for per-word start and end.
 - One instrumental track, one generation, at least as long as the film. Measure its loudness in 10 s steps.
@@ -43,7 +44,7 @@ Done when the words file holds every word of the script with its times, and the 
 
 ## 5. Timeline
 
-- Write `timeline.config.json` (keys in the header of `scripts/build_timeline.py`): each scene's first spoken word and the pause before its voice. Give the hook 0.8 s, the scene before the payoff 1.4 s, the others 0.7 to 1.2 s.
+- Write `timeline.config.json` (keys in the header of `scripts/build_timeline.py`): each scene's first spoken word and the pause before its voice. Give the hook 0.8 s, the payoff scene 1.4 s so the music can go silent before it, the others 0.7 to 1.2 s.
 - `python3 <skill>/scripts/build_timeline.py timeline.config.json` cuts the voice on the quietest 20 ms of each joint, inserts the pauses, shifts the word times, builds one-line captions and prints scene times, pace and short captions.
 
 Done when the printed duration fits the target and every caption under 1.2 s is one you chose.
@@ -70,7 +71,7 @@ python3 <skill>/scripts/sheets.py stills out/check
 
 - Hunt on the sheets: text past the right margin, a caption over a subject, labels on top of each other, words fused by tight tracking, a moment with almost nothing on screen, a moving object that drifts into the caption line.
 - Fix, then render only the frames you touched and look again.
-- Full render in the background, one film at a time (3 minutes at 1080p took 5 to 7 minutes). Then:
+- Full render in the background, one film at a time (3 minutes at 1080p took about 90 seconds on a 10-core laptop). Then:
 
 ```bash
 <skill>/scripts/master.sh out/raw.mp4 ../Film.mp4
@@ -90,6 +91,8 @@ Done when the final file's sheets show no defect you would flag and the master p
 After a note from the person, change that place and that time, look at the stills again, render again.
 
 ## Files
+
+`<skill>` is the installed folder, `~/.claude/skills/explainer-video`.
 
 - `scripts/build_timeline.py`: voice plus word times to a retimed voice and `timeline.json`.
 - `scripts/sheets.py`: contact sheets from stills or from a finished film.
